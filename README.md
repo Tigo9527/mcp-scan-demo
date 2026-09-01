@@ -65,11 +65,14 @@ The demo exposes these tools:
 - `echo`: returns the supplied `message`.
 - `list_cfx_transfers`: lists native CFX transfers for a Conflux Core account
   through ConfluxScan's `/account/cfx/transfers` API.
+- `list_latest_transactions`: lists the latest Conflux Core transactions
+  through the ConfluxScan explorer's `/v1/transaction` API.
 
 The ConfluxScan API base URL can be changed in `.env`:
 
 ```env
 CONFLUXSCAN_API_URL=https://api.confluxscan.org
+CONFLUXSCAN_WEB_API_URL=https://www.confluxscan.org
 ```
 
 Use `https://api-testnet.confluxscan.org` to query Conflux Core testnet data.
@@ -132,6 +135,12 @@ To query ConfluxScan, ask:
 ```text
 Use list_cfx_transfers to show the latest 5 native CFX transfers for
 cfx:aanjcf1esdz50j6zhkm0k60wc7669tfkw28mzudg24.
+```
+
+To inspect recent network activity, ask:
+
+```text
+Use list_latest_transactions to show the latest 10 Conflux Core transactions.
 ```
 
 Codex stores the server definition in `~/.codex/config.toml`. The equivalent
