@@ -60,9 +60,24 @@ curl -i http://127.0.0.1:8080/mcp \
   }'
 ```
 
-The demo exposes one tool:
+The demo exposes these tools:
 
 - `echo`: returns the supplied `message`.
+- `list_cfx_transfers`: lists native CFX transfers for a Conflux Core account
+  through ConfluxScan's `/account/cfx/transfers` API.
+
+The ConfluxScan API base URL can be changed in `.env`:
+
+```env
+CONFLUXSCAN_API_URL=https://api.confluxscan.org
+```
+
+Use `https://api-testnet.confluxscan.org` to query Conflux Core testnet data.
+The tool supports `account`, `skip`, `limit`, `from`, `to`, epoch range,
+timestamp range, and `asc`/`desc` sorting. ConfluxScan limits `skip` to 10,000,
+`limit` to 100, and account transfer history to the latest 20,000 records.
+See the [ConfluxScan Open API documentation](https://api.confluxscan.org/doc)
+for upstream API details.
 
 ## Use with Codex CLI
 
@@ -110,6 +125,13 @@ For example, ask Codex:
 
 ```text
 Use the echo MCP tool to echo "Hello from Codex".
+```
+
+To query ConfluxScan, ask:
+
+```text
+Use list_cfx_transfers to show the latest 5 native CFX transfers for
+cfx:aanjcf1esdz50j6zhkm0k60wc7669tfkw28mzudg24.
 ```
 
 Codex stores the server definition in `~/.codex/config.toml`. The equivalent
