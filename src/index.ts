@@ -33,6 +33,9 @@ const server = new MCPServer({
       port,
       endpoint: "/mcp",
       responseMode: "batch",
+      cors: {
+        allowHeaders: "Content-Type, Authorization, x-api-key, mcp-protocol-version",
+      },
       health: {
         enabled: true,
         path: "/health",
