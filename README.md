@@ -3,6 +3,10 @@
 A minimal TypeScript MCP server built with `mcp-framework`. The Streamable HTTP
 endpoint requires one static Bearer token loaded from `.env`.
 
+Authentication is selected with `MCP_AUTH_MODE`. Static ****** remains the
+default for backward compatibility, while `oauth` enables OAuth 2.1 JWT
+validation.
+
 ## Run
 
 ```bash
@@ -60,6 +64,34 @@ curl -i http://127.0.0.1:8080/mcp \
   }'
 ```
 
+### OAuth 2.1 authentication
+
+Set the following values in `.env` to validate OAuth JWT access tokens through
+the authorization server's JWKS endpoint:
+
+```env
+MCP_AUTH_MODE=oauth
+OAUTH_AUTHORIZATION_SERVER=https://auth.example.com
+OAUTH_RESOURCE=https://mcp.example.com
+OAUTH_AUDIENCE=https://mcp.example.com
+OAUTH_ISSUER=https://auth.example.com/
+OAUTH_JWKS_URI=https://auth.example.com/.well-known/jwks.json
+OAUTH_ALGORITHMS=RS256
+```
+
+`OAUTH_ALGORITHMS` is optional and accepts a comma-separated list. All other
+OAuth variables above are required. The server validates the JWT signature,
+issuer, audience, and expiry.
+
+OAuth Protected Resource Metadata is available at:
+
+```text
+http://127.0.0.1:8080/.well-known/oauth-protected-resource
+```
+
+The OAuth client sends its access token to `/mcp` using the same standard
+`Authorization` header used by MCP HTTP clients.
+
 The demo exposes these tools:
 
 - `echo`: returns the supplied `message`.
@@ -109,6 +141,21 @@ Register the Streamable HTTP server:
 codex mcp add mcp-scan-demo \
   --url "http://${MCP_HOST}:${MCP_PORT}/mcp" \
   --bearer-token-env-var MCP_TOKEN
+```
+
+For OAuth mode, register the server without `--bearer-token-env-var`, then
+start Codex's OAuth login flow:
+
+```bash
+codex mcp add mcp-scan-demo \
+  --url "http://${MCP_HOST}:${MCP_PORT}/mcp"
+codex mcp login mcp-scan-demo
+```
+
+If required by the authorization server, request scopes with:
+
+```bash
+codex mcp login mcp-scan-demo --scopes scope1,scope2
 ```
 
 Inspect the saved configuration:
@@ -165,6 +212,10 @@ codex mcp add mcp-scan-demo \
 Common failures:
 
 - `401 Unauthorized`: the exported `MCP_TOKEN` does not match the server token.
+- `401 Unauthorized` in OAuth mode: check the token's issuer, audience, expiry,
+  algorithm, and signing key.
+- OAuth metadata not found: confirm `MCP_AUTH_MODE=oauth` and all required OAuth
+  variables are configured.
 - Connection refused: the MCP server is not running or the configured port is
   incorrect.
 - Token environment variable is missing: export `.env` before starting Codex.

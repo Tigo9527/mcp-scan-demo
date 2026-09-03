@@ -4,7 +4,7 @@ import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MCPServer } from "mcp-framework";
 
-import { BearerTokenAuthProvider } from "./auth/BearerTokenAuthProvider.js";
+import { createAuthConfiguration } from "./auth/createAuthConfig.js";
 
 function readPort(value: string | undefined): number {
   const port = Number(value ?? "8080");
@@ -16,21 +16,10 @@ function readPort(value: string | undefined): number {
   return port;
 }
 
-const token = process.env.MCP_TOKEN;
-if (!token) {
-  throw new Error("Missing required environment variable: MCP_TOKEN");
-}
-
 const host = process.env.MCP_HOST ?? "127.0.0.1";
 const port = readPort(process.env.MCP_PORT);
 const basePath = dirname(fileURLToPath(import.meta.url));
-const auth = {
-  provider: new BearerTokenAuthProvider(token),
-  endpoints: {
-    sse: true,
-    messages: true,
-  },
-};
+const auth = createAuthConfiguration();
 
 const server = new MCPServer({
   name: "mcp-scan-demo",
@@ -38,7 +27,7 @@ const server = new MCPServer({
   basePath,
   transport: {
     type: "http-stream",
-    auth,
+    auth: auth.config,
     options: {
       host,
       port,
@@ -53,4 +42,6 @@ const server = new MCPServer({
 });
 
 await server.start();
-console.log(`MCP server listening at http://${host}:${port}/mcp`);
+console.log(
+  `MCP server listening at http://${host}:${port}/mcp using ${auth.mode} authentication`,
+);
