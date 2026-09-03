@@ -34,7 +34,7 @@ const server = new MCPServer({
       endpoint: "/mcp",
       responseMode: "batch",
       cors: {
-        allowHeaders: "Content-Type, Authorization, x-api-key, mcp-protocol-version",
+        allowHeaders: "Content-Type, Authorization, x-api-key, mcp-protocol-version, mcp-session-id",
       },
       health: {
         enabled: true,
@@ -44,7 +44,19 @@ const server = new MCPServer({
   },
 });
 
-await server.start();
+if (auth.siweService) {
+  await auth.siweService.start();
+  console.log(
+    `SIWE authentication service listening at http://${process.env.SIWE_AUTH_HOST ?? host}:${process.env.SIWE_AUTH_PORT ?? "8081"}`,
+  );
+}
+
+try {
+  await server.start();
+} catch (error) {
+  await auth.siweService?.stop();
+  throw error;
+}
 console.log(
   `MCP server listening at http://${host}:${port}/mcp using ${auth.mode} authentication`,
 );

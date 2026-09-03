@@ -5,7 +5,7 @@ endpoint requires one static Bearer token loaded from `.env`.
 
 Authentication is selected with `MCP_AUTH_MODE`. Static ****** remains the
 default for backward compatibility, while `oauth` enables OAuth 2.1 JWT
-validation.
+validation and `siwe` enables Sign-In with Ethereum.
 
 ## Run
 
@@ -92,6 +92,65 @@ http://127.0.0.1:8080/.well-known/oauth-protected-resource
 The OAuth client sends its access token to `/mcp` using the same standard
 `Authorization` header used by MCP HTTP clients.
 
+### Sign-In with Ethereum
+
+SIWE mode is intended for EVM-compatible wallets, including Conflux eSpace. It
+runs a small authentication service next to the MCP server:
+
+```env
+MCP_AUTH_MODE=siwe
+SIWE_AUTH_HOST=127.0.0.1
+SIWE_AUTH_PORT=8081
+SIWE_DOMAIN=localhost:8081
+SIWE_URI=http://localhost:8081
+SIWE_CHAIN_IDS=1030,71
+SIWE_ALLOWED_ORIGIN=http://localhost:3000
+SIWE_NONCE_TTL_SECONDS=300
+SIWE_SESSION_TTL_SECONDS=3600
+```
+
+The example chain IDs are Conflux eSpace mainnet (`1030`) and testnet (`71`).
+Set `SIWE_DOMAIN`, `SIWE_URI`, and `SIWE_ALLOWED_ORIGIN` to the public values
+used by your application.
+
+The login flow is:
+
+1. `GET http://localhost:8081/auth/siwe/nonce`
+2. Build an EIP-4361 message with the returned `nonce`, `domain`, and `uri`.
+3. Sign the message with the wallet's `personal_sign` method.
+4. Send the message and signature to
+   `POST http://localhost:8081/auth/siwe/verify`.
+5. Use the returned `accessToken` as the Bearer token for `/mcp`.
+
+Example verification request:
+
+```bash
+curl http://localhost:8081/auth/siwe/verify \
+  -H 'Content-Type: application/json' \
+  --data '{
+    "message": "<EIP-4361 message signed by the wallet>",
+    "signature": "0x..."
+  }'
+```
+
+The successful response contains:
+
+```json
+{
+  "accessToken": "<random-session-token>",
+  "tokenType": "Bearer",
+  "expiresIn": 3600,
+  "address": "0x...",
+  "chainId": 1030
+}
+```
+
+Each nonce is single-use and expires after five minutes by default. Session
+tokens are random, stored only as SHA-256 hashes, and expire after one hour by
+default. Both stores are in memory, so sessions are revoked when the server
+restarts. Deploy the authentication endpoints behind HTTPS outside local
+development.
+
 The demo exposes these tools:
 
 - `echo`: returns the supplied `message`.
@@ -158,6 +217,16 @@ If required by the authorization server, request scopes with:
 codex mcp login mcp-scan-demo --scopes scope1,scope2
 ```
 
+For SIWE mode, complete the wallet login flow first, then export the returned
+session token and configure Codex to read it:
+
+```bash
+export SIWE_ACCESS_TOKEN='<accessToken returned by /auth/siwe/verify>'
+codex mcp add mcp-scan-demo \
+  --url "http://${MCP_HOST}:${MCP_PORT}/mcp" \
+  --bearer-token-env-var SIWE_ACCESS_TOKEN
+```
+
 Inspect the saved configuration:
 
 ```bash
@@ -216,6 +285,10 @@ Common failures:
   algorithm, and signing key.
 - OAuth metadata not found: confirm `MCP_AUTH_MODE=oauth` and all required OAuth
   variables are configured.
+- SIWE verification fails: check the signed domain, URI, chain ID, expiration,
+  nonce, and configured browser origin.
+- SIWE session is rejected after restart: in-memory sessions are intentionally
+  revoked whenever the server process restarts.
 - Connection refused: the MCP server is not running or the configured port is
   incorrect.
 - Token environment variable is missing: export `.env` before starting Codex.
