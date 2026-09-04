@@ -21,6 +21,24 @@ const port = readPort(process.env.MCP_PORT);
 const basePath = dirname(fileURLToPath(import.meta.url));
 const auth = createAuthConfiguration();
 
+let stoppingAuthServices = false;
+async function stopAuthServices(): Promise<void> {
+  if (stoppingAuthServices) {
+    return;
+  }
+
+  stoppingAuthServices = true;
+  await auth.githubOAuthService?.stop();
+  await auth.siweService?.stop();
+}
+
+process.once("SIGINT", () => {
+  void stopAuthServices();
+});
+process.once("SIGTERM", () => {
+  void stopAuthServices();
+});
+
 const server = new MCPServer({
   name: "mcp-scan-demo",
   version: "1.0.0",
@@ -44,6 +62,13 @@ const server = new MCPServer({
   },
 });
 
+if (auth.githubOAuthService) {
+  await auth.githubOAuthService.start();
+  console.log(
+    `GitHub OAuth service listening at http://${process.env.GITHUB_AUTH_HOST ?? host}:${process.env.GITHUB_AUTH_PORT ?? "8082"}`,
+  );
+}
+
 if (auth.siweService) {
   await auth.siweService.start();
   console.log(
@@ -54,7 +79,7 @@ if (auth.siweService) {
 try {
   await server.start();
 } catch (error) {
-  await auth.siweService?.stop();
+  await stopAuthServices();
   throw error;
 }
 console.log(

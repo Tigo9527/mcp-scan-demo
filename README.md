@@ -94,12 +94,12 @@ The OAuth client sends its access token to `/mcp` using the same standard
 
 ### GitHub OAuth authentication
 
-GitHub OAuth mode validates opaque GitHub OAuth App access tokens by calling the
-GitHub API. GitHub owns the account system and login flow; this MCP server only
-checks the bearer token before allowing `/mcp` requests.
+GitHub OAuth mode provides a browser login flow and validates opaque GitHub
+OAuth App access tokens by calling the GitHub API. GitHub owns the account
+system; this server handles the OAuth redirect and checks the resulting bearer
+token before allowing `/mcp` requests.
 
-Create a GitHub OAuth App with a callback handled by your client or gateway,
-then configure:
+Create a GitHub OAuth App, then configure:
 
 ```env
 MCP_AUTH_MODE=github-oauth
@@ -109,22 +109,41 @@ MCP_PORT=8080
 GITHUB_CLIENT_ID=your-github-oauth-app-client-id
 GITHUB_CLIENT_SECRET=your-github-oauth-app-client-secret
 GITHUB_OAUTH_RESOURCE=http://127.0.0.1:8080/mcp
+GITHUB_AUTH_HOST=127.0.0.1
+GITHUB_AUTH_PORT=8082
+GITHUB_REDIRECT_URI=http://127.0.0.1:8082/auth/github/callback
+GITHUB_SUCCESS_REDIRECT_URI=http://localhost:3000/oauth/github/complete
+GITHUB_ALLOWED_ORIGIN=http://localhost:3000
 GITHUB_AUTHORIZATION_SERVER=https://github.com/login/oauth
 GITHUB_API_URL=https://api.github.com
 GITHUB_API_VERSION=2022-11-28
+GITHUB_REQUESTED_SCOPES=read:user
 GITHUB_REQUIRED_SCOPES=read:user
 GITHUB_TOKEN_CACHE_TTL_SECONDS=300
+GITHUB_STATE_TTL_SECONDS=300
 ```
 
-The OAuth App web flow uses GitHub's authorization and token endpoints:
+Set the GitHub OAuth App callback URL to the exact `GITHUB_REDIRECT_URI` value.
+For the local template above, use:
 
 ```text
-https://github.com/login/oauth/authorize
-https://github.com/login/oauth/access_token
+http://127.0.0.1:8082/auth/github/callback
 ```
 
-After your client exchanges the authorization code for a GitHub access token,
-send MCP requests with:
+Start the server, then open:
+
+```text
+http://127.0.0.1:8082/auth/github
+```
+
+The login flow is:
+
+1. `/auth/github/login` creates a one-time state value and redirects to GitHub.
+2. GitHub redirects back to `/auth/github/callback` with `code` and `state`.
+3. The service validates `state` and exchanges `code` at GitHub's token endpoint.
+4. The callback returns an MCP bearer token page, or redirects to
+   `GITHUB_SUCCESS_REDIRECT_URI` with the token in the URL fragment.
+5. Send MCP requests with:
 
 ```text
 Authorization: Bearer <github-access-token>

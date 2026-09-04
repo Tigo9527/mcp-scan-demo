@@ -8,6 +8,7 @@ import {
   GitHubOAuthAuthProvider,
   type GitHubOAuthAuthProviderConfig,
 } from "./GitHubOAuthAuthProvider.js";
+import { GitHubOAuthService } from "./GitHubOAuthService.js";
 import {
   SiweAuthService,
   type SiweAuthServiceConfig,
@@ -18,6 +19,7 @@ export type AuthMode = "bearer" | "oauth" | "github-oauth" | "siwe";
 export interface AuthConfiguration {
   config: AuthConfig;
   mode: AuthMode;
+  githubOAuthService?: GitHubOAuthService;
   siweService?: SiweAuthService;
 }
 
@@ -68,6 +70,13 @@ function createGitHubOAuthConfig(
 
   const host = env.MCP_HOST || "127.0.0.1";
   const port = env.MCP_PORT || "8080";
+  const authHost = env.GITHUB_AUTH_HOST || host;
+  const authPort = readPositiveInteger(
+    env.GITHUB_AUTH_PORT,
+    8082,
+    "GITHUB_AUTH_PORT",
+    65_535,
+  );
 
   return {
     clientId: requireEnv(env, "GITHUB_CLIENT_ID", mode),
@@ -89,6 +98,19 @@ function createGitHubOAuthConfig(
       300,
       "GITHUB_TOKEN_CACHE_TTL_SECONDS",
     ) * 1000,
+    requestedScopes: readStringList(env.GITHUB_REQUESTED_SCOPES || env.GITHUB_REQUIRED_SCOPES || "read:user"),
+    authHost,
+    authPort,
+    redirectUri:
+      env.GITHUB_REDIRECT_URI ||
+      "http://" + authHost + ":" + authPort + "/auth/github/callback",
+    allowedOrigin: env.GITHUB_ALLOWED_ORIGIN || "*",
+    stateTtlSeconds: readPositiveInteger(
+      env.GITHUB_STATE_TTL_SECONDS,
+      300,
+      "GITHUB_STATE_TTL_SECONDS",
+    ),
+    successRedirectUri: env.GITHUB_SUCCESS_REDIRECT_URI,
   };
 }
 
@@ -177,10 +199,12 @@ export function createAuthConfiguration(
   }
 
   if (mode === "github-oauth") {
+    const githubOAuthConfig = createGitHubOAuthConfig(env);
     return {
       mode,
+      githubOAuthService: new GitHubOAuthService(githubOAuthConfig),
       config: {
-        provider: new GitHubOAuthAuthProvider(createGitHubOAuthConfig(env)),
+        provider: new GitHubOAuthAuthProvider(githubOAuthConfig),
         endpoints,
       },
     };

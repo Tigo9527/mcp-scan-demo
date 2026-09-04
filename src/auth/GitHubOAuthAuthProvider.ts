@@ -41,7 +41,14 @@ export interface GitHubOAuthAuthProviderConfig {
   apiBaseUrl: string;
   apiVersion: string;
   requiredScopes: string[];
+  requestedScopes: string[];
   cacheTtlMs: number;
+  authHost: string;
+  authPort: number;
+  redirectUri: string;
+  allowedOrigin: string;
+  stateTtlSeconds: number;
+  successRedirectUri?: string;
 }
 
 interface CachedAuthResult {
