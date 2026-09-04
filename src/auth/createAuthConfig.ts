@@ -73,7 +73,7 @@ function createGitHubOAuthConfig(
   const authHost = env.GITHUB_AUTH_HOST || host;
   const authPort = readPositiveInteger(
     env.GITHUB_AUTH_PORT,
-    8082,
+    Number(port),
     "GITHUB_AUTH_PORT",
     65_535,
   );

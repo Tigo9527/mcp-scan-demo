@@ -70,7 +70,7 @@ export class GitHubOAuthService {
     this.server = undefined;
   }
 
-  private async handleRequest(
+  async handleRequest(
     request: IncomingMessage,
     response: ServerResponse,
   ): Promise<void> {
