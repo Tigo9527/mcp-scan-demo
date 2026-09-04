@@ -5,11 +5,15 @@ import {
 
 import { BearerTokenAuthProvider } from "./BearerTokenAuthProvider.js";
 import {
+  GitHubOAuthAuthProvider,
+  type GitHubOAuthAuthProviderConfig,
+} from "./GitHubOAuthAuthProvider.js";
+import {
   SiweAuthService,
   type SiweAuthServiceConfig,
 } from "./SiweAuthService.js";
 
-export type AuthMode = "bearer" | "oauth" | "siwe";
+export type AuthMode = "bearer" | "oauth" | "github-oauth" | "siwe";
 
 export interface AuthConfiguration {
   config: AuthConfig;
@@ -44,6 +48,48 @@ function readPositiveInteger(
     throw new Error(`${name} must be an integer between 1 and ${maximum}`);
   }
   return parsed;
+}
+
+function readStringList(value: string | undefined): string[] {
+  return value
+    ?.split(",")
+    .map((item) => item.trim())
+    .filter(Boolean) ?? [];
+}
+
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, "");
+}
+
+function createGitHubOAuthConfig(
+  env: NodeJS.ProcessEnv,
+): GitHubOAuthAuthProviderConfig {
+  const mode: AuthMode = "github-oauth";
+
+  const host = env.MCP_HOST || "127.0.0.1";
+  const port = env.MCP_PORT || "8080";
+
+  return {
+    clientId: requireEnv(env, "GITHUB_CLIENT_ID", mode),
+    clientSecret: requireEnv(env, "GITHUB_CLIENT_SECRET", mode),
+    resource:
+      env.GITHUB_OAUTH_RESOURCE ||
+      env.OAUTH_RESOURCE ||
+      "http://" + host + ":" + port + "/mcp",
+    authorizationServer: trimTrailingSlash(
+      env.GITHUB_AUTHORIZATION_SERVER || "https://github.com/login/oauth",
+    ),
+    apiBaseUrl: trimTrailingSlash(
+      env.GITHUB_API_URL || "https://api.github.com",
+    ),
+    apiVersion: env.GITHUB_API_VERSION || "2022-11-28",
+    requiredScopes: readStringList(env.GITHUB_REQUIRED_SCOPES),
+    cacheTtlMs: readPositiveInteger(
+      env.GITHUB_TOKEN_CACHE_TTL_SECONDS,
+      300,
+      "GITHUB_TOKEN_CACHE_TTL_SECONDS",
+    ) * 1000,
+  };
 }
 
 function createSiweConfig(env: NodeJS.ProcessEnv): SiweAuthServiceConfig {
@@ -107,10 +153,7 @@ export function createAuthConfiguration(
   }
 
   if (mode === "oauth") {
-    const algorithms = env.OAUTH_ALGORITHMS
-      ?.split(",")
-      .map((algorithm) => algorithm.trim())
-      .filter(Boolean);
+    const algorithms = readStringList(env.OAUTH_ALGORITHMS);
 
     return {
       mode,
@@ -133,6 +176,16 @@ export function createAuthConfiguration(
     };
   }
 
+  if (mode === "github-oauth") {
+    return {
+      mode,
+      config: {
+        provider: new GitHubOAuthAuthProvider(createGitHubOAuthConfig(env)),
+        endpoints,
+      },
+    };
+  }
+
   if (mode === "siwe") {
     const siweService = new SiweAuthService(createSiweConfig(env));
     return {
@@ -146,6 +199,6 @@ export function createAuthConfiguration(
   }
 
   throw new Error(
-    `Unsupported MCP_AUTH_MODE "${mode}". Expected "bearer", "oauth", or "siwe"`,
+    `Unsupported MCP_AUTH_MODE "${mode}". Expected "bearer", "oauth", "github-oauth", or "siwe"`,
   );
 }

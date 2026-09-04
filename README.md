@@ -92,6 +92,52 @@ http://127.0.0.1:8080/.well-known/oauth-protected-resource
 The OAuth client sends its access token to `/mcp` using the same standard
 `Authorization` header used by MCP HTTP clients.
 
+### GitHub OAuth authentication
+
+GitHub OAuth mode validates opaque GitHub OAuth App access tokens by calling the
+GitHub API. GitHub owns the account system and login flow; this MCP server only
+checks the bearer token before allowing `/mcp` requests.
+
+Create a GitHub OAuth App with a callback handled by your client or gateway,
+then configure:
+
+```env
+MCP_AUTH_MODE=github-oauth
+MCP_HOST=127.0.0.1
+MCP_PORT=8080
+
+GITHUB_CLIENT_ID=your-github-oauth-app-client-id
+GITHUB_CLIENT_SECRET=your-github-oauth-app-client-secret
+GITHUB_OAUTH_RESOURCE=http://127.0.0.1:8080/mcp
+GITHUB_AUTHORIZATION_SERVER=https://github.com/login/oauth
+GITHUB_API_URL=https://api.github.com
+GITHUB_API_VERSION=2022-11-28
+GITHUB_REQUIRED_SCOPES=read:user
+GITHUB_TOKEN_CACHE_TTL_SECONDS=300
+```
+
+The OAuth App web flow uses GitHub's authorization and token endpoints:
+
+```text
+https://github.com/login/oauth/authorize
+https://github.com/login/oauth/access_token
+```
+
+After your client exchanges the authorization code for a GitHub access token,
+send MCP requests with:
+
+```text
+Authorization: Bearer <github-access-token>
+```
+
+When `GITHUB_REQUIRED_SCOPES` is set, every listed comma-separated scope must be
+present on the GitHub token. OAuth Protected Resource Metadata is available at
+the same endpoint used by JWT OAuth mode:
+
+```text
+http://127.0.0.1:8080/.well-known/oauth-protected-resource
+```
+
 ### Sign-In with Ethereum
 
 SIWE mode is intended for EVM-compatible wallets, including Conflux eSpace. It
