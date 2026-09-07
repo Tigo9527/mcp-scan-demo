@@ -2,6 +2,9 @@
  * 服务入口：启动 Express + 打印可访问 URL 横幅。
  * 测试通过 createApp() 自行监听，故本文件仅在「直接运行」时自动启动。
  */
+// 必须在**所有其他 import 之前**：src/config.ts 在模块顶层就把 env 快照成常量，
+// 一旦它先求值，.env 里的内容就来不及生效了。重排 import 会让 .env 静默失效。
+import 'dotenv/config';
 import { createApp } from './web/app.js';
 import { config, getAdminToken, isUsingDefaultAdminToken } from './config.js';
 import { flush, registerShutdownFlush } from './persist.js';

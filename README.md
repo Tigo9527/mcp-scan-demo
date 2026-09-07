@@ -31,14 +31,35 @@ src/
     layout.ts         共享页面布局 + HTML 转义 esc()
     admin.ts          Admin 管理端（路由 + 页面）
     profile.ts        用户 Profile 页面
-  index.ts            启动入口 + 打印访问 URL 横幅 + 退出前落盘
+  index.ts            启动入口（顶部加载 .env）+ 打印访问 URL 横幅 + 退出前落盘
 test/
   integration.test.ts 集成测试：健康检查 / 注册 / 握手 / 登录引导 / 405 / XSS / my_stats
   admin.test.ts       Admin：登录鉴权 / 用户管理 / GitHub 设置 / 统计接口
   stats.test.ts       调用统计增量断言 / 跨副本物化 / Profile 页面
   admin-token-guard.test.ts  公网默认令牌防护（503）
+  dotenv.test.ts      .env 自动加载（入口 import 顺序 + 平台 env 优先于 .env）
 codex.json / AGENTS.md  Codex 配置与代理指示
 ```
+
+## 配置（环境变量 / `.env`）
+
+服务启动时会自动读取项目根目录的 `.env`（`dotenv` 在入口 `src/index.ts` 顶部加载）：
+
+```bash
+cp .env.example .env   # 按需修改；.env 已在 .gitignore 中，不会被提交
+npm start              # 无需再手动 export / 写前缀
+```
+
+两条必须记住的语义：
+
+1. **`.env` 不覆盖已存在的环境变量**（`dotenv` 默认 `override: false`）。
+   所以部署平台注入的 `JWT_SECRET` / `ADMIN_TOKEN` / `PUBLIC_BASE_URL` **永远优先**于仓库里的 `.env`，
+   线上配置不会因为仓库里多了个 `.env` 而被悄悄改掉。本地想临时压过 `.env`，照旧用前缀即可：
+   `PORT=4001 npm start`。
+2. **`.env` 只影响本地开发**。公网部署用的是平台注入的环境变量，跟文件无关。
+
+> 实现上 `src/config.ts` 在模块顶层就把 env 快照成常量，因此 `import 'dotenv/config'`
+> 必须是 `src/index.ts` 的**第一条** import——重排会让 `.env` 静默失效。`test/dotenv.test.ts` 锁住了这个顺序。
 
 ## 快速开始
 
@@ -92,7 +113,7 @@ npm start            # 启动后控制台会打印可访问 URL，含 /admin 与
 
 1. 在 https://github.com/settings/developers 新建 OAuth App，回调填 `<base>/auth/github/callback`
 2. 二选一配置凭据：
-   - 在 `.env` 填 `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET`（启动时读入）
+   - 在 `.env`（或环境变量）填 `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET`（启动时读入）
    - 或登录 **Admin 管理端 → GitHub 设置**在线填写（**立即生效，无需重启**）
 3. 访问 `/auth/github` 完成登录，登录后返回的令牌即可调用 `search_repos`
 

@@ -26,6 +26,11 @@
 
 ## 约定（重要）
 
+- **`.env` 由入口 `src/index.ts` 顶部的 `import 'dotenv/config'` 加载**，它必须是第一条 import。
+  `src/config.ts` 在模块顶层就把 env 快照成常量，重排 import 会让 `.env` 静默失效。
+  `.env` 不覆盖已存在的环境变量（`dotenv` 默认 `override: false`），
+  故部署平台注入的 `JWT_SECRET` / `ADMIN_TOKEN` / `PUBLIC_BASE_URL` 永远优先。
+  **改 env 相关代码后必须跑 `npx vitest run test/dotenv.test.ts`。**
 - **`/mcp` 允许匿名握手，不要改成 401**。未携带令牌时由工具（`login` / `whoami` / `my_stats`）
   返回登录引导与登录链接。这是刻意设计：远程客户端（如钉钉）配置里不带令牌也能连上，
   再由 AI 引导用户去浏览器注册。
