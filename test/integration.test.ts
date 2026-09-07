@@ -35,6 +35,7 @@ beforeAll(async () => {
   // —— Codex 会读取下面这段输出并把 URL 转述给用户 ——
   console.log('\n========== MCP DEMO VISIT URLS (for the user) ==========');
   console.log(`  Web portal / one-click register : ${base}/`);
+  console.log(`  Client setup (no login needed)  : ${base}/setup`);
   console.log(`  GitHub OAuth login              : ${base}/auth/github`);
   console.log(`  MCP endpoint (Streamable HTTP)  : ${base}/mcp`);
   console.log(`  User profile                    : ${base}/profile?token=<your-token>`);

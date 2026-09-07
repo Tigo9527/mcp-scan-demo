@@ -26,9 +26,123 @@ import { persistStatus } from '../persist.js';
 import { authenticateUserRequest, deriveBase, requireSameOrigin, wrap } from './http.js';
 import { createAdminRouter } from './admin.js';
 import { createProfileRouter } from './profile.js';
-import { badge, card, esc, notice, page } from './layout.js';
+import { badge, card, copyBlock, esc, notice, page, step } from './layout.js';
 
 // ---------- 页面 ----------
+
+/**
+ * 免登录的 MCP 客户端配置。**不含任何令牌**，可公开转发给新用户。
+ * 未携带令牌时 /mcp 允许匿名握手，由 login / whoami 工具返回注册引导，所以这份配置直接可用。
+ */
+export function publicMcpConfigJson(base: string): string {
+  return JSON.stringify(
+    { mcpServers: { 'mcp-demo': { url: `${base}/mcp`, transport: 'streamable-http' } } },
+    null,
+    2,
+  );
+}
+
+/** 拿到令牌后的写法 A：拼在 URL 上（占位符，绝不含真实令牌） */
+function tokenMcpConfigJson(base: string): string {
+  return JSON.stringify(
+    {
+      mcpServers: {
+        'mcp-demo': { url: `${base}/mcp?token=<你的令牌>`, transport: 'streamable-http' },
+      },
+    },
+    null,
+    2,
+  );
+}
+
+/** 拿到令牌后的写法 B：走 X-Authorization 头 */
+function headerMcpConfigJson(base: string): string {
+  return JSON.stringify(
+    {
+      mcpServers: {
+        'mcp-demo': {
+          url: `${base}/mcp`,
+          transport: 'streamable-http',
+          headers: { 'X-Authorization': 'Bearer <你的令牌>' },
+        },
+      },
+    },
+    null,
+    2,
+  );
+}
+
+/** 一行 curl 握手，用于验证端点是否可用 */
+function curlInitialize(base: string): string {
+  const payload = JSON.stringify({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'initialize',
+    params: {
+      protocolVersion: '2025-03-26',
+      capabilities: {},
+      clientInfo: { name: 'curl', version: '1.0' },
+    },
+  });
+  return `curl -N -X POST ${base}/mcp \\\n  -H 'Content-Type: application/json' \\\n  -H 'Accept: application/json, text/event-stream' \\\n  -d '${payload}'`;
+}
+
+/** 免登录的接入说明页（/setup）。刻意不含任何令牌，链接可直接发给新用户。 */
+export function setupHtml(base: string): string {
+  return page({
+    title: '接入 MCP 客户端',
+    base,
+    active: 'setup',
+    body: `
+<h1>🔧 接入 MCP 客户端</h1>
+<p>这个页面<strong>不需要登录、不含任何令牌</strong>，可以直接把链接发给新用户。</p>
+
+${card(`
+${step(1, '复制配置，粘到你的 MCP 客户端')}
+${copyBlock(publicMcpConfigJson(base), { title: 'mcpServers 配置（不含令牌）' })}
+<p class="muted">适用于任意支持 Streamable HTTP 的客户端：Claude Desktop / Cursor / Cherry Studio / 钉钉 / 自研 Agent 等。</p>
+`)}
+
+${card(`
+${step(2, '连上后，让 AI 帮你拿令牌')}
+<p>配置好后直接在对话里说「<b>帮我注册</b>」或「<b>我要登录</b>」：AI 会调用 <code>login</code> 工具，
+把注册 / 登录链接返回给你；点开完成注册，把拿到的令牌发回给 AI 即可。</p>
+<p>想自己先注册也行，注册完把令牌填进第 3 步的配置：</p>
+<div class="row"><a class="btn" href="${esc(base)}/register">账号密码注册</a>
+<a class="btn alt" href="${esc(base)}/login">账号密码登录</a>
+<a class="btn alt" href="${esc(base)}/auth/github">GitHub 注册 / 登录</a></div>
+<p class="muted">AI Agent（如钉钉）可用一键注册自动拿令牌：<code>${esc(base)}/register?username=alice</code></p>
+`)}
+
+${card(`
+${step(3, '把令牌填回配置')}
+${copyBlock(tokenMcpConfigJson(base), { title: '写法 A：令牌拼在 URL 上' })}
+${copyBlock(headerMcpConfigJson(base), {
+  title: '写法 B：用 X-Authorization 头（推荐）',
+  hint: '务必用 X-Authorization，不要用 Authorization —— 部署平台网关会改写 Authorization 头。',
+})}
+`)}
+
+${card(`
+<h3>🧪 先验证一下连通性</h3>
+${copyBlock(`curl -s ${base}/health`, { title: '健康检查' })}
+${copyBlock(curlInitialize(base), { title: 'JSON-RPC 握手（应返回 serverInfo）' })}
+`)}
+
+${card(`
+<h3>⚠️ 常见坑</h3>
+<ul>
+<li><code>GET /mcp</code> 返回 <b>405</b> 是<strong>正常</strong>的：本服务跑在无状态模式，只接受 POST。</li>
+<li>不要用 <code>Authorization</code> 头传令牌，网关会改写它；用 <code>X-Authorization</code> 或 <code>?token=</code>。</li>
+<li>令牌形如 <code>mcp_demo_xxxx</code>，前缀不能丢。</li>
+</ul>
+`)}
+
+<div class="row"><a class="btn alt" href="${esc(base)}/">返回首页</a></div>
+<p class="muted">也可以让 AI 调用 <code>server_info</code> 工具查看当前端点与登录链接。</p>
+`,
+  });
+}
 
 function homeHtml(base: string): string {
   return page({
@@ -62,10 +176,14 @@ ${card(`
 `)}
 
 ${card(`
-<h3>④ MCP 端点（可匿名连接，未登录时引导登录）</h3>
-<p>Streamable HTTP：<code>${esc(base)}/mcp</code></p>
-<p>匿名连接可调用 <code>login</code> 工具获取登录入口；登录后把令牌放到请求头 <code>X-Authorization: Bearer &lt;token&gt;</code> 或 URL 参数 <code>?token=&lt;token&gt;</code>。</p>
-<p class="muted">钉钉等 AI Agent 可用「一键注册」（<code>/register?username=alice</code> 或 <code>register_user</code> 工具）自动拿令牌，无需人工填密码。</p>
+<h3>④ MCP 客户端配置（免登录，可直接复制）</h3>
+<p>Streamable HTTP：<code>${esc(`${base}/mcp`)}</code></p>
+${copyBlock(publicMcpConfigJson(base), {
+  title: '不含令牌，可放心转发给新用户',
+  hint: '连上后让 AI 调用 login 工具即可拿到注册/登录链接，拿到令牌再填回 url 的 ?token=。',
+})}
+<div class="row"><a class="btn small" href="${esc(base)}/setup">完整接入说明 →</a>
+<a class="btn small alt" href="${esc(base)}/register">先去注册拿令牌</a></div>
 `)}
 
 ${card(`
@@ -236,6 +354,11 @@ export function createApp() {
 
   app.get('/', (_req: Request, res: Response) => {
     res.type('html').send(homeHtml(deriveBase(_req)));
+  });
+
+  // 接入说明页：免登录、不含任何令牌，链接可直接分享给新用户
+  app.get('/setup', (req: Request, res: Response) => {
+    res.type('html').send(setupHtml(deriveBase(req)));
   });
 
   // 注册入口：带 ?username= 走「一键注册」（供钉钉等 Agent 自动注册，行为不变）；

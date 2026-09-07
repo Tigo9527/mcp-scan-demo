@@ -50,6 +50,16 @@ nav a.active{opacity:1;font-weight:600;color:var(--acc)}
 .notice{border-left:4px solid var(--warn);background:#fdf6e3;padding:10px 14px;border-radius:0 8px 8px 0;margin:14px 0;font-size:.92em}
 .empty{color:var(--muted);padding:16px 0}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.codeblock{border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:12px 0}
+.codeblock .cb-head{display:flex;align-items:center;gap:8px;background:var(--soft);
+  padding:8px 12px;border-bottom:1px solid var(--line);font-size:.9em}
+.codeblock .cb-head .cb-title{font-weight:600;margin-right:auto}
+.codeblock pre{margin:0;border-radius:0}
+.codeblock .cb-foot{padding:8px 12px;border-top:1px solid var(--line);font-size:.88em}
+.btn.copy{margin:0;background:#24292f}
+.step{font-weight:600;margin:18px 0 6px}
+.step span{display:inline-block;min-width:24px;height:24px;line-height:24px;text-align:center;
+  border-radius:999px;background:var(--acc);color:#fff;font-size:.85em;margin-right:8px}
 `;
 
 /** HTML 转义。所有插值都必须过一遍，包括 href="...?token=${esc(x)}" 这类属性位置。 */
@@ -62,12 +72,54 @@ export function esc(s: unknown): string {
     .replace(/'/g, '&#39;');
 }
 
+/**
+ * 一键复制代码块。code 一律 esc 后塞进 <pre>，复制时取 pre.textContent（即还原后的原文），
+ * 因此既防 XSS 也不用额外维护一份 data-* 属性。
+ */
+export function copyBlock(code: string, opts: { title?: string; hint?: string } = {}): string {
+  return `<div class="codeblock">
+<div class="cb-head"><span class="cb-title">${esc(opts.title ?? '')}</span><button type="button" class="btn small copy">复制</button></div>
+<pre><code>${esc(code)}</code></pre>
+${opts.hint ? `<div class="cb-foot muted">${esc(opts.hint)}</div>` : ''}
+</div>`;
+}
+
+/** 步骤小标题，如 step(1, '复制配置') */
+export function step(n: number, text: string): string {
+  return `<div class="step"><span>${esc(n)}</span>${esc(text)}</div>`;
+}
+
+/**
+ * 复制按钮的行为脚本。用事件委托挂在 document 上，页面里任意 copyBlock 都能用，
+ * 且只注入一次、无外部依赖。navigator.clipboard 在非 HTTPS / 沙箱 iframe 里不可用，
+ * 故保留 execCommand 兜底。
+ */
+const COPY_SCRIPT = `<script>
+document.addEventListener('click',function(e){
+  var t=e.target;if(!t||!t.closest)return;
+  var b=t.closest('.copy');if(!b)return;
+  var box=b.closest('.codeblock');if(!box)return;
+  var pre=box.querySelector('pre');if(!pre)return;
+  var text=pre.textContent||'';
+  var done=function(ok){var o='复制';b.textContent=ok?'已复制':'复制失败，请手动选中';setTimeout(function(){b.textContent=o;},1600);};
+  var legacy=function(){
+    var ta=document.createElement('textarea');ta.value=text;ta.setAttribute('readonly','');
+    ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();
+    var ok=false;try{ok=document.execCommand('copy');}catch(err){ok=false;}
+    document.body.removeChild(ta);done(ok);
+  };
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(function(){done(true);},legacy);
+  }else{legacy();}
+});
+</script>`;
+
 export interface PageOptions {
   title: string;
   /** 页面主体 HTML（调用方负责对所有动态值做 esc） */
   body: string;
   /** 导航栏高亮项 */
-  active?: 'home' | 'admin' | 'profile';
+  active?: 'home' | 'admin' | 'profile' | 'setup';
   /** 对外基础地址，用于拼导航链接 */
   base?: string;
   /** admin 令牌：有值时 admin 内部链接会带上，保证网关不透传 Cookie 时也能正常跳转 */
@@ -85,6 +137,7 @@ export function page(opts: PageOptions): string {
   const base = opts.base ?? '';
   const navLinks: Array<{ href: string; key: PageOptions['active']; label: string }> = [
     { href: `${base}/`, key: 'home', label: '首页' },
+    { href: `${base}/setup`, key: 'setup', label: '接入配置' },
     { href: `${base}/profile`, key: 'profile', label: '我的 Profile' },
     { href: adminHref('/admin', opts.adminToken), key: 'admin', label: 'Admin 管理端' },
   ];
@@ -99,7 +152,7 @@ export function page(opts: PageOptions): string {
   return `<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(opts.title)}</title><style>${CSS}</style></head>
-<body>${nav}${opts.body}</body></html>`;
+<body>${nav}${opts.body}${COPY_SCRIPT}</body></html>`;
 }
 
 export function card(inner: string, cls = ''): string {

@@ -45,7 +45,9 @@ export function createMcpServer(): McpServer {
         loginUrl: `${base}/login`,
         registerUrl: `${base}/register`,
         githubAuthUrl: `${base}/auth/github`,
-        note: '未携带有效令牌时，调用 login 工具即可获取登录入口；或在浏览器打开 loginUrl 完成注册后，将令牌配置到客户端请求头 X-Authorization: Bearer <token>（或 MCP 端点 URL 后追加 ?token=<token>）。',
+        setupUrl: `${base}/setup`,
+        mcpConfig: { mcpServers: { 'mcp-demo': { url: `${base}/mcp`, transport: 'streamable-http' } } },
+        note: '未携带有效令牌时，调用 login 工具即可获取登录入口；或在浏览器打开 loginUrl 完成注册后，将令牌配置到客户端请求头 X-Authorization: Bearer <token>（或 MCP 端点 URL 后追加 ?token=<token>）。setupUrl 是免登录的接入说明页，可直接发给新用户（含可直接复制的 mcpConfig）。',
         mcpEndpoint: `${base}/mcp`,
         profileUrl: `${base}/profile`,
         githubConfigured: isGitHubConfigured(),
@@ -66,9 +68,11 @@ export function createMcpServer(): McpServer {
         loginUrl: `${base}/login`,
         registerUrl: `${base}/register`,
         githubAuthUrl: `${base}/auth/github`,
+        setupUrl: `${base}/setup`,
         profileUrl: `${base}/profile`,
+        mcpConfig: { mcpServers: { 'mcp-demo': { url: `${base}/mcp`, transport: 'streamable-http' } } },
         howToUseToken:
-          '登录（账号密码或 GitHub）后会得到一个 mcp_demo_ 开头的令牌。把它配置到 MCP 客户端：请求头 X-Authorization: Bearer <token>，或在 MCP 端点 URL 后追加 ?token=<token>；把令牌拼到 profileUrl 后可查看个人资料与调用统计。',
+          '登录（账号密码或 GitHub）后会得到一个 mcp_demo_ 开头的令牌。把它配置到 MCP 客户端：请求头 X-Authorization: Bearer <token>，或在 MCP 端点 URL 后追加 ?token=<token>；把令牌拼到 profileUrl 后可查看个人资料与调用统计。mcpConfig 是不含令牌的客户端配置，可直接复制使用；先连上再登录，无需一开始就配令牌。',
       });
     },
   );

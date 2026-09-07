@@ -41,6 +41,9 @@
   且值必须带本服务前缀 `mcp_demo_`。
 - **GitHub OAuth 参数一律通过 `getGithub()`（src/settings.ts）读取**，
   **禁止**直接读 `config.githubSeed`（那是启动时快照，读不到 admin 后台的运行时改动）。
+- **`/setup` 是免登录的接入说明页，页面里绝不能出现任何令牌**（它是直接转发给新用户的）。
+  同理首页 `/` 的配置块也只能用不含令牌的 `publicMcpConfigJson()`。
+  `test/setup-page.test.ts` 用 `mcp_demo_` 正则锁住了这一点，改这两处后必须跑。
 - **所有 HTML 插值必须过 `esc()`**（src/web/layout.ts），包括属性位置。
   用户名来自用户输入，历史上这里出过 XSS。
 - **所有 async Express 路由必须用 `wrap()` 包一层**。Express 4 不捕获 async 的 rejection，

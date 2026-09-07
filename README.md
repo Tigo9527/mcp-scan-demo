@@ -37,6 +37,7 @@ test/
   admin.test.ts       Admin：登录鉴权 / 用户管理 / GitHub 设置 / 统计接口
   stats.test.ts       调用统计增量断言 / 跨副本物化 / Profile 页面
   admin-token-guard.test.ts  公网默认令牌防护（503）
+  setup-page.test.ts  免登录接入页 /setup：无令牌泄露、配置可复制、MCP 工具返回 setupUrl
   dotenv.test.ts      .env 自动加载（入口 import 顺序 + 平台 env 优先于 .env）
 codex.json / AGENTS.md  Codex 配置与代理指示
 ```
@@ -69,6 +70,20 @@ npm start            # 启动后控制台会打印可访问 URL，含 /admin 与
 ```
 
 打开门户地址（默认 http://localhost:3000/）：
+
+### 接入 MCP 客户端（免登录，可直接转发）
+
+新用户不需要先注册就能连上：`/mcp` 允许**匿名握手**，未登录时由 `login` / `whoami` 工具返回注册引导。
+
+所以准备了一个**免登录、不含任何令牌**的接入页：<https://你的域名/setup>
+
+- 页面直接给出可一键复制的 `mcpServers` 配置（URL 里没有 token）
+- 三步引导：复制配置 → 让 AI 调 `login` 拿注册链接 → 把令牌填回配置
+- 附 `curl` 冒烟命令与常见坑（405 是正常的、别用 `Authorization` 头）
+- 首页 `/` 的「MCP 客户端配置」卡片里也放了一份同样的配置块
+
+> 这个链接可以放心发给任何人——页面里没有任何令牌。测试 `test/setup-page.test.ts`
+> 专门断言了页面与首页**不出现** `mcp_demo_` 开头的真实令牌。
 
 ### 用户侧：注册与登录（三种方式）
 
