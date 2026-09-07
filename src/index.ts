@@ -1,0 +1,99 @@
+/**
+ * 服务入口：启动 Express + 打印可访问 URL 横幅。
+ * 测试通过 createApp() 自行监听，故本文件仅在「直接运行」时自动启动。
+ */
+import { createApp } from './web/app.js';
+import { config, getAdminToken, isUsingDefaultAdminToken } from './config.js';
+import { flush, registerShutdownFlush } from './persist.js';
+import type { Server } from 'node:http';
+
+// 兜底：Express 4 不捕获 async handler 的 rejection，一旦逃逸出来 Node 20 默认直接终止进程。
+// 这里只记录不退出，避免一次偶发异常就让整个副本挂掉。
+process.on('unhandledRejection', (reason) => {
+  console.error('[mcp-demo] 未捕获的 Promise rejection：', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[mcp-demo] 未捕获异常：', err);
+});
+
+export function startServer(port: number = config.port): Server {
+  registerShutdownFlush();
+  const app = createApp();
+  const server = app.listen(port, config.host, () => {
+    printBanner();
+  });
+  startKeepAlive();
+  return server;
+}
+
+/**
+ * 保活：发布平台在实例空闲一段时间后会将其休眠，唤醒约需 5s，
+ * 常超过网关超时从而导致间歇 502。这里周期性自 ping 公开地址（走网关→本实例），
+ * 让平台认为该实例仍有入向流量、不被判定为空闲而休眠。
+ * 仅当注入了公网地址（非 localhost）时启用；本地开发不触发。
+ */
+function startKeepAlive(): void {
+  const base = config.publicBaseUrl;
+  if (!base || base.startsWith('http://localhost') || base.startsWith('http://127.0.0.1')) {
+    return;
+  }
+  const target = `${base.replace(/\/+$/, '')}/health`;
+  const intervalMs = 15_000;
+  const timer = setInterval(() => {
+    fetch(target).catch(() => undefined);
+  }, intervalMs);
+  // 不阻止进程退出（HTTP server 已让事件循环保持活跃，定时器照常触发）
+  if (typeof timer.unref === 'function') timer.unref();
+}
+
+export function printBanner(): void {
+  const base = config.baseUrl;
+  const adminHint = isUsingDefaultAdminToken()
+    ? '⚠ 使用默认令牌 dev-admin-change-me（公网环境会被禁用，请注入 ADMIN_TOKEN）'
+    : `已注入（ADMIN_TOKEN=${getAdminToken().slice(0, 4)}****）`;
+
+  const lines = [
+    '',
+    '╔══════════════════════════════════════════════════════════════╗',
+    '  MCP Demo 服务已启动  (TypeScript + 官方 @modelcontextprotocol/sdk)',
+    '╠══════════════════════════════════════════════════════════════╣',
+    `   访问门户 / 一键注册 :  ${base}/`,
+    `   GitHub OAuth 登录   :  ${base}/auth/github`,
+    `   MCP 端点 (Streamable HTTP): ${base}/mcp`,
+    `   用户 Profile        :  ${base}/profile?token=<你的令牌>`,
+    `   Admin 管理端        :  ${base}/admin`,
+    `   Admin 令牌          :  ${adminHint}`,
+    `   健康检查            :  ${base}/health`,
+    '╚══════════════════════════════════════════════════════════════╝',
+    `   实例 ID: ${config.instanceId}`,
+    '',
+  ];
+  // 同时用 error 日志确保被 CI/Codex 捕获（stdout 可能被缓冲）
+  console.log(lines.join('\n'));
+  console.error(
+    '[mcp-demo] visit URLs ->',
+    `${base}/`,
+    '|',
+    `${base}/auth/github`,
+    '|',
+    `${base}/mcp`,
+    '|',
+    `${base}/admin`,
+  );
+}
+
+// 退出前把待写入的数据刷盘（平台重启频繁，不 flush 的话统计基本等于内存态）
+export async function shutdown(): Promise<void> {
+  await flush().catch(() => undefined);
+}
+
+// 仅当作为入口直接执行时才自动启动（测试 import 时不会触发）
+const invokedDirectly =
+  process.argv[1] !== undefined &&
+  (process.argv[1].endsWith('index.ts') ||
+    process.argv[1].endsWith('index.js') ||
+    process.argv[1].replace(/\\/g, '/').endsWith('src/index.ts'));
+
+if (invokedDirectly && process.env.MCP_DEMO_NO_BOOT !== '1') {
+  startServer();
+}

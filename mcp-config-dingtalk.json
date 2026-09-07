@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "mcp-demo": {
+      "url": "https://a8b79d8a477856f1e.app.workbuddy.link/mcp",
+      "transport": "streamable-http"
+    }
+  }
+}

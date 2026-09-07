@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+*.log
+.DS_Store
+# 运行时数据（用户 / 统计 / 设置落盘）
+data/
