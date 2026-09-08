@@ -190,7 +190,17 @@ async function mcpCall(token: string): Promise<Response> {
 
 describe('发现链：401 → PRM → AS → 注册端点', () => {
   it('从 401 头一路能走到 DCR，且每跳地址都真的可用', async () => {
-    const unauth = await mcpCall('anonymous');
+    // initialize 现在允许匿名（先装好），受保护工具 whoami 未带令牌才 401，触发 OAuth 发现
+    const unauth = await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'whoami', arguments: {} },
+      }),
+    });
     expect(unauth.status).toBe(401);
 
     const prmUrl = /resource_metadata="([^"]*)"/.exec(

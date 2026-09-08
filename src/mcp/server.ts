@@ -24,6 +24,9 @@ const TOOL_NAMES = [
   'search_repos',
 ];
 
+/** 无需登录即可调用的公开工具（供未登录客户端安装后获取登录入口 / 一键注册）。 */
+export const PUBLIC_MCP_TOOLS = new Set(['server_info', 'login', 'register_user']);
+
 export function createMcpServer(): McpServer {
   const server = new McpServer({
     name: 'mcp-demo',

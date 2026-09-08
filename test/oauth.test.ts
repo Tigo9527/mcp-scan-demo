@@ -125,18 +125,27 @@ describe('授权服务器元数据（RFC 8414）', () => {
 });
 
 describe('未鉴权请求的 401 与 WWW-Authenticate', () => {
-  it('initialize 未带令牌返回 401，且头可被官方 SDK 正则解析', async () => {
-    const res = await mcpPost(initializeBody);
-    expect(res.status).toBe(401);
-    const header = res.headers.get('www-authenticate') ?? '';
+  const whoamiBody = { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'whoami', arguments: {} } };
+
+  it('握手类方法（initialize）未带令牌返回 200——先让客户端装好', async () => {
+    const init = await mcpPost(initializeBody);
+    expect(init.status).toBe(200);
+    const json = (await init.json()) as Record<string, any>;
+    expect(json.result?.serverInfo?.name).toBe('mcp-demo');
+  });
+
+  it('受保护工具（whoami）未带令牌才 401，且头可被官方 SDK 正则解析', async () => {
+    const whoami = await mcpPost(whoamiBody);
+    expect(whoami.status).toBe(401);
+    const header = whoami.headers.get('www-authenticate') ?? '';
     const match = RESOURCE_METADATA_RE.exec(header);
     expect(match, `WWW-Authenticate 应含 resource_metadata，实际为：${header}`).toBeTruthy();
     expect(match![1]).toBe(`${base}/.well-known/oauth-protected-resource${MCP_PATH}`);
   });
 
   it('resource_metadata 指向的地址确实能取到元数据', async () => {
-    const res = await mcpPost(initializeBody);
-    const header = res.headers.get('www-authenticate') ?? '';
+    const whoami = await mcpPost(whoamiBody);
+    const header = whoami.headers.get('www-authenticate') ?? '';
     const url = RESOURCE_METADATA_RE.exec(header)?.[1];
     const meta = await fetch(url!);
     expect(meta.status).toBe(200);
@@ -148,6 +157,33 @@ describe('未鉴权请求的 401 与 WWW-Authenticate', () => {
     expect(res.status).toBe(200);
     const json = (await res.json()) as Record<string, any>;
     expect(json.result?.serverInfo?.name).toBe('mcp-demo');
+  });
+
+  it('匿名可装：tools/list 与公开工具（login / server_info）免登录可用', async () => {
+    const list = await mcpPost({ jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} });
+    expect(list.status).toBe(200);
+    const data = (await list.json()) as Record<string, any>;
+    const names: string[] = (data.result?.tools ?? []).map((t: { name: string }) => t.name);
+    expect(names).toEqual(
+      expect.arrayContaining(['server_info', 'login', 'register_user', 'whoami', 'my_stats', 'search_repos']),
+    );
+
+    const login = await mcpPost({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'login', arguments: {} } });
+    expect(login.status).toBe(200);
+    const info = await mcpPost({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'server_info', arguments: {} } });
+    expect(info.status).toBe(200);
+  });
+
+  it('受保护工具（my_stats / search_repos）未带令牌也 401', async () => {
+    const ms = await mcpPost({ jsonrpc: '2.0', id: 6, method: 'tools/call', params: { name: 'my_stats', arguments: {} } });
+    expect(ms.status).toBe(401);
+    const sr = await mcpPost({
+      jsonrpc: '2.0',
+      id: 7,
+      method: 'tools/call',
+      params: { name: 'search_repos', arguments: { query: 'test' } },
+    });
+    expect(sr.status).toBe(401);
   });
 });
 
