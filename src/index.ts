@@ -26,7 +26,35 @@ export function startServer(port: number = config.port): Server {
     printBanner();
   });
   startKeepAlive();
+  registerGracefulShutdown(server);
   return server;
+}
+
+/**
+ * 优雅关闭：tsx 的 preflight 会给 SIGINT/SIGTERM 装「隐藏」监听并吞掉（不退出），
+ * 导致 `npm start` 下按 Ctrl+C 杀不掉进程（只能 kill -9）。
+ * 这里自己注册监听，收到信号后先停止接收新连接、刷盘落库，再显式 process.exit，
+ * 从而盖过 tsx 的吞信号行为；生产环境（node dist/index.js）下它也是我们唯一的处理器。
+ */
+function registerGracefulShutdown(server: Server): void {
+  let stopping = false;
+  const stop = (signal: string): void => {
+    if (stopping) return;
+    stopping = true;
+    console.error(`[mcp-demo] 收到 ${signal}，正在关闭…`);
+    const done = (): void => {
+      shutdown()
+        .catch(() => undefined)
+        .finally(() => process.exit(0));
+    };
+    server.close(done);
+    // 兜底：若有连接迟迟关不掉，5s 后强制退出，避免卡死
+    const hard = setTimeout(() => process.exit(1), 5_000);
+    if (typeof hard.unref === 'function') hard.unref();
+  };
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGQUIT'] as const) {
+    process.on(signal, () => stop(signal));
+  }
 }
 
 /**
