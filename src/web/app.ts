@@ -5,6 +5,9 @@
  * - Admin 管理端（/admin）与用户 Profile（/profile）
  */
 import express, { type NextFunction, type Request, type Response } from 'express';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { config } from '../config.js';
 import * as auth from '../auth/manager.js';
@@ -111,6 +114,37 @@ function curlInitialize(base: string): string {
   return `curl -N -X POST ${base}/mcp \\\n  -H 'Content-Type: application/json' \\\n  -H 'Accept: application/json, text/event-stream' \\\n  -d '${payload}'`;
 }
 
+/**
+ * 读取 mcp-config-aiaw.json（aiaw.app 服务清单格式）原文，用于在 /setup 页面展示可复制。
+ * 优先按运行位置解析文件，全部失败则回退到内置副本，保证页面永不崩。
+ */
+function loadAiawConfigJson(): string {
+  const fallback = JSON.stringify(
+    {
+      id: 'mcp-demo',
+      title: 'MCP Demo',
+      description: '示例 MCP 服务：提供账号登录、用户信息查询、仓库搜索等工具，支持 OAuth 2.1 授权登录。',
+      transport: { type: 'http', url: 'https://mcp-demo.confluxscan.org/mcp' },
+      author: 'agent3k',
+      homepage: 'https://cnb.cool/agent3k/mcp-demo',
+    },
+    null,
+    2,
+  );
+  const candidates = [
+    path.resolve(process.cwd(), 'mcp-config-aiaw.json'),
+    fileURLToPath(new URL('../mcp-config-aiaw.json', import.meta.url)),
+  ];
+  for (const p of candidates) {
+    try {
+      return readFileSync(p, 'utf8').trim();
+    } catch {
+      /* 尝试下一个候选路径 */
+    }
+  }
+  return fallback;
+}
+
 /** 免登录的接入说明页（/setup）。刻意不含任何令牌，链接可直接发给新用户。 */
 export function setupHtml(base: string): string {
   return page({
@@ -125,6 +159,13 @@ ${card(`
 ${step(1, '复制配置，粘到你的 MCP 客户端')}
 ${copyBlock(publicMcpConfigJson(base), { title: 'mcpServers 配置（不含令牌）' })}
 <p class="muted">适用于任意支持 Streamable HTTP 的客户端：Claude Desktop / Cursor / Cherry Studio / 钉钉 / 自研 Agent 等。</p>
+`)}
+
+${card(`
+<h3>🧩 aiaw.app 等「服务清单」格式客户端</h3>
+<p>以下为 <code>mcp-config-aiaw.json</code>（id / title / description / transport / author / homepage 清单格式），
+直接复制到 aiaw.app 的「添加服务」即可。</p>
+${copyBlock(loadAiawConfigJson(), { title: 'aiaw.app 服务清单（mcp-config-aiaw.json）' })}
 `)}
 
 ${card(`

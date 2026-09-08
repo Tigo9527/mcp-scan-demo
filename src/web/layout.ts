@@ -14,6 +14,7 @@ a{color:var(--acc);text-decoration:none}
 a:hover{text-decoration:underline}
 code{background:var(--soft);padding:2px 6px;border-radius:4px;font-size:.9em;word-break:break-all}
 pre{background:#0d1117;color:#e6edf3;padding:14px;border-radius:8px;overflow:auto;font-size:.85em}
+pre code{background:transparent;padding:0;border-radius:0;font-size:inherit;color:inherit}
 h1{font-size:1.6em;margin:24px 0 8px}
 h2{font-size:1.25em;margin:28px 0 10px}
 h3{font-size:1.05em;margin:18px 0 8px}
