@@ -31,14 +31,35 @@
   `.env` 不覆盖已存在的环境变量（`dotenv` 默认 `override: false`），
   故部署平台注入的 `JWT_SECRET` / `ADMIN_TOKEN` / `PUBLIC_BASE_URL` 永远优先。
   **改 env 相关代码后必须跑 `npx vitest run test/dotenv.test.ts`。**
-- **`/mcp` 允许匿名握手，不要改成 401**。未携带令牌时由工具（`login` / `whoami` / `my_stats`）
-  返回登录引导与登录链接。这是刻意设计：远程客户端（如钉钉）配置里不带令牌也能连上，
-  再由 AI 引导用户去浏览器注册。
+- **`/mcp` 默认要求登录：未携带有效令牌返回 401 + `WWW-Authenticate`**（`MCP_DEMO_REQUIRE_AUTH`
+  默认 `on`，设成 `off` 才恢复旧的匿名握手）。**不要改回永远 200** —— 那正是「客户端识别不了
+  登录方式」的根因：客户端只有收到 401 才会去读 `resource_metadata` 并启动标准 OAuth 发现。
+  唯一例外：`notifications/*` 不 401，否则客户端初始化流程会被打断。
+- **鉴权成功但受众（`aud`）不符时必须返回 403，绝不能返回 401**。官方 SDK 有熔断
+  （`_hasCompletedAuthFlow`）：流程结束后再收到 401 会直接抛错而不是重跑流程，
+  于是「受众不符」这个不可恢复的错误被伪装成「还没登录」，表现为死循环。
+  老令牌没有 `aud` 声明 → 祖父条款放行（`readTokenAudience` 返回 `null`）。
+- **授权发现的三个契约写死在 `src/oauth/metadata.ts` 顶部注释里，改之前先读**：
+  ① canonical URI 是 `<base>/mcp`，按 RFC 9728 §3.1 元数据要挂在
+  `<base>/.well-known/oauth-protected-resource/mcp`（根路径那份只是兜底）；
+  ② 401 头里**只**放 `resource_metadata`，授权服务器地址由客户端从 PRM 派生；
+  ③ **绝不能**在 AS 元数据里声明 `client_id_metadata_document_supported`
+  —— SDK 一见到它就走 CIMD，绕过我们的 DCR 端点。
+- **OAuth 状态一律走自包含加密票据（`src/oauth/tickets.ts`），不要改成「存起来再查」**：
+  多副本部署下 `persist.ts` 无锁无 CAS、数据按 `instanceId` 分片，副本 A 存的东西副本 B 查不到。
+  票据用 HKDF 从 `JWT_SECRET` 派生密钥（不复用 HMAC 的），并用 AES-GCM 的 AAD 绑定用途
+  （`dcr` / `code`），防止一枚 client_id 票据被当成授权码去换令牌。
+- **改了 OAuth 相关代码后必须同时跑 `npm test` 和 `npm run oauth:e2e`**。后者用官方 SDK 的
+  `auth()` 真实走一遍发现 → DCR → 授权 → 换令牌 → 调工具，是唯一能证明「第三方客户端真的能
+  自己登录」的验证；`test/oauth-flow.test.ts` 里的假客户端只能证明我们和自己的理解一致。
 - **无状态下 `GET /mcp` 必须返回 405**。无状态模式（`sessionIdGenerator: undefined`）下
   GET 会建立常驻 SSE 流并起 keep-alive 定时器，爬虫/健康检查反复请求会累积悬挂连接。
 - **不要用 `Authorization` 头在本服务内传令牌**。部署平台网关会拦截并改写它
   （注入平台自己的 JWT）。只认 `X-Authorization` 头 / `?token=` 查询参数，
   且值必须带本服务前缀 `mcp_demo_`。
+  ⚠️ 实测网关会**无条件剥离** `Authorization: Bearer mcp_demo_…`（不带 Cookie 也一样），
+  而官方 SDK 只会用 `Authorization` 头带令牌。结论：Discovery 与登录流程在公网能跑通，
+  **最后一跳会被网关吞掉**；本地直连 / 自托管无此限制。详见 README「已知限制」。
 - **GitHub OAuth 参数一律通过 `getGithub()`（src/settings.ts）读取**，
   **禁止**直接读 `config.githubSeed`（那是启动时快照，读不到 admin 后台的运行时改动）。
 - **`/setup` 是免登录的接入说明页，页面里绝不能出现任何令牌**（它是直接转发给新用户的）。

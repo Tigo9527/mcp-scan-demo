@@ -30,6 +30,12 @@ export const MCP_PATH = '/mcp';
 export const WELL_KNOWN = {
   protectedResource: '/.well-known/oauth-protected-resource',
   authorizationServer: '/.well-known/oauth-authorization-server',
+  /**
+   * OIDC 发现别名。MCP 规范不要求它，但不少客户端/库（以及一些扫码类工具）会先取
+   * `openid-configuration`。本服务就是自己的授权服务器，与 RFC 8414 那份内容一致，
+   * 多挂一个别名只是省掉一次 404。
+   */
+  openidConfiguration: '/.well-known/openid-configuration',
 } as const;
 
 /** 去掉结尾斜杠。canonical URI 的比较对尾斜杠敏感，统一在这里归一。 */

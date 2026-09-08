@@ -25,6 +25,111 @@ export class AuthError extends Error {
 
 const TOKEN_TTL = '7d';
 
+/** OAuth 访问令牌有效期（秒）。比普通令牌短，配合 refresh_token 使用。 */
+const OAUTH_ACCESS_TTL_SECONDS = 3600;
+const OAUTH_REFRESH_TTL_SECONDS = 30 * 24 * 3600;
+
+/**
+ * OAuth 2.1 访问令牌。
+ *
+ * 与 issueToken 的差别：带 `aud`（RFC 8707 的 resource，令牌与资源绑定）、`iss`、`scope`、
+ * `client_id`。**保留 `mcp_demo_` 前缀** —— 网关会改写/剥离 `Authorization` 头，
+ * `resolveUserToken()` 靠这个前缀把网关注入的 JWT 过滤掉。
+ */
+export function issueOAuthAccessToken(params: {
+  user: store.User;
+  resource: string;
+  issuer: string;
+  scope: string;
+  clientId: string;
+}): { access_token: string; expires_in: number } {
+  const jwtToken = jwt.sign(
+    {
+      sub: params.user.id,
+      username: params.user.username,
+      email: params.user.email,
+      provider: params.user.provider,
+      githubLogin: params.user.githubLogin,
+      githubToken: params.user.githubToken,
+      createdAt: params.user.createdAt,
+      aud: params.resource,
+      iss: params.issuer,
+      scope: params.scope,
+      client_id: params.clientId,
+      purpose: 'access_token',
+    },
+    config.jwtSecret,
+    { expiresIn: OAUTH_ACCESS_TTL_SECONDS },
+  );
+  return {
+    access_token: `${config.jwtTokenPrefix}${jwtToken}`,
+    expires_in: OAUTH_ACCESS_TTL_SECONDS,
+  };
+}
+
+/**
+ * 刷新令牌。自签名 JWT，不落盘（多副本无共享存储）。
+ * 因此**不支持轮换** —— 无状态方案检测不到旧令牌是否被重放。
+ */
+export function issueOAuthRefreshToken(params: {
+  user: store.User;
+  resource: string;
+  issuer: string;
+  scope: string;
+  clientId: string;
+}): string {
+  return jwt.sign(
+    {
+      sub: params.user.id,
+      username: params.user.username,
+      provider: params.user.provider,
+      aud: params.resource,
+      iss: params.issuer,
+      scope: params.scope,
+      client_id: params.clientId,
+      purpose: 'refresh_token',
+    },
+    config.jwtSecret,
+    { expiresIn: OAUTH_REFRESH_TTL_SECONDS },
+  );
+}
+
+/** 解析刷新令牌，失败返回 null */
+export function readOAuthRefreshToken(
+  token: string | undefined,
+): { sub: string; resource: string; scope: string; clientId: string } | null {
+  if (!token) return null;
+  try {
+    const payload = jwt.verify(token, config.jwtSecret) as jwt.JwtPayload;
+    if (payload.purpose !== 'refresh_token') return null;
+    return {
+      sub: String(payload.sub ?? ''),
+      resource: String(payload.aud ?? ''),
+      scope: typeof payload.scope === 'string' ? payload.scope : '',
+      clientId: String(payload.client_id ?? ''),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** 解析访问令牌里的受众（RFC 8707 校验用）。老令牌没有 aud，返回 null 表示「祖父条款放行」。 */
+export function readTokenAudience(token: string): string | null | undefined {
+  try {
+    // 归一化必须和 authenticate() 完全一致：请求里拿到的是 `Bearer mcp_demo_<jwt>`，
+    // 少了剥 `Bearer ` 这一步就会 verify 失败 → undefined → 被上层误判成「受众不符」。
+    let raw = token.trim();
+    if (/^bearer\s+/i.test(raw)) raw = raw.replace(/^bearer\s+/i, '').trim();
+    if (raw.startsWith(config.jwtTokenPrefix)) raw = raw.slice(config.jwtTokenPrefix.length);
+    const payload = jwt.verify(raw, config.jwtSecret) as jwt.JwtPayload;
+    const aud = payload.aud;
+    if (Array.isArray(aud)) return String(aud[0] ?? '') || null;
+    return typeof aud === 'string' ? aud : null; // 无 aud = 老令牌 → null
+  } catch {
+    return undefined; // 校验失败
+  }
+}
+
 /** 为用户签发访问令牌，格式：mcp_demo_<jwt>。
  *  采用无状态设计：用户关键信息（username/email/provider/githubToken）直接写进 JWT，
  *  这样在发布平台多副本部署时，任意副本都能独立校验，无需共享内存存储。 */

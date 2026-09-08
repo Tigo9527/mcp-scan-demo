@@ -28,25 +28,33 @@ import {
   allowPublicCors,
   deriveBase,
   requireSameOrigin,
+  resolveUserToken,
   wrap,
 } from './http.js';
 import {
   authorizationServerMetadata,
+  canonicalResourceUri,
   MCP_PATH,
+  OAUTH_SCOPE,
   protectedResourceMetadata,
+  protectedResourceMetadataUrl,
   WELL_KNOWN,
   wwwAuthenticate,
 } from '../oauth/metadata.js';
 import { requireAuthForMcp } from '../config.js';
 import { createAdminRouter } from './admin.js';
 import { createProfileRouter } from './profile.js';
+import { createAuthorizeRouter } from '../oauth/authorize.js';
+import { createRegisterRouter } from '../oauth/register.js';
+import { createTokenRouter } from '../oauth/token.js';
 import { badge, card, copyBlock, esc, notice, page, step } from './layout.js';
 
 // ---------- 页面 ----------
 
 /**
  * 免登录的 MCP 客户端配置。**不含任何令牌**，可公开转发给新用户。
- * 未携带令牌时 /mcp 允许匿名握手，由 login / whoami 工具返回注册引导，所以这份配置直接可用。
+ * 不含令牌时 /mcp 会返回 401 + WWW-Authenticate，支持标准 OAuth Discovery 的客户端
+ * （Codex / Claude Desktop / MCP Inspector 等）会据此自动弹出登录页，所以这份配置可直接用。
  */
 export function publicMcpConfigJson(base: string): string {
   return JSON.stringify(
@@ -118,18 +126,17 @@ ${copyBlock(publicMcpConfigJson(base), { title: 'mcpServers 配置（不含令�
 `)}
 
 ${card(`
-${step(2, '连上后，让 AI 帮你拿令牌')}
-<p>配置好后直接在对话里说「<b>帮我注册</b>」或「<b>我要登录</b>」：AI 会调用 <code>login</code> 工具，
-把注册 / 登录链接返回给你；点开完成注册，把拿到的令牌发回给 AI 即可。</p>
-<p>想自己先注册也行，注册完把令牌填进第 3 步的配置：</p>
-<div class="row"><a class="btn" href="${esc(base)}/register">账号密码注册</a>
-<a class="btn alt" href="${esc(base)}/login">账号密码登录</a>
-<a class="btn alt" href="${esc(base)}/auth/github">GitHub 注册 / 登录</a></div>
-<p class="muted">AI Agent（如钉钉）可用一键注册自动拿令牌：<code>${esc(base)}/register?username=alice</code></p>
+${step(2, '第一次连上时，客户端会自动让你登录')}
+<p>本服务实现了 MCP 标准的授权发现（RFC 9728 / RFC 8414）：不带令牌请求 <code>/mcp</code> 会拿到
+<b>401 + <code>WWW-Authenticate</code></b>，客户端据此找到授权服务器、完成动态注册，并把浏览器导航到登录页。</p>
+<p class="muted">支持这个流程的客户端（Codex、Claude Desktop、MCP Inspector 等）无需任何手工配置，
+录完用户名密码就通了。不支持的客户端继续看第 3 步。</p>
 `)}
-
 ${card(`
-${step(3, '把令牌填回配置')}
+${step(3, '不支持自动发现的客户端：手工拿令牌')}
+<div class="row"><a class="btn" href="${esc(base)}/register">账号密码注册</a>
+<a class="btn alt" href="${esc(base)}/login">账号密码登录</a></div>
+<p class="muted">AI Agent（如钉钉）可用一键注册自动拿令牌：<code>${esc(base)}/register?username=alice</code></p>
 ${copyBlock(tokenMcpConfigJson(base), { title: '写法 A：令牌拼在 URL 上' })}
 ${copyBlock(headerMcpConfigJson(base), {
   title: '写法 B：用 X-Authorization 头（推荐）',
@@ -147,6 +154,9 @@ ${card(`
 <h3>⚠️ 常见坑</h3>
 <ul>
 <li><code>GET /mcp</code> 返回 <b>405</b> 是<strong>正常</strong>的：本服务跑在无状态模式，只接受 POST。</li>
+<li>不带令牌的请求会收到 <b>401</b>，这是触发标准登录流程的入口，不是故障；排查时看
+<code>WWW-Authenticate</code> 头里的 <code>resource_metadata</code> 是否指向
+<code>${esc(base)}/.well-known/oauth-protected-resource/mcp</code>。</li>
 <li>不要用 <code>Authorization</code> 头传令牌，网关会改写它；用 <code>X-Authorization</code> 或 <code>?token=</code>。</li>
 <li>令牌形如 <code>mcp_demo_xxxx</code>，前缀不能丢。</li>
 </ul>
@@ -194,7 +204,7 @@ ${card(`
 <p>Streamable HTTP：<code>${esc(`${base}/mcp`)}</code></p>
 ${copyBlock(publicMcpConfigJson(base), {
   title: '不含令牌，可放心转发给新用户',
-  hint: '连上后让 AI 调用 login 工具即可拿到注册/登录链接，拿到令牌再填回 url 的 ?token=。',
+  hint: '支持标准 OAuth Discovery 的客户端会自己弹出登录页；不支持的按 /setup 手工填令牌。',
 })}
 <div class="row"><a class="btn small" href="${esc(base)}/setup">完整接入说明 →</a>
 <a class="btn small alt" href="${esc(base)}/register">先去注册拿令牌</a></div>
@@ -363,8 +373,10 @@ export function createApp() {
   const app = express();
   app.use(express.json());
 
-  // 表单解析只挂在 admin 下（/mcp 用的是 application/json），缩小影响面
+  // 表单解析只挂在 admin 与 oauth 下（/mcp 用的是 application/json），缩小影响面
   app.use('/admin', express.urlencoded({ extended: false, limit: '32kb' }));
+  // /oauth/authorize 的登录表单是 urlencoded；缺了它 POST 时 req.body 会是 undefined
+  app.use('/oauth', express.urlencoded({ extended: false, limit: '32kb' }));
 
   app.get('/health', (_req: Request, res: Response) => {
     res.json({
@@ -514,7 +526,25 @@ export function createApp() {
       res.json(authorizationServerMetadata(deriveBase(req)));
     },
   );
-  app.options([WELL_KNOWN.protectedResource, WELL_KNOWN.authorizationServer], allowPublicCors);
+  app.options(
+    [WELL_KNOWN.protectedResource, WELL_KNOWN.authorizationServer, WELL_KNOWN.openidConfiguration],
+    allowPublicCors,
+  );
+  // OIDC 发现别名：内容与 RFC 8414 那份一致（本服务就是自己的授权服务器）
+  app.get(
+    WELL_KNOWN.openidConfiguration,
+    allowPublicCors,
+    (req: Request, res: Response) => {
+      res.json(authorizationServerMetadata(deriveBase(req)));
+    },
+  );
+
+  // ---- OAuth 2.1 端点（DCR / 授权 / 令牌）----
+  // 顺序无关紧要，但必须早于 404 兜底。三者都允许任意来源读取：客户端是浏览器里跑的
+  // JS（Inspector、Web 版），没有 CORS 头 POST /oauth/register 会直接失败。
+  app.use(createRegisterRouter());
+  app.use(createAuthorizeRouter());
+  app.use(createTokenRouter());
 
   // ---- MCP Streamable HTTP 端点（无状态模式）----
   // 多副本部署下内存会话无法跨副本共享，因此每次请求都新建一个独立的 transport + McpServer
@@ -538,13 +568,13 @@ export function createApp() {
     }
 
     const user = authenticateUserRequest(req);
+    const base = deriveBase(req);
 
     // —— 标准 MCP 授权发现 ——
     // 未鉴权时返回 401 + WWW-Authenticate，客户端才会去读受保护资源元数据并启动 OAuth 流程。
     // 这是「客户端识别不了登录方式」的根因：永远返回 200 的话客户端不会启动任何发现动作。
     // 用 MCP_DEMO_REQUIRE_AUTH=off 可恢复旧的匿名握手行为（钉钉等场景）。
     if (!user && requireAuthForMcp() && !isNotificationOnly(req.body)) {
-      const base = deriveBase(req);
       res
         .status(401)
         .setHeader('WWW-Authenticate', wwwAuthenticate(base))
@@ -561,6 +591,40 @@ export function createApp() {
       return;
     }
 
+    // —— RFC 8707：校验令牌受众（aud） ——
+    // 令牌签发给别的资源时**必须返回 403，绝不能返回 401**。官方 SDK 有熔断：
+    // `_hasCompletedAuthFlow` 置位后再收到 401 会直接抛错而不是重跑一遍流程，
+    // 于是「受众不符」这个不可恢复的错误会被伪装成「还没登录」，用户看到的是死循环。
+    if (user) {
+      const token = resolveUserToken(req);
+      const aud = token ? auth.readTokenAudience(token) : null;
+      // null = 老令牌没有 aud 声明，祖父条款放行；undefined = 校验失败（authenticate()
+      // 已通过所以到不了这里），保险起见同样拒绝。
+      const audOk = aud === null || aud === canonicalResourceUri(base);
+      if (!audOk) {
+        res
+          .status(403)
+          .setHeader(
+            'WWW-Authenticate',
+            `Bearer error="insufficient_scope", resource_metadata="${protectedResourceMetadataUrl(
+              base,
+            )}", scope="${OAUTH_SCOPE}"`,
+          )
+          .json({
+            jsonrpc: '2.0',
+            error: {
+              code: -32000,
+              message:
+                `令牌的受众（aud）是 ${String(aud)}，但本服务的 canonical resource 是 ${canonicalResourceUri(
+                  base,
+                )}。请重新走一次授权流程获取绑定本资源的令牌。`,
+            },
+            id: null,
+          });
+        return;
+      }
+    }
+
     // 跨副本物化：JWT 是无状态的，在别的副本注册的用户本副本内存里没有。
     // 流量打到哪个副本，就在哪个副本补全一份，让 admin 用户列表逐步完整。
     if (user) {
@@ -571,7 +635,6 @@ export function createApp() {
       }
     }
 
-    const base = deriveBase(req);
     await baseUrlContext.run(base, () =>
       authContext.run(user, async () => {
         const transport = new StreamableHTTPServerTransport({

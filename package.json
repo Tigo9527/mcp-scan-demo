@@ -13,6 +13,7 @@
     "dev": "tsx watch src/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",
+    "oauth:e2e": "tsx scripts/oauth-e2e.ts",
     "test:codex": "codex exec --task \"Run the integration test suite with `npm test` (or `npx vitest run`). The test boots the MCP demo server and MUST print the local visit URLs (web portal, GitHub OAuth login, and MCP endpoint) to stdout. Report those URLs verbatim to the user so they can open them in a browser.\""
   },
   "dependencies": {

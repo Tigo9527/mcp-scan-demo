@@ -114,6 +114,14 @@ describe('授权服务器元数据（RFC 8414）', () => {
     ).json()) as Record<string, unknown>;
     expect(json).not.toHaveProperty('client_id_metadata_document_supported');
   });
+
+  it('OIDC 别名 /.well-known/openid-configuration 内容一致', async () => {
+    const res = await fetch(`${base}/.well-known/openid-configuration`);
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as Record<string, unknown>;
+    expect(json.issuer).toBe(base);
+    expect(json.registration_endpoint).toBe(`${base}/oauth/register`);
+  });
 });
 
 describe('未鉴权请求的 401 与 WWW-Authenticate', () => {

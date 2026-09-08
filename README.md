@@ -4,6 +4,9 @@
 
 - 使用官方 **`@modelcontextprotocol/sdk`**，基于 **Streamable HTTP** 传输（不自己造轮子）
 - 内置**认证管理模块**：JWT 签发/校验、Bearer 鉴权、**账号密码注册 / 登录**、一键注册
+- 实现 **MCP 标准授权发现（OAuth 2.1 Discovery）**：RFC 9728 受保护资源元数据 +
+  RFC 8414 授权服务器元数据 + RFC 7591 动态客户端注册 + RFC 7636 PKCE + RFC 8707 `resource`，
+  Codex / Claude Desktop / MCP Inspector 等客户端可**自行发现并完成登录**
 - 接入 **GitHub OAuth 2.0**（用 `simple-oauth2`，可在 Admin 管理端**在线配置**，既可注册也可登录）
 - **Admin 管理端**（带页面）：用户列表/详情、GitHub 参数设置、签发令牌、调用统计总览
 - **用户 Profile 页面**：查看自己的资料与**个人维度**调用统计
@@ -25,6 +28,13 @@ src/
     github.ts         GitHub OAuth 2.0 接入（凭据每次现读，state 为自签名 JWT）
   mcp/
     server.ts         MCP 服务端：server_info / login / whoami / register_user / my_stats / search_repos
+  oauth/
+    metadata.ts       RFC 9728 / RFC 8414 元数据文档 + 401 头取值（改前先读文件头注释）
+    tickets.ts        自包含加密票据（HKDF 派生密钥 + AES-256-GCM + AAD 绑定用途）
+    clients.ts        RFC 7591 动态客户端注册（client_id 即票据，回环地址忽略端口）
+    register.ts       POST /oauth/register —— DCR 端点
+    authorize.ts      GET/POST /oauth/authorize —— 登录页与授权码签发
+    token.ts          POST /oauth/token —— authorization_code（PKCE S256）/ refresh_token
   web/
     app.ts            Express 入口：门户 / 注册 / GitHub OAuth / /mcp / 挂载 admin 与 profile
     http.ts           请求工具：基础地址推导、令牌提取、async 包装、Cookie 读取
@@ -73,13 +83,14 @@ npm start            # 启动后控制台会打印可访问 URL，含 /admin 与
 
 ### 接入 MCP 客户端（免登录，可直接转发）
 
-新用户不需要先注册就能连上：`/mcp` 允许**匿名握手**，未登录时由 `login` / `whoami` 工具返回注册引导。
+新用户不需要先注册就能连接：支持标准 OAuth Discovery 的客户端会在第一次请求时被
+**自动引导登录**，无需任何手工配置。
 
 所以准备了一个**免登录、不含任何令牌**的接入页：<https://你的域名/setup>
 
 - 页面直接给出可一键复制的 `mcpServers` 配置（URL 里没有 token）
-- 三步引导：复制配置 → 让 AI 调 `login` 拿注册链接 → 把令牌填回配置
-- 附 `curl` 冒烟命令与常见坑（405 是正常的、别用 `Authorization` 头）
+- 三步引导：复制配置 → 客户端自动弹登录页 → 不支持的客户端手工填令牌
+- 附 `curl` 冒烟命令与常见坑（405 是正常的、别用 `Authorization` 头、401 是登录入口不是故障）
 - 首页 `/` 的「MCP 客户端配置」卡片里也放了一份同样的配置块
 
 > 这个链接可以放心发给任何人——页面里没有任何令牌。测试 `test/setup-page.test.ts`
@@ -131,6 +142,59 @@ npm start            # 启动后控制台会打印可访问 URL，含 /admin 与
    - 在 `.env`（或环境变量）填 `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET`（启动时读入）
    - 或登录 **Admin 管理端 → GitHub 设置**在线填写（**立即生效，无需重启**）
 3. 访问 `/auth/github` 完成登录，登录后返回的令牌即可调用 `search_repos`
+
+## 标准 OAuth 2.1 授权发现（Authorization Discovery）
+
+不带令牌请求 `/mcp` 会拿到 **401 + `WWW-Authenticate`**，客户端据此自行完成整条登录流程：
+
+```
+客户端 ──POST /mcp──▶ 401 WWW-Authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource/mcp"
+        ──GET  该地址──▶ { resource, authorization_servers: ["https://host"] }        (RFC 9728)
+        ──GET  /.well-known/oauth-authorization-server──▶ { authorization_endpoint, token_endpoint,
+                                                            registration_endpoint, … }  (RFC 8414)
+        ──POST /oauth/register──▶ { client_id }                                        (RFC 7591 DCR)
+        ──浏览器导航 /oauth/authorize?code_challenge=…&resource=…──▶ 登录页            (RFC 7636 PKCE)
+        ──POST /oauth/token（code + code_verifier + resource）──▶ access_token         (RFC 8707)
+        ──POST /mcp（Authorization: Bearer …）──▶ 200
+```
+
+| 端点 | 说明 |
+| --- | --- |
+| `GET /.well-known/oauth-protected-resource/mcp` | 受保护资源元数据（canonical 路径版本，主用） |
+| `GET /.well-known/oauth-protected-resource` | 同上，给把 canonical 当成纯 origin 的客户端兜底 |
+| `GET /.well-known/oauth-authorization-server` | 授权服务器元数据；`/.well-known/openid-configuration` 是同内容别名 |
+| `POST /oauth/register` | 动态客户端注册，免鉴权，只发公开客户端（`token_endpoint_auth_method: none`） |
+| `GET/POST /oauth/authorize` | 登录页 + 授权码签发（授权码 60 秒有效） |
+| `POST /oauth/token` | `authorization_code`（强制 PKCE S256）与 `refresh_token` 两种 grant |
+
+几条实现上的取舍，改代码前值得知道：
+
+1. **元数据地址必须带 `/mcp` 后缀**。canonical URI 是 `https://host/mcp`，按 RFC 9728 §3.1
+   well-known 要插在 host 与 path 之间；只挂根路径会让客户端 404 后放弃发现。
+2. **401 头里只给 `resource_metadata`**，授权服务器地址由客户端从 PRM 派生。
+3. **AS 元数据里刻意不声明 `client_id_metadata_document_supported`** —— 官方 SDK 一见到它
+   就走 CIMD，绕过我们的 DCR 端点。
+4. **受众（`aud`）不符返回 403 而不是 401**。官方 SDK 有熔断：鉴权流程完成后再收到 401 会
+   直接抛错而不是重跑流程，401 会把「受众不符」伪装成「还没登录」，表现为死循环。
+5. **所有 OAuth 状态都是自包含加密票据**（`src/oauth/tickets.ts`），不落盘。多副本部署下
+   `persist.ts` 无锁无 CAS、数据按 instanceId 分片，副本 A 存的东西副本 B 查不到，
+   所以必须用「签名的、自带内容的」票据。代价见「已知限制」。
+
+想关掉强制登录（恢复旧的匿名握手，例如给钉钉这类不带 OAuth 的客户端用）：
+
+```bash
+MCP_DEMO_REQUIRE_AUTH=off npm start   # 默认 on
+```
+
+验证是否真的对第三方客户端可用（用官方 SDK 的 `auth()` 跑完整流程，不需要人工点浏览器）：
+
+```bash
+npm run oauth:e2e
+```
+
+> ⚠️ **公网部署必须显式注入 `PUBLIC_BASE_URL`**。上面所有地址（canonical resource、
+> 元数据 URL、令牌的 `aud`）都由它推导。部署平台网关只转发**内部** host，
+> 缺了这个变量会推导出内网地址 —— 表现为客户端发现到的资源是内网域名、令牌 `aud` 对不上而被 403。
 
 ## 部署到公网（钉钉等远程客户端测试）
 
@@ -197,8 +261,16 @@ npm test
 ```
 
 测试会启动服务，把可访问 URL 打印到 stdout，并断言：健康检查可用、一键注册返回令牌、
-带令牌能调用 `whoami`、匿名请求可成功握手且登录引导正常、Admin 鉴权与用户管理、GitHub 设置即时生效、
-调用统计计数正确（通知类不计入、工具调用单列）、Profile 页面转义安全等。共 4 个测试文件、43 个用例。
+带令牌能调用 `whoami`、Admin 鉴权与用户管理、GitHub 设置即时生效、
+调用统计计数正确（通知类不计入、工具调用单列）、Profile 页面转义安全等。
+
+与授权相关的三份测试单独说：
+
+| 文件 | 覆盖 |
+| --- | --- |
+| `test/oauth.test.ts` | 发现契约：元数据地址（含 `/mcp` 后缀）、AS 必填字段、不声明 CIMD、401 头可被 SDK 正则解析、CORS |
+| `test/oauth-flow.test.ts` | 扮演真实客户端跑完 DCR → 授权 → 换令牌 → 调 MCP → 刷新，重点覆盖失败路径（重放 / PKCE 错误 / 篡改 / 过期 / 受众不符） |
+| `scripts/oauth-e2e.ts`（`npm run oauth:e2e`） | 用**官方 SDK 的 `auth()`** 真实走一遍完整流程并调通工具 —— 唯一能证明第三方客户端真能自己登录的验证 |
 
 ## 暴露的 MCP 工具
 
@@ -211,8 +283,9 @@ npm test
 | `my_stats` | 查看当前用户自己的调用统计（工具/按天） | 是（需登录） |
 | `search_repos` | 用当前用户 GitHub 令牌搜索仓库（演示 OAuth） | 是 + 需 GitHub 登录 |
 
-> `/mcp` 端点**允许匿名握手**。未携带令牌时仍可连接并调用 `login` / `server_info`，
-> 受保护工具会返回中文登录引导（含登录 URL）而非直接拒绝，从而避免客户端满屏 401。
+> `/mcp` **默认要求登录**（`MCP_DEMO_REQUIRE_AUTH` 默认 `on`）：未携带有效令牌返回 401 +
+> `WWW-Authenticate`，由客户端走标准 OAuth 流程。设成 `off` 后恢复匿名握手，
+> 此时上表「匿名可用」的工具会照旧返回登录引导。
 
 ## 安全说明
 
@@ -224,6 +297,15 @@ npm test
 
 ## 已知限制
 
+- **部署平台网关会剥离 `Authorization` 头**（实测：带不带 Cookie 都一样，只认
+  `X-Authorization` / `?token=` / `?access_token=`，且值需带 `mcp_demo_` 前缀），
+  而官方 SDK 只会用 `Authorization` 头带令牌。结论：**Discovery 与登录流程在本平台公网能跑通，
+  最后一跳（带令牌调 `/mcp`）会被网关吞掉**；本地直连 / 自托管无此限制。
+- **动态注册的客户端无法单独吊销**：`client_id` 是自包含票据、不落盘，换 `JWT_SECRET`
+  才能让全部已注册客户端失效。
+- **授权码重放只在单副本内被拦截**：「已用授权码」表是进程内 `Map`；跨副本时防线退化为
+  「60 秒有效期 + PKCE」——攻击者必须同时截获授权码与 `code_verifier`。
+- **refresh_token 不轮换**：同理，无状态方案检测不到旧令牌是否被重放，轮换不会更安全。
 - **多副本**：用户列表与调用统计为**本实例视角**（Admin 仪表盘顶部明确标注 instanceId）。
   某副本注册的用户可能落在别的副本上、本实例看不到；用户随请求物化会逐步补全。
 - **磁盘**：平台磁盘可能不持久化，重启/重新部署后数据可能丢失（退出前会尽量 flush）。
