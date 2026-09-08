@@ -11,7 +11,7 @@
  * 运行后会把「可访问 URL」打印到 stdout，供 Codex 转述给用户。
  * 运行方式：npm test  （或 npx vitest run）
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import type { Server } from 'node:http';
 import { createApp } from '../src/web/app.js';
 import { config } from '../src/config.js';
@@ -25,6 +25,10 @@ const JSON_RPC = 'application/json';
 beforeAll(async () => {
   // 测试期间关闭落盘，避免污染 data/ 目录
   configure({ enabled: false });
+
+  // 本文件验证的是「匿名放行 + 工具内登录引导」这一路（钉钉等客户端场景）。
+  // 默认已是严格模式（未鉴权直接 401 + WWW-Authenticate），那部分由 test/oauth.test.ts 覆盖。
+  vi.stubEnv('MCP_DEMO_REQUIRE_AUTH', 'off');
 
   server = createApp().listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', () => resolve()));
@@ -44,12 +48,12 @@ beforeAll(async () => {
   console.log('==========================================================\n');
 });
 
-afterAll(
-  () =>
-    new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    }),
-);
+afterAll(() => {
+  vi.unstubAllEnvs();
+  return new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
+});
 
 async function registerAndGetToken(username: string): Promise<string> {
   const res = await fetch(`${base}/register?username=${username}`);

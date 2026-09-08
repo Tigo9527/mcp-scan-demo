@@ -4,7 +4,7 @@
  * 统计是模块级单例，且前一个用例的请求也会往计数器里灌数据，
  * 所以断言一律用**增量**（diffStats）而不是绝对值。
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import type { Server } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { createApp } from '../src/web/app.js';
@@ -70,6 +70,9 @@ async function mcpCall(
 
 beforeAll(async () => {
   configure({ enabled: false });
+  // 本文件的用例以匿名请求验证统计埋点，故关闭严格鉴权（默认开启会直接 401，
+  // 请求根本到不了 transport 也就无从统计）。严格模式见 test/oauth.test.ts。
+  vi.stubEnv('MCP_DEMO_REQUIRE_AUTH', 'off');
   server = createApp().listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', () => resolve()));
   const addr = server.address();
@@ -77,12 +80,12 @@ beforeAll(async () => {
   base = `http://127.0.0.1:${port}`;
 });
 
-afterAll(
-  () =>
-    new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    }),
-);
+afterAll(() => {
+  vi.unstubAllEnvs();
+  return new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
+});
 
 beforeEach(() => {
   resetStats();

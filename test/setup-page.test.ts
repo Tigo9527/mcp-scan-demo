@@ -7,7 +7,7 @@
  *
  * 同时锁住：配置 JSON 必须是合法 JSON、可匿名访问、带一键复制按钮、内容经过 esc。
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import type { Server } from 'node:http';
 import { createApp, publicMcpConfigJson } from '../src/web/app.js';
 import { copyBlock } from '../src/web/layout.js';
@@ -22,6 +22,8 @@ const JSON_RPC = 'application/json';
 
 beforeAll(async () => {
   configure({ enabled: false });
+  // 末尾两组用例是匿名调用 MCP 工具，需要关闭严格鉴权；严格模式见 test/oauth.test.ts
+  vi.stubEnv('MCP_DEMO_REQUIRE_AUTH', 'off');
   server = createApp().listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', () => resolve()));
   const addr = server.address();
@@ -29,12 +31,12 @@ beforeAll(async () => {
   base = `http://127.0.0.1:${port}`;
 });
 
-afterAll(
-  () =>
-    new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    }),
-);
+afterAll(() => {
+  vi.unstubAllEnvs();
+  return new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
+});
 
 async function get(path: string): Promise<{ status: number; body: string }> {
   // 刻意不带任何 Cookie / Authorization，模拟「新用户直接打开链接」

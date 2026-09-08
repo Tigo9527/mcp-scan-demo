@@ -146,3 +146,26 @@ export function requireSameOrigin(
   }
   next();
 }
+
+/**
+ * 公开端点的 CORS（服务发现 / 授权 / MCP）。
+ *
+ * 浏览器里的 MCP 客户端（Inspector、Web 版）要能读到 `WWW-Authenticate`，
+ * 否则 401 触发不了发现流程；「不 expose 就等于不存在」。
+ * 元数据本身是公开信息，允许任意来源读取。
+ */
+export function allowPublicCors(req: Request, res: Response, next: NextFunction): void {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'Authorization, X-Authorization, Content-Type, MCP-Protocol-Version, MCP-Session-Id',
+  );
+  // 少了这一行，浏览器 JS 读不到 401 响应上的 WWW-Authenticate，发现流程无从触发
+  res.setHeader('Access-Control-Expose-Headers', 'WWW-Authenticate, MCP-Session-Id');
+  if (req.method === 'OPTIONS') {
+    res.status(204).end();
+    return;
+  }
+  next();
+}

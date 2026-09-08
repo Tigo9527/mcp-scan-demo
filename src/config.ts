@@ -67,3 +67,18 @@ export function isLocalBaseUrl(): boolean {
   const u = config.publicBaseUrl.toLowerCase();
   return u.startsWith('http://localhost') || u.startsWith('http://127.0.0.1');
 }
+
+/**
+ * 未鉴权的 MCP 请求是否返回 401 + `WWW-Authenticate`。
+ *
+ * 默认**开启**：标准 MCP 客户端（Codex / Claude Desktop / Cursor 等）只有在收到 401 时才会
+ * 去读取 `/.well-known/oauth-protected-resource`，进而发现登录方式。永远返回 200 的话，
+ * 客户端一路绿灯，压根不会启动 OAuth 流程 —— 这正是「客户端识别不了登录方式」的根因。
+ *
+ * 设为 `off` 恢复旧的匿名放行行为（钉钉等客户端不带令牌也能握手，再由工具返回注册引导）。
+ * 惰性读取 env，便于测试覆盖。
+ */
+export function requireAuthForMcp(): boolean {
+  const v = (process.env.MCP_DEMO_REQUIRE_AUTH ?? 'on').trim().toLowerCase();
+  return v !== 'off' && v !== '0' && v !== 'false';
+}

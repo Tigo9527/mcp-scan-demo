@@ -23,7 +23,21 @@ import type { AuthResult } from '../auth/manager.js';
 import type { User } from '../auth/store.js';
 import * as stats from '../stats.js';
 import { persistStatus } from '../persist.js';
-import { authenticateUserRequest, deriveBase, requireSameOrigin, wrap } from './http.js';
+import {
+  authenticateUserRequest,
+  allowPublicCors,
+  deriveBase,
+  requireSameOrigin,
+  wrap,
+} from './http.js';
+import {
+  authorizationServerMetadata,
+  MCP_PATH,
+  protectedResourceMetadata,
+  WELL_KNOWN,
+  wwwAuthenticate,
+} from '../oauth/metadata.js';
+import { requireAuthForMcp } from '../config.js';
 import { createAdminRouter } from './admin.js';
 import { createProfileRouter } from './profile.js';
 import { badge, card, copyBlock, esc, notice, page, step } from './layout.js';
@@ -331,6 +345,20 @@ ${card(`<b>访问令牌（Bearer）：</b><br><code>${esc(token)}</code>`)}
   });
 }
 
+/**
+ * 判断请求体是否**只**包含通知类消息（`notifications/*`）。
+ * 通知没有响应、也不该要求鉴权；对它们返回 401 会打断客户端的初始化流程。
+ */
+function isNotificationOnly(body: unknown): boolean {
+  const messages: unknown[] = Array.isArray(body) ? body : [body];
+  if (messages.length === 0) return false;
+  return messages.every((m) => {
+    if (!m || typeof m !== 'object') return false;
+    const method = (m as { method?: unknown }).method;
+    return typeof method === 'string' && method.startsWith('notifications/');
+  });
+}
+
 export function createApp() {
   const app = express();
   app.use(express.json());
@@ -461,10 +489,38 @@ export function createApp() {
   // Admin 管理端
   app.use(createAdminRouter());
 
+  // ---- 授权发现（MCP Authorization Discovery）----
+  // 客户端收到 401 后会读 WWW-Authenticate 里的 resource_metadata，再按 RFC 8414 找授权服务器。
+  // 两个路径都要挂：canonical URI 是 <base>/mcp（带路径），按 RFC 9728 §3.1 要插在 host 与 path
+  // 之间，所以主用地址带 /mcp 后缀；根路径那份是给把 canonical 当成纯 origin 的客户端兜底。
+  app.get(
+    WELL_KNOWN.protectedResource,
+    allowPublicCors,
+    (req: Request, res: Response) => {
+      res.json(protectedResourceMetadata(deriveBase(req)));
+    },
+  );
+  app.get(
+    `${WELL_KNOWN.protectedResource}${MCP_PATH}`,
+    allowPublicCors,
+    (req: Request, res: Response) => {
+      res.json(protectedResourceMetadata(deriveBase(req)));
+    },
+  );
+  app.get(
+    WELL_KNOWN.authorizationServer,
+    allowPublicCors,
+    (req: Request, res: Response) => {
+      res.json(authorizationServerMetadata(deriveBase(req)));
+    },
+  );
+  app.options([WELL_KNOWN.protectedResource, WELL_KNOWN.authorizationServer], allowPublicCors);
+
   // ---- MCP Streamable HTTP 端点（无状态模式）----
   // 多副本部署下内存会话无法跨副本共享，因此每次请求都新建一个独立的 transport + McpServer
   // （sessionIdGenerator 留空 = 关闭会话管理）。配合无状态 JWT 鉴权，任意副本都能独立处理。
-  // 允许匿名握手：未携带令牌时 user 为 null，由工具（如 login / whoami）负责返回登录引导。
+  // 鉴权：默认要求登录，未携带有效令牌直接 401 + WWW-Authenticate（见下方 requireAuthForMcp 分支）；
+  // 设 MCP_DEMO_REQUIRE_AUTH=off 可恢复旧的匿名握手（user 为 null，由工具返回注册引导）。
   const handleMcp = wrap(async (req: Request, res: Response) => {
     // 无状态模式下 GET 会建立常驻 SSE 流（含 keep-alive 定时器），客户端或爬虫
     // 反复请求会累积悬挂连接。本服务用 JSON 响应模式，主流客户端只发 POST，故直接拒绝。
@@ -482,6 +538,29 @@ export function createApp() {
     }
 
     const user = authenticateUserRequest(req);
+
+    // —— 标准 MCP 授权发现 ——
+    // 未鉴权时返回 401 + WWW-Authenticate，客户端才会去读受保护资源元数据并启动 OAuth 流程。
+    // 这是「客户端识别不了登录方式」的根因：永远返回 200 的话客户端不会启动任何发现动作。
+    // 用 MCP_DEMO_REQUIRE_AUTH=off 可恢复旧的匿名握手行为（钉钉等场景）。
+    if (!user && requireAuthForMcp() && !isNotificationOnly(req.body)) {
+      const base = deriveBase(req);
+      res
+        .status(401)
+        .setHeader('WWW-Authenticate', wwwAuthenticate(base))
+        .json({
+          jsonrpc: '2.0',
+          error: {
+            code: -32000,
+            message:
+              '需要登录。请按 WWW-Authenticate 头里的 resource_metadata 走标准 OAuth 2.1 流程获取令牌，' +
+              `或打开 ${base}/setup 查看接入说明。`,
+          },
+          id: null,
+        });
+      return;
+    }
+
     // 跨副本物化：JWT 是无状态的，在别的副本注册的用户本副本内存里没有。
     // 流量打到哪个副本，就在哪个副本补全一份，让 admin 用户列表逐步完整。
     if (user) {
@@ -536,6 +615,8 @@ export function createApp() {
   app.post('/mcp', handleMcp);
   app.get('/mcp', handleMcp);
   app.delete('/mcp', handleMcp);
+  // 预检：浏览器端客户端会先发 OPTIONS，缺了它 401 头也读不到，发现流程无从触发
+  app.options('/mcp', allowPublicCors);
 
   // 404
   app.use((req: Request, res: Response) => {
