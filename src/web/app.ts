@@ -44,10 +44,12 @@ import {
 import { requireAuthForMcp } from '../config.js';
 import { createAdminRouter } from './admin.js';
 import { createProfileRouter } from './profile.js';
-import { createAuthorizeRouter } from '../oauth/authorize.js';
+import { createAuthorizeRouter, completeAuthorize, type AuthorizeParams, type AuthorizeTicket } from '../oauth/authorize.js';
 import { createRegisterRouter } from '../oauth/register.js';
 import { createTokenRouter } from '../oauth/token.js';
-import { badge, card, copyBlock, esc, notice, page, step } from './layout.js';
+import { readClient, redirectUriAllowed } from '../oauth/clients.js';
+import { open } from '../oauth/tickets.js';
+import { badge, authorizeCompleteHtml, card, copyBlock, esc, notice, page, step } from './layout.js';
 
 // ---------- 页面 ----------
 
@@ -460,9 +462,12 @@ export function createApp() {
     }),
   );
 
-  // GitHub OAuth：跳转授权（state 为自签名 JWT，跨副本可校验）
+  // GitHub OAuth：跳转授权（state 为自签名 JWT，跨副本可校验）。
+  // 若带 authorize 票据（来自 /oauth/authorize 的「通过 GitHub 登录」链接），一并塞进 state，
+  // 让登录完成后能还原原始授权请求并回跳客户端。
   app.get('/auth/github', (req: Request, res: Response) => {
-    res.redirect(getAuthorizationUrl(createState()));
+    const authorizeTicket = typeof req.query.authorize === 'string' ? req.query.authorize : undefined;
+    res.redirect(getAuthorizationUrl(createState(authorizeTicket)));
   });
 
   // GitHub OAuth：回调换令牌并落地用户
@@ -476,7 +481,8 @@ export function createApp() {
         res.status(400).type('html').send(oauthErrorHtml(base, '缺少 code 参数'));
         return;
       }
-      if (!verifyState(state)) {
+      const st = verifyState(state);
+      if (!st.ok) {
         res
           .status(400)
           .type('html')
@@ -485,6 +491,47 @@ export function createApp() {
       }
 
       try {
+        // 若本次是「完成 MCP 授权」的子流程，state 里带着原始授权请求票据：
+        // 先还原并复核（client / redirect_uri / resource），再交换 GitHub 令牌、签发授权码、
+        // 渲染「正在跳回客户端」页。先校验票据可避免无谓的 GitHub 交换。
+        if (st.authorize) {
+          const t = open<AuthorizeTicket>('authorize', st.authorize);
+          if (!t) {
+            res
+              .status(400)
+              .type('html')
+              .send(oauthErrorHtml(base, '授权票据无效或已过期，请重新发起登录。'));
+            return;
+          }
+          const client = readClient(t.clientId);
+          if (!client || !redirectUriAllowed(client, t.redirectUri)) {
+            res
+              .status(400)
+              .type('html')
+              .send(oauthErrorHtml(base, '授权票据中的客户端或回调地址不合法。'));
+            return;
+          }
+          if (t.resource !== canonicalResourceUri(base)) {
+            res
+              .status(400)
+              .type('html')
+              .send(oauthErrorHtml(base, '授权票据中的 resource 与本服务不符。'));
+            return;
+          }
+          const p: AuthorizeParams = {
+            clientId: t.clientId,
+            redirectUri: t.redirectUri,
+            state: t.state,
+            codeChallenge: t.codeChallenge,
+            scope: t.scope,
+            resource: t.resource,
+          };
+          const { user } = await exchangeAndLogin(code);
+          res.status(200).type('html').send(completeAuthorize(base, p, user));
+          return;
+        }
+
+        // 无票据：保持原有「GitHub 登录成功」页（向后兼容独立 GitHub 登录场景）
         const { user, token } = await exchangeAndLogin(code);
         res.type('html').send(oauthSuccessHtml(user, token, base));
       } catch (err) {

@@ -39,21 +39,33 @@ function client(): AuthorizationCode {
   });
 }
 
-/** 生成防 CSRF 的 state（自签名 JWT，10 分钟有效，跨副本可校验） */
-export function createState(): string {
-  return jwt.sign({ nonce: randomUUID(), purpose: 'github-oauth' }, config.jwtSecret, {
-    expiresIn: '10m',
-  });
+/**
+ * 生成防 CSRF 的 state（自签名 JWT，10 分钟有效，跨副本可校验）。
+ *
+ * 若传入 `authorizeTicket`（加密票据），会一并塞进 state：GitHub 回调只回 `code` + `state`，
+ * 所以「原始授权请求」（client_id / redirect_uri / PKCE / state / resource）必须靠 state 带回来，
+ * 否则登录成功后不知道要回跳到哪个客户端的 callback，Codex 这类命令行客户端就会一直等不到回调。
+ */
+export function createState(authorizeTicket?: string): string {
+  const payload: jwt.JwtPayload = { nonce: randomUUID(), purpose: 'github-oauth' };
+  if (authorizeTicket) payload.authorize = authorizeTicket;
+  return jwt.sign(payload, config.jwtSecret, { expiresIn: '10m' });
 }
 
-/** 校验回调带回的 state */
-export function verifyState(state: string | undefined): boolean {
-  if (!state) return false;
+/**
+ * 校验回调带回的 state。
+ * 返回 `{ ok, authorize }`：`authorize` 为随授权流程一并带过来的加密票据（若有），
+ * 用于把原始授权请求穿过 GitHub 这一跳。
+ */
+export function verifyState(state: string | undefined): { ok: boolean; authorize?: string } {
+  if (!state) return { ok: false };
   try {
     const payload = jwt.verify(state, config.jwtSecret) as jwt.JwtPayload;
-    return payload.purpose === 'github-oauth';
+    if (payload.purpose !== 'github-oauth') return { ok: false };
+    const authorize = typeof payload.authorize === 'string' ? payload.authorize : undefined;
+    return { ok: true, authorize };
   } catch {
-    return false;
+    return { ok: false };
   }
 }
 

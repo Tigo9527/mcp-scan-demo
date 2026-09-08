@@ -8,8 +8,8 @@
  * 刻意不用 SDK 的 auth()：那需要浏览器交互，测试里没法自动化；这里手工走协议，
  * 但 PKCE / state / resource 全部按真实客户端的方式生成。
  */
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { createHash, randomBytes } from 'node:crypto';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { Server } from 'node:http';
 import { createApp } from '../src/web/app.js';
 import { configure } from '../src/persist.js';
@@ -17,6 +17,15 @@ import * as auth from '../src/auth/manager.js';
 import * as store from '../src/auth/store.js';
 import { canonicalResourceUri, MCP_PATH } from '../src/oauth/metadata.js';
 import { seal } from '../src/oauth/tickets.js';
+import * as github from '../src/auth/github.js';
+import { setGithub, resetGithub, getGithub } from '../src/settings.js';
+
+// 真实 GitHub 交换会触网，且需要真实凭据；这里只把 exchangeAndLogin 替换成桩，
+// 其余 github 模块（createState / verifyState / isGitHubConfigured 等）保留真实实现。
+vi.mock('../src/auth/github.js', async (importActual) => {
+  const actual = await importActual<typeof import('../src/auth/github.js')>();
+  return { ...actual, exchangeAndLogin: vi.fn() };
+});
 
 let server: Server;
 let base: string;
@@ -106,7 +115,14 @@ function authorizeUrl(p: {
   return u.toString();
 }
 
-/** 走完 DCR + 授权页 + 登录，返回授权码 */
+/** 从「正在跳回客户端」页里抠出回调 URL（含 code / state） */
+function extractCallback(html: string): string {
+  const m = /id="cb-link"[^>]*href="([^"]+)"/.exec(html);
+  expect(m, `页面应包含回跳链接，实际：${html.slice(0, 300)}`).toBeTruthy();
+  return decodeEntities(m![1]);
+}
+
+/** 走完 DCR + 授权页 + 登录，返回授权码（登录成功后渲染「回跳客户端」页，从页内提取 code） */
 async function obtainCode(opts: { redirectUri?: string; state?: string } = {}): Promise<{
   code: string;
   clientId: string;
@@ -133,10 +149,11 @@ async function obtainCode(opts: { redirectUri?: string; state?: string } = {}): 
     body: new URLSearchParams({ ...hidden, username: USERNAME, password: PASSWORD }).toString(),
     redirect: 'manual',
   });
-  expect(res.status).toBe(302);
-  const location = new URL(res.headers.get('location')!);
-  const code = location.searchParams.get('code');
-  expect(code, `应回传授权码，实际：${location.toString()}`).toBeTruthy();
+  expect(res.status).toBe(200);
+  const callbackUrl = extractCallback(await res.text());
+  const loc = new URL(callbackUrl);
+  const code = loc.searchParams.get('code');
+  expect(code, `应回传授权码，实际页面回跳地址：${callbackUrl}`).toBeTruthy();
   return { code: code!, clientId: client.client_id, verifier, redirectUri };
 }
 
@@ -582,5 +599,162 @@ describe('访问令牌的受众校验', () => {
     const legacy = auth.registerWithPassword('oauth_legacy_user', PASSWORD).token;
     const res = await mcpCall(legacy);
     expect(res.status).toBe(200);
+  });
+});
+
+// ---------------- GitHub 流程携带授权参数（穿透最后一跳） ----------------
+//
+// 复现 Codex 命令行登录失败的根因：授权 URL 带着 redirect_uri / PKCE / state，
+// 但旧版 /auth/github/callback 只渲染通用的「登录成功」页，不知道要回跳客户端。
+// 现在把原始授权请求封进 authorize 票据、穿过 GitHub 流程，登录成功后还原并回跳。
+
+describe('通过 GitHub 完成 MCP 授权（授权参数穿透）', () => {
+  afterEach(() => {
+    resetGithub();
+    vi.mocked(github).exchangeAndLogin.mockReset();
+  });
+
+  function enableGithub(): void {
+    setGithub({
+      clientId: 'Iv1.testclientid',
+      clientSecret: 'test-secret',
+      redirectUri: `${base}/auth/github/callback`,
+      scope: 'read:user',
+    });
+  }
+
+  async function fakeGithubLogin(): Promise<void> {
+    // 每个用例用独立用户名，避免「用户名已占用」（同文件多次调用 registerWithPassword）
+    const u = auth.registerWithPassword(`gh_${randomUUID().slice(0, 8)}`, PASSWORD).user;
+    vi.mocked(github).exchangeAndLogin.mockResolvedValue({ user: u, token: 'fake-gh-token' });
+  }
+
+  it('授权页在 GitHub 已配置时含 authorize 票据链接；未配置时不含', async () => {
+    expect(getGithub().configured).toBe(false);
+    let reg = await registerClient([REDIRECT], 'page-gh-1');
+    let client = (await reg.json()) as { client_id: string };
+    let { challenge } = pkce();
+    let res = await fetch(
+      authorizeUrl({ clientId: client.client_id, redirectUri: REDIRECT, challenge, state: 's1' }),
+      { redirect: 'manual' },
+    );
+    expect(res.status).toBe(200);
+    expect(await res.text()).not.toContain('/auth/github?authorize=');
+
+    enableGithub();
+    expect(getGithub().configured).toBe(true);
+    reg = await registerClient([REDIRECT], 'page-gh-2');
+    client = (await reg.json()) as { client_id: string };
+    ({ challenge } = pkce());
+    res = await fetch(
+      authorizeUrl({ clientId: client.client_id, redirectUri: REDIRECT, challenge, state: 's1' }),
+      { redirect: 'manual' },
+    );
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain('/auth/github?authorize=');
+  });
+
+  it('GitHub 回调带 authorize 票据 → 完成授权、渲染回跳页、code 可换令牌', async () => {
+    enableGithub();
+    await fakeGithubLogin();
+
+    const reg = await registerClient([REDIRECT], 'gh-client');
+    const client = (await reg.json()) as { client_id: string };
+    const { verifier, challenge } = pkce();
+    const authorizeTicket = seal(
+      'authorize',
+      {
+        clientId: client.client_id,
+        redirectUri: REDIRECT,
+        state: 'gh-state-1',
+        codeChallenge: challenge,
+        scope: 'mcp',
+        resource: canonicalResourceUri(base),
+      },
+      600,
+    );
+    const stateJwt = github.createState(authorizeTicket);
+
+    const res = await fetch(
+      `${base}/auth/github/callback?code=fakecode&state=${encodeURIComponent(stateJwt)}`,
+      { redirect: 'manual' },
+    );
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('正在跳回客户端');
+    const callbackUrl = extractCallback(html);
+    const loc = new URL(callbackUrl);
+    expect(`${loc.origin}${loc.pathname}`).toBe(REDIRECT);
+    expect(loc.searchParams.get('state')).toBe('gh-state-1');
+    const code = loc.searchParams.get('code');
+    expect(code).toBeTruthy();
+
+    // 端到端：用拿到的 code 走令牌端点，验证授权码真的有效（PKCE + 受众 + 客户端匹配）
+    const tok = await exchange({
+      grant_type: 'authorization_code',
+      code: code!,
+      client_id: client.client_id,
+      redirect_uri: REDIRECT,
+      code_verifier: verifier,
+      resource: canonicalResourceUri(base),
+    });
+    expect(tok.status).toBe(200);
+    const json = (await tok.json()) as { access_token: string };
+    expect(json.access_token).toMatch(/^mcp_demo_/);
+  });
+
+  it('authorize 票据被篡改或已过期 → 渲染错误页，不回跳', async () => {
+    enableGithub();
+    await fakeGithubLogin();
+
+    // 篡改：state JWT 合法，但里面的 authorize 票据是乱码
+    const badState = github.createState('not-a-real-ticket');
+    let res = await fetch(
+      `${base}/auth/github/callback?code=fake&state=${encodeURIComponent(badState)}`,
+      { redirect: 'manual' },
+    );
+    expect(res.status).toBe(400);
+    let html = await res.text();
+    expect(html).not.toContain('正在跳回客户端');
+    expect(html).toContain('授权票据');
+
+    // 过期：seal 用负 ttl
+    const reg = await registerClient([REDIRECT]);
+    const client = (await reg.json()) as { client_id: string };
+    const { challenge } = pkce();
+    const expired = seal(
+      'authorize',
+      {
+        clientId: client.client_id,
+        redirectUri: REDIRECT,
+        codeChallenge: challenge,
+        scope: 'mcp',
+        resource: canonicalResourceUri(base),
+      },
+      -10,
+    );
+    const s2 = github.createState(expired);
+    res = await fetch(
+      `${base}/auth/github/callback?code=fake&state=${encodeURIComponent(s2)}`,
+      { redirect: 'manual' },
+    );
+    expect(res.status).toBe(400);
+    html = await res.text();
+    expect(html).not.toContain('正在跳回客户端');
+  });
+
+  it('无 authorize 票据 → 回退到普通 GitHub 登录成功页（向后兼容）', async () => {
+    enableGithub();
+    await fakeGithubLogin();
+
+    const stateJwt = github.createState(); // 不带票据
+    const res = await fetch(
+      `${base}/auth/github/callback?code=fake&state=${encodeURIComponent(stateJwt)}`,
+      { redirect: 'manual' },
+    );
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('GitHub 登录成功');
+    expect(html).not.toContain('正在跳回客户端');
   });
 });

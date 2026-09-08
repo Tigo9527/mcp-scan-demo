@@ -22,12 +22,29 @@ import {
 } from './metadata.js';
 import { seal } from './tickets.js';
 import { deriveBase, requireSameOrigin, wrap } from '../web/http.js';
-import { card, esc, notice, page } from '../web/layout.js';
+import { authorizeCompleteHtml, card, esc, notice, page } from '../web/layout.js';
+import { isGitHubConfigured } from '../auth/github.js';
 
 /** 授权码有效期。短时效是无共享存储时防重放的主要手段之一（另一道是 PKCE）。 */
 const CODE_TTL_SECONDS = 60;
 
-interface AuthorizeParams {
+/** 授权请求票据有效期：要穿过 GitHub 这一跳（用户可能慢慢点），给到 10 分钟。 */
+const AUTHORIZE_TICKET_TTL_SECONDS = 600;
+
+export interface AuthorizeParams {
+  clientId: string;
+  redirectUri: string;
+  state?: string;
+  codeChallenge: string;
+  scope: string;
+  resource: string;
+}
+
+/**
+ * 原始授权请求快照，用加密票据穿过 GitHub 流程。
+ * 全是公开 OAuth 参数（code_challenge 是 S256 哈希，非 verifier），经 AES-256-GCM 加密携带，无泄露风险。
+ */
+export interface AuthorizeTicket {
   clientId: string;
   redirectUri: string;
   state?: string;
@@ -138,6 +155,7 @@ function authorizeHtml(
   p: AuthorizeParams,
   clientName: string,
   error?: string,
+  authorizeTicket?: string,
 ): string {
   const hidden = [
     ['client_id', p.clientId],
@@ -151,6 +169,15 @@ function authorizeHtml(
   ]
     .map(([k, v]) => `<input type="hidden" name="${esc(k)}" value="${esc(v)}">`)
     .join('');
+
+  // 仅当 GitHub 已配置、且本次是「完成 MCP 授权」的子流程（带 authorize 票据）时，
+  // 才展示「通过 GitHub 登录」入口。票据里封着原始授权请求，穿过 GitHub 后用于回跳客户端。
+  const githubLink =
+    isGitHubConfigured() && authorizeTicket
+      ? `<div class="row" style="margin-top:16px">
+<a class="btn alt" href="${esc(base)}/auth/github?authorize=${esc(authorizeTicket)}">通过 GitHub 登录并授权</a>
+</div>`
+      : '';
 
   return page({
     title: '授权登录',
@@ -175,9 +202,39 @@ ${hidden}
 <a class="btn alt" href="${esc(base)}/register">注册新账号</a>
 </div>
 </form>
+${githubLink}
 <p class="muted">还没有账号？先去 <a href="${esc(base)}/register">注册</a>，再回到 MCP 客户端重试。</p>
 `,
   });
+}
+
+/**
+ * 公共收尾：签发一次性授权码并渲染「正在跳回客户端」页。
+ * 账号密码与 GitHub 两条登录路径都走这里，保证最后一跳（把 code 送回客户端本地监听）一致，
+ * 且都带「手动复制回调 URL」的兜底。
+ */
+export function completeAuthorize(base: string, p: AuthorizeParams, user: store.User): string {
+  const code = seal(
+    'code',
+    {
+      clientId: p.clientId,
+      redirectUri: p.redirectUri,
+      codeChallenge: p.codeChallenge,
+      scope: p.scope,
+      resource: p.resource,
+      sub: user.id,
+      username: user.username,
+      email: user.email,
+      provider: user.provider,
+      createdAt: user.createdAt,
+    },
+    CODE_TTL_SECONDS,
+  );
+
+  const target = new URL(p.redirectUri);
+  target.searchParams.set('code', code);
+  if (p.state) target.searchParams.set('state', p.state);
+  return authorizeCompleteHtml(base, target.toString());
 }
 
 export function createAuthorizeRouter(): Router {
@@ -198,9 +255,30 @@ export function createAuthorizeRouter(): Router {
         return;
       }
       const client = readClient(v.params.clientId)!;
+      // 把原始授权请求封成加密票据，供「通过 GitHub 登录」链接穿过 GitHub 流程后回跳客户端。
+      const authorizeTicket = seal(
+        'authorize',
+        {
+          clientId: v.params.clientId,
+          redirectUri: v.params.redirectUri,
+          state: v.params.state,
+          codeChallenge: v.params.codeChallenge,
+          scope: v.params.scope,
+          resource: v.params.resource,
+        } satisfies AuthorizeTicket,
+        AUTHORIZE_TICKET_TTL_SECONDS,
+      );
       res
         .type('html')
-        .send(authorizeHtml(base, v.params, client.client_name ?? '未命名 MCP 客户端'));
+        .send(
+          authorizeHtml(
+            base,
+            v.params,
+            client.client_name ?? '未命名 MCP 客户端',
+            undefined,
+            authorizeTicket,
+          ),
+        );
     }),
   );
 
@@ -237,27 +315,8 @@ export function createAuthorizeRouter(): Router {
         return;
       }
 
-      const code = seal(
-        'code',
-        {
-          clientId: p.clientId,
-          redirectUri: p.redirectUri,
-          codeChallenge: p.codeChallenge,
-          scope: p.scope,
-          resource: p.resource,
-          sub: user.id,
-          username: user.username,
-          email: user.email,
-          provider: user.provider,
-          createdAt: user.createdAt,
-        },
-        CODE_TTL_SECONDS,
-      );
-
-      const target = new URL(p.redirectUri);
-      target.searchParams.set('code', code);
-      if (p.state) target.searchParams.set('state', p.state);
-      res.redirect(302, target.toString());
+      // 渲染「正在跳回客户端」页（含自动跳转 + 手动兜底），两条路径统一，替换裸 302。
+      res.status(200).type('html').send(completeAuthorize(base, p, user));
     }),
   );
 

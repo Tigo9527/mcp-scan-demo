@@ -24,7 +24,7 @@ const VERSION = 'v1';
 const HKDF_SALT = 'mcp-demo-oauth-v1';
 
 /** 票据用途。同时用作 HKDF 的 info 与 AES-GCM 的 AAD。 */
-export type TicketPurpose = 'dcr' | 'code';
+export type TicketPurpose = 'dcr' | 'code' | 'authorize';
 
 const keyCache = new Map<string, Buffer>();
 

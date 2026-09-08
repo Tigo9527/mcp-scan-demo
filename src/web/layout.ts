@@ -190,6 +190,42 @@ export function notice(inner: string): string {
   return `<div class="notice">${inner}</div>`;
 }
 
+/**
+ * 授权完成后的「正在跳回客户端」页。
+ *
+ * 浏览器通过 meta refresh + JS 自动跳回 `redirect_uri?code=...&state=...`（与标准 302 等效）。
+ * 若客户端监听在本机（如 `http://127.0.0.1:35195/callback`），自动跳转即可完成登录；
+ * 若**登录用的浏览器与运行客户端的机器不是同一台**，自动跳转必然失败 —— 此时页面会把
+ * 完整回调 URL（含 code / state）+ 复制按钮展示出来，供用户在客户端所在机器上手动打开，
+ * 这就是「最后一跳」的兜底。
+ *
+ * 放在 layout 而非 app.ts：它要同时被 `authorize.ts`（账号密码路径）与 `app.ts`（GitHub 回调路径）
+ * 复用，放这里可避免两者之间的循环依赖。
+ */
+export function authorizeCompleteHtml(base: string, callbackUrl: string): string {
+  return page({
+    title: '正在跳回客户端…',
+    base,
+    body: `
+<h1>↩️ 正在跳回客户端…</h1>
+${card(`
+<p>授权已完成，正在把你跳回发起登录的 MCP 客户端。</p>
+<div class="row" style="margin-top:12px">
+<a id="cb-link" class="btn" href="${esc(callbackUrl)}">立即跳回客户端</a>
+</div>
+${copyBlock(callbackUrl, {
+  title: '完整回调地址（含 code / state）',
+  hint: '若页面没有自动跳转，请在<strong>运行客户端的机器</strong>（通常是本机 127.0.0.1）上打开此地址完成登录。',
+})}
+<p class="muted">自动跳转没发生，多半是登录用的浏览器与运行 MCP 客户端的机器不是同一台。请复制上面的地址，到客户端所在机器上手动打开即可。</p>
+`)}
+<meta http-equiv="refresh" content="1; url='${esc(callbackUrl)}'">
+<script>setTimeout(function(){try{window.location.href=${JSON.stringify(callbackUrl)};}catch(e){}},1000);</script>
+<div class="row" style="margin-top:16px"><a class="btn alt" href="${esc(base)}/">返回首页</a></div>
+`,
+  });
+}
+
 /** 本地时区的可读时间（toISOString 是 UTC，直接展示会让人困惑） */
 export function fmtTime(iso?: string | null): string {
   if (!iso) return '—';
