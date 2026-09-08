@@ -328,8 +328,38 @@ function loginSuccessHtml(result: AuthResult, base: string): string {
   });
 }
 
-/** 账号密码注册页 */
-function registerHtml(base: string, error?: string): string {
+/**
+ * 注册/登录成功后，若处于 OAuth 授权流程（携带 authorize 票据），则还原并复核原始授权请求、
+ * 签发授权码并回跳客户端（与 GitHub 回调路径共用 completeAuthorize + 同一套 client/redirect_uri/resource 复核）；
+ * 不在授权流程中则返回 null，由调用方展示普通令牌页。
+ */
+function completeAuthorizeFromTicket(
+  result: AuthResult,
+  base: string,
+  authorizeTicket: string | undefined,
+): string | null {
+  if (!authorizeTicket) return null;
+  const t = open<AuthorizeTicket>('authorize', authorizeTicket);
+  if (!t) return null;
+  const client = readClient(t.clientId);
+  if (!client || !redirectUriAllowed(client, t.redirectUri)) return null;
+  if (t.resource !== canonicalResourceUri(base)) return null;
+  const p: AuthorizeParams = {
+    clientId: t.clientId,
+    redirectUri: t.redirectUri,
+    state: t.state,
+    codeChallenge: t.codeChallenge,
+    scope: t.scope,
+    resource: t.resource,
+  };
+  return completeAuthorize(base, p, result.user);
+}
+
+/** 账号密码注册页。authorizeTicket 非空表示本次注册是 OAuth 授权流程的一环，需原样带回 POST。 */
+function registerHtml(base: string, error?: string, authorizeTicket?: string): string {
+  const hidden = authorizeTicket
+    ? `<input type="hidden" name="authorize" value="${esc(authorizeTicket)}">`
+    : '';
   return page({
     title: '注册账号',
     base,
@@ -338,6 +368,7 @@ function registerHtml(base: string, error?: string): string {
 ${error ? notice(esc(error)) : ''}
 ${card(`
 <form method="post" action="/register">
+${hidden}
 <label for="username">用户名</label>
 <input id="username" name="username" type="text" autocomplete="username" required minlength="3" maxlength="32" pattern="[a-zA-Z0-9_-]+" placeholder="3~32 位，仅字母/数字/_/-">
 <label for="password">密码</label>
@@ -445,19 +476,33 @@ export function createApp() {
   });
 
   // 注册入口：带 ?username= 走「一键注册」（供钉钉等 Agent 自动注册，行为不变）；
-  // 否则渲染账号密码注册页。
+  // 否则渲染账号密码注册页。两者都可能带着 OAuth 授权票据（authorize），注册成功即完成授权回跳。
   app.get('/register', (req: Request, res: Response) => {
     const base = deriveBase(req);
     const username = req.query.username as string | undefined;
+    const authorizeTicket =
+      typeof req.query.authorize === 'string' ? req.query.authorize : undefined;
     if (username) {
-      const result = auth.registerOneClick({ username, email: req.query.email as string | undefined });
-      res.type('html').send(registeredHtml(result, base));
+      try {
+        const result = auth.registerOneClick({
+          username,
+          email: req.query.email as string | undefined,
+        });
+        const oauth = completeAuthorizeFromTicket(result, base, authorizeTicket);
+        res.type('html').send(oauth ?? registeredHtml(result, base));
+      } catch (err) {
+        const msg = err instanceof auth.AuthError ? err.message : '注册失败，请稍后重试。';
+        res.status(err instanceof auth.AuthError ? err.status : 400).type('html').send(
+          registerHtml(base, msg, authorizeTicket),
+        );
+      }
       return;
     }
-    res.type('html').send(registerHtml(base));
+    res.type('html').send(registerHtml(base, undefined, authorizeTicket));
   });
 
   // 账号密码注册（POST 表单）。跨站表单防护 + async 兜底。
+  // 携带 authorize 票据时，注册成功即完成 OAuth 授权回跳（签发 code + 跳转 redirect_uri）。
   app.post(
     '/register',
     express.urlencoded({ extended: false, limit: '16kb' }),
@@ -467,12 +512,18 @@ export function createApp() {
       const body = (req.body ?? {}) as Record<string, unknown>;
       const username = String(body.username ?? '');
       const password = String(body.password ?? '');
+      const authorizeTicket =
+        typeof body.authorize === 'string' ? body.authorize : undefined;
       try {
         const result = auth.registerWithPassword(username, password);
-        res.type('html').send(registeredHtml(result, base));
+        const oauth = completeAuthorizeFromTicket(result, base, authorizeTicket);
+        res.type('html').send(oauth ?? registeredHtml(result, base));
       } catch (err) {
         const msg = err instanceof auth.AuthError ? err.message : '注册失败，请稍后重试。';
-        res.status(err instanceof auth.AuthError ? err.status : 400).type('html').send(registerHtml(base, msg));
+        res
+          .status(err instanceof auth.AuthError ? err.status : 400)
+          .type('html')
+          .send(registerHtml(base, msg, authorizeTicket));
       }
     }),
   );

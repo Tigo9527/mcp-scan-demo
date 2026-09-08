@@ -758,3 +758,116 @@ describe('通过 GitHub 完成 MCP 授权（授权参数穿透）', () => {
     expect(html).not.toContain('正在跳回客户端');
   });
 });
+
+// ---------------- 账号密码注册完成 MCP 授权（穿透最后一跳） ----------------
+//
+// 复现钉钉等客户端安装 MCP 时的问题：用户在授权登录页点「注册新账号」，
+// 旧版 /register 不带任何 OAuth 上下文，注册成功后只展示令牌页，授权握手断在这里——
+// 不签发 code、不回跳 redirect_uri，客户端收不到通知。现在注册链接带 authorize 票据，
+// 注册成功即在授权流程内签发 code 并回跳。
+
+describe('通过账号密码注册完成 MCP 授权', () => {
+  function extractAuthorizeTicketFromRegisterLink(html: string): string {
+    const m = /\/register\?authorize=([^"&]+)/.exec(html);
+    expect(m, `授权页应含带 authorize 票据的注册链接，实际：${html.slice(0, 300)}`).toBeTruthy();
+    return decodeEntities(m![1]);
+  }
+
+  it('授权页的「注册新账号」链接带 authorize 票据', async () => {
+    const reg = await registerClient([REDIRECT], 'reg-link-client');
+    const client = (await reg.json()) as { client_id: string };
+    const { challenge } = pkce();
+    const res = await fetch(
+      authorizeUrl({ clientId: client.client_id, redirectUri: REDIRECT, challenge, state: 'reg-state' }),
+      { redirect: 'manual' },
+    );
+    expect(res.status).toBe(200);
+    const ticket = extractAuthorizeTicketFromRegisterLink(await res.text());
+    expect(ticket.length).toBeGreaterThan(0);
+  });
+
+  it('从授权页注册新账号 → 完成授权、渲染回跳页、code 可换令牌', async () => {
+    const reg = await registerClient([REDIRECT], 'reg-client');
+    const client = (await reg.json()) as { client_id: string };
+    const { verifier, challenge } = pkce();
+    const page = await fetch(
+      authorizeUrl({ clientId: client.client_id, redirectUri: REDIRECT, challenge, state: 'reg-state-2' }),
+      { redirect: 'manual' },
+    );
+    const ticket = extractAuthorizeTicketFromRegisterLink(await page.text());
+
+    // 进入注册页，确认 authorize 票据以隐藏字段形式保留
+    const regPage = await fetch(`${base}/register?authorize=${encodeURIComponent(ticket)}`);
+    expect(regPage.status).toBe(200);
+    expect(await regPage.text()).toContain('name="authorize"');
+
+    // 提交注册表单（带 authorize 隐藏字段），使用全新账号
+    const username = `reg_user_${randomUUID().slice(0, 8)}`;
+    const res = await fetch(`${base}/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ username, password: PASSWORD, authorize: ticket }).toString(),
+      redirect: 'manual',
+    });
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('正在跳回客户端');
+    const callbackUrl = extractCallback(html);
+    const loc = new URL(callbackUrl);
+    expect(`${loc.origin}${loc.pathname}`).toBe(REDIRECT);
+    expect(loc.searchParams.get('state')).toBe('reg-state-2');
+    const code = loc.searchParams.get('code');
+    expect(code).toBeTruthy();
+
+    // 端到端：用拿到的 code 走令牌端点，验证授权码真的有效（PKCE + 受众 + 客户端匹配）
+    const tok = await exchange({
+      grant_type: 'authorization_code',
+      code: code!,
+      client_id: client.client_id,
+      redirect_uri: REDIRECT,
+      code_verifier: verifier,
+      resource: canonicalResourceUri(base),
+    });
+    expect(tok.status).toBe(200);
+    const json = (await tok.json()) as { access_token: string };
+    expect(json.access_token).toMatch(/^mcp_demo_/);
+  });
+
+  it('无 authorize 票据的注册 → 保持普通「注册成功」令牌页（不回跳）', async () => {
+    const username = `reg_plain_${randomUUID().slice(0, 8)}`;
+    const res = await fetch(`${base}/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ username, password: PASSWORD }).toString(),
+      redirect: 'manual',
+    });
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('注册成功');
+    expect(html).not.toContain('正在跳回客户端');
+  });
+
+  it('注册用户名已占用（失败路径）→ 重新渲染注册页且 authorize 票据保留，不回跳', async () => {
+    const reg = await registerClient([REDIRECT], 'reg-fail-client');
+    const client = (await reg.json()) as { client_id: string };
+    const { challenge } = pkce();
+    const page = await fetch(
+      authorizeUrl({ clientId: client.client_id, redirectUri: REDIRECT, challenge, state: 'reg-state-3' }),
+      { redirect: 'manual' },
+    );
+    const ticket = extractAuthorizeTicketFromRegisterLink(await page.text());
+
+    // USERNAME 在 beforeAll 已注册，用它提交必然失败
+    const res = await fetch(`${base}/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ username: USERNAME, password: PASSWORD, authorize: ticket }).toString(),
+      redirect: 'manual',
+    });
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBeLessThan(500);
+    const html = await res.text();
+    expect(html).toContain('name="authorize"');
+    expect(html).not.toContain('正在跳回客户端');
+  });
+});

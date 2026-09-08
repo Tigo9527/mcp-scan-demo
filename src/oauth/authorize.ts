@@ -199,11 +199,11 @@ ${hidden}
 <input id="password" name="password" type="password" autocomplete="current-password" required>
 <div class="row" style="margin-top:16px">
 <button class="btn" type="submit">登录并授权</button>
-<a class="btn alt" href="${esc(base)}/register">注册新账号</a>
+<a class="btn alt" href="${esc(base)}/register?authorize=${esc(authorizeTicket ?? '')}">注册新账号</a>
 </div>
 </form>
 ${githubLink}
-<p class="muted">还没有账号？先去 <a href="${esc(base)}/register">注册</a>，再回到 MCP 客户端重试。</p>
+<p class="muted">还没有账号？点「注册新账号」即可直接完成授权，无需再回客户端重试。</p>
 `,
   });
 }
