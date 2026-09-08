@@ -11,8 +11,9 @@
  * 生产环境请替换为数据库实现，并保持相同接口。
  */
 import { randomUUID } from 'node:crypto';
+import { readdirSync } from 'node:fs';
 import { config } from '../config.js';
-import { loadJsonSync, scheduleSave } from '../persist.js';
+import { getDataDir, loadJsonSync, scheduleSave } from '../persist.js';
 
 export type AuthProvider = 'local' | 'github';
 
@@ -62,11 +63,36 @@ function indexBestEffort(user: User): void {
 function ensureLoaded(): void {
   if (loaded) return;
   loaded = true;
-  const data = loadJsonSync<{ users?: User[] }>(FILE, {});
-  for (const u of data.users ?? []) {
+  // 兼容历史分片 + 多副本统一视图：早期 instanceId 每次启动随机，用户散落在多个
+  // users-<id>.json 里互相看不见；这里把数据目录下所有 users-*.json 合并载入，
+  // 让 admin 能看到全部账号、登录也能查到历史账号（避免「反复回登录页」的假象）。
+  const merged: User[] = [];
+  try {
+    const dir = getDataDir();
+    const names = readdirSync(dir).filter(
+      (n) =>
+        n.startsWith('users-') &&
+        n.endsWith('.json') &&
+        !n.endsWith('.bak.json') &&
+        !n.includes('.corrupt-'),
+    );
+    for (const n of names) {
+      const data = loadJsonSync<{ users?: User[] }>(n.replace(/\.json$/, ''), {});
+      merged.push(...(data.users ?? []));
+    }
+  } catch {
+    // 目录不存在 / 无读取权限：忽略，退回单文件加载
+  }
+  if (merged.length === 0) {
+    const data = loadJsonSync<{ users?: User[] }>(FILE, {});
+    merged.push(...(data.users ?? []));
+  }
+  for (const u of merged) {
     if (!u?.id || !u?.username) continue;
-    byId.set(u.id, u);
-    indexBestEffort(u);
+    if (!byId.has(u.id)) {
+      byId.set(u.id, u);
+      indexBestEffort(u);
+    }
   }
 }
 

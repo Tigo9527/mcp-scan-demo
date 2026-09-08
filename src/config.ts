@@ -7,8 +7,6 @@
  *   业务代码禁止直接读（读到的会是永远不变的 env 旧值）。
  * - admin 令牌请一律通过 `getAdminToken()` 读取（惰性读 env，便于测试期覆盖）。
  */
-import { randomUUID } from 'node:crypto';
-
 const port = Number(process.env.PORT ?? 3000);
 
 export const config = {
@@ -37,8 +35,13 @@ export const config = {
   /** 数据落盘目录（惰性读取，见 src/persist.ts） */
   dataDir: process.env.DATA_DIR ?? './data',
 
-  /** 本实例标识。部署平台为多副本，内存数据不跨副本共享，用它在页面上标明数据归属 */
-  instanceId: process.env.INSTANCE_ID ?? randomUUID().slice(0, 8),
+  /**
+   * 本实例标识，用作落盘文件名（users-<instanceId>.json）。
+   * 默认 'default'：单机/重启场景下稳定复用同一文件，避免早期「每次启动随机生成」
+   * 导致用户散落多个分片、互相看不见、登录时查不到而反复回登录页。
+   * 多副本部署请为每个副本设置不同的 INSTANCE_ID（但本服务仍建议替换为共享数据库）。
+   */
+  instanceId: process.env.INSTANCE_ID ?? 'default',
   /** 进程启动时间 */
   startedAt: new Date().toISOString(),
 } as const;
