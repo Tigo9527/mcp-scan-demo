@@ -201,12 +201,22 @@ describe('MCP demo server', () => {
     expect(typeof json.users).toBe('number');
   });
 
-  it('GET /mcp is rejected with 405 in stateless mode', async () => {
-    // 无状态模式下 GET 会建立常驻 SSE 流，必须挡掉，否则爬虫/健康检查会累积悬挂连接
+  it('GET /mcp opens an SSE stream (200 text/event-stream) for SSE clients', async () => {
+    // 无状态模式下 GET 用于建立 SSE 流；官方 SDK 初始化后会 GET /mcp 打开该流。
+    // 正确行为：返回 200 + text/event-stream（而非过去误报的 405），让客户端不再在 console 打印红字。
     const res = await fetch(`${base}/mcp`, {
-      headers: { Accept: 'application/json, text/event-stream' },
+      headers: { Accept: 'text/event-stream' },
     });
-    expect(res.status).toBe(405);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type') ?? '').toContain('text/event-stream');
+    // 主动收尾，避免测试进程悬挂在常驻流上
+    await res.body?.cancel();
+  });
+
+  it('GET /mcp without Accept: text/event-stream is 406 (Not Acceptable)', async () => {
+    // 不带 SSE Accept 头的 GET 是非法探测，应按规范返回 406（而不是 405）
+    const res = await fetch(`${base}/mcp`, { headers: { Accept: 'application/json' } });
+    expect(res.status).toBe(406);
   });
 
   it('register page escapes HTML (no XSS via username)', async () => {

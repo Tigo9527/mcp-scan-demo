@@ -193,9 +193,11 @@ describe('不该 401 的请求', () => {
     expect(res.status).not.toBe(401);
   });
 
-  it('GET /mcp 仍是 405 而非 401（否则 SSE 客户端会死循环）', async () => {
+  it('GET /mcp 绝不返回 401（否则 SSE 客户端会死循环）', async () => {
+    // 关键不变量：GET /mcp 必须是「非 401」的完成响应（200 SSE 流 / 406 等），
+    // 否则官方 SDK 的 _startOrAuthSse 在 401 时会触发 OAuth 流程并可能死循环。
     const res = await fetch(`${base}/mcp`);
-    expect(res.status).toBe(405);
+    expect(res.status).not.toBe(401);
   });
 });
 

@@ -719,29 +719,23 @@ export function createApp() {
   // 鉴权：默认要求登录，未携带有效令牌直接 401 + WWW-Authenticate（见下方 requireAuthForMcp 分支）；
   // 设 MCP_DEMO_REQUIRE_AUTH=off 可恢复旧的匿名握手（user 为 null，由工具返回注册引导）。
   const handleMcp = wrap(async (req: Request, res: Response) => {
-    // 无状态模式下 GET 会建立常驻 SSE 流（含 keep-alive 定时器），客户端或爬虫
-    // 反复请求会累积悬挂连接。本服务用 JSON 响应模式，主流客户端只发 POST，故直接拒绝。
-    if (req.method !== 'POST') {
-      res.status(405).json({
-        jsonrpc: '2.0',
-        error: {
-          code: -32000,
-          message:
-            '本服务运行在无状态（Streamable HTTP + JSON 响应）模式，/mcp 仅支持 POST。GET/DELETE 会建立常驻 SSE 流，已禁用。',
-        },
-        id: null,
-      });
-      return;
-    }
-
+    // 无状态模式下 GET /mcp 用于建立 SSE 流（客户端接收服务端主动消息，如 notifications/*），
+    // DELETE /mcp 用于终止会话。过去为「防止常驻 SSE 连接累积」显式返回 405，但官方 SDK 的
+    // StreamableHTTPClientTransport 在初始化后会尝试 GET /mcp 打开 SSE 流：收到 405 虽被
+    // 「静默忽略」（视为服务端不支持 SSE），浏览器却仍会在 console 打印红字 net::ERR_ABORTED 405，
+    // 看起来像故障。这里改为把 GET/DELETE 也交给 StreamableHTTPServerTransport，由它按规范返回
+    // 200 (text/event-stream) / 406 等，既消除误报，又兼容需要 SSE 的客户端；无状态 + 无会话
+    // 意味着多副本间无需共享 SSE 状态，单条流空闲时随客户端断开自动回收（见下方 res.on('close')）。
     const user = authenticateUserRequest(req);
     const base = deriveBase(req);
 
-    // —— 标准 MCP 授权发现 ——
-    // 握手/发现类方法与公开工具允许匿名（先装好、先列工具），受保护工具调用仍要求登录：
-    // 未登录直接 401 + WWW-Authenticate，客户端据此启动 OAuth 流程（Codex/Claude 等），
+    // —— 仅 POST 需要按 JSON-RPC body 做「匿名合法」判定 ——
+    // GET/DELETE 没有 JSON-RPC body：GET 是建立 SSE 流（不触发工具调用），DELETE 是终止会话，
+    // 二者都不走工具调用，故不做 body 级匿名判定；鉴权由工具自身（HTTP 层按令牌解析 user）保证。
+    // 标准 MCP 授权发现：握手/发现类方法与公开工具允许匿名（先装好、先列工具），受保护工具调用仍
+    // 要求登录；未登录直接 401 + WWW-Authenticate，客户端据此启动 OAuth 流程（Codex/Claude 等），
     // 或向 web 客户端给出「如何登录」的提示。用 MCP_DEMO_REQUIRE_AUTH=off 可恢复旧的匿名握手。
-    if (!user && requireAuthForMcp() && !isAnonymousEligible(req.body)) {
+    if (req.method === 'POST' && !user && requireAuthForMcp() && !isAnonymousEligible(req.body)) {
       res
         .status(401)
         .setHeader('WWW-Authenticate', wwwAuthenticate(base))
