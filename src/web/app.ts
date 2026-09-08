@@ -722,11 +722,13 @@ export function createApp() {
     );
   });
 
-  app.post('/mcp', handleMcp);
-  app.get('/mcp', handleMcp);
-  app.delete('/mcp', handleMcp);
-  // 预检：浏览器端客户端会先发 OPTIONS，缺了它 401 头也读不到，发现流程无从触发
+  // 预检 + 实际响应都要带 CORS 头：浏览器端 MCP 客户端（aiaw.app、Inspector 等）从别的
+  // origin 打 /mcp 时，若响应缺 Access-Control-Allow-Origin 会直接被拦截（401 发现流程也起不来）。
+  // allowPublicCors 对非 OPTIONS 请求会 next()，不影响原鉴权逻辑；端点本就是公开可发现，沿用 * 策略。
   app.options('/mcp', allowPublicCors);
+  app.post('/mcp', allowPublicCors, handleMcp);
+  app.get('/mcp', allowPublicCors, handleMcp);
+  app.delete('/mcp', allowPublicCors, handleMcp);
 
   // 404
   app.use((req: Request, res: Response) => {
