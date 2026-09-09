@@ -170,8 +170,15 @@ function authorizeHtml(
     .map(([k, v]) => `<input type="hidden" name="${esc(k)}" value="${esc(v)}">`)
     .join('');
 
-  // 仅当 GitHub 已配置、且本次是「完成 MCP 授权」的子流程（带 authorize 票据）时，
-  // 才展示「通过 GitHub 登录」入口。票据里封着原始授权请求，穿过 GitHub 后用于回跳客户端。
+  // 仅当本次是「完成 MCP 授权」的子流程（带 authorize 票据）时，才有意义展示第三方入口：
+  // 票据里封着原始授权请求，穿过对应流程后用于回跳客户端。web3 无需外部配置，始终展示；
+  // GitHub 仅在其已配置时展示。
+  const web3Link = authorizeTicket
+    ? `<div class="row" style="margin-top:16px">
+<a class="btn alt" href="${esc(base)}/web3?authorize=${esc(authorizeTicket)}">用钱包（MetaMask）签名登录并授权</a>
+</div>`
+    : '';
+
   const githubLink =
     isGitHubConfigured() && authorizeTicket
       ? `<div class="row" style="margin-top:16px">
@@ -202,6 +209,7 @@ ${hidden}
 <a class="btn alt" href="${esc(base)}/register?authorize=${esc(authorizeTicket ?? '')}">注册新账号</a>
 </div>
 </form>
+${web3Link}
 ${githubLink}
 <p class="muted">还没有账号？点「注册新账号」即可直接完成授权，无需再回客户端重试。</p>
 `,

@@ -48,6 +48,7 @@ import { requireAuthForMcp } from '../config.js';
 import { createAdminRouter } from './admin.js';
 import { createProfileRouter } from './profile.js';
 import { createAuthorizeRouter, completeAuthorize, type AuthorizeParams, type AuthorizeTicket } from '../oauth/authorize.js';
+import { completeAuthorizeFromTicket } from '../oauth/complete.js';
 import { createRegisterRouter } from '../oauth/register.js';
 import { createWeb3Router } from './web3.js';
 import { createTokenRouter } from '../oauth/token.js';
@@ -337,33 +338,6 @@ function loginSuccessHtml(result: AuthResult, base: string): string {
   });
 }
 
-/**
- * 注册/登录成功后，若处于 OAuth 授权流程（携带 authorize 票据），则还原并复核原始授权请求、
- * 签发授权码并回跳客户端（与 GitHub 回调路径共用 completeAuthorize + 同一套 client/redirect_uri/resource 复核）；
- * 不在授权流程中则返回 null，由调用方展示普通令牌页。
- */
-function completeAuthorizeFromTicket(
-  result: AuthResult,
-  base: string,
-  authorizeTicket: string | undefined,
-): string | null {
-  if (!authorizeTicket) return null;
-  const t = open<AuthorizeTicket>('authorize', authorizeTicket);
-  if (!t) return null;
-  const client = readClient(t.clientId);
-  if (!client || !redirectUriAllowed(client, t.redirectUri)) return null;
-  if (t.resource !== canonicalResourceUri(base)) return null;
-  const p: AuthorizeParams = {
-    clientId: t.clientId,
-    redirectUri: t.redirectUri,
-    state: t.state,
-    codeChallenge: t.codeChallenge,
-    scope: t.scope,
-    resource: t.resource,
-  };
-  return completeAuthorize(base, p, result.user);
-}
-
 /** 账号密码注册页。authorizeTicket 非空表示本次注册是 OAuth 授权流程的一环，需原样带回 POST。 */
 function registerHtml(base: string, error?: string, authorizeTicket?: string): string {
   const hidden = authorizeTicket
@@ -419,8 +393,8 @@ ${card(`
   });
 }
 
-/** web3 钱包登录页：连接 MetaMask，签名挑战，拿令牌。 */
-function web3LoginHtml(base: string, error?: string, token?: string): string {
+/** web3 钱包登录页：连接 MetaMask，签名挑战，拿令牌。authorize 非空表示来自 OAuth 授权流程，需原样带回校验。 */
+function web3LoginHtml(base: string, error?: string, token?: string, authorize?: string): string {
   if (token) {
     return page({
       title: 'web3 登录成功',
@@ -443,17 +417,19 @@ ${copyBlock(token, { title: '访问令牌（Bearer）' })}
 ${error ? notice(esc(error)) : ''}
 ${card(`
 <p>用 MetaMask（或其它注入 <code>window.ethereum</code> 的钱包）签名一段挑战文案完成登录，无需密码。首次签名即注册。</p>
+<input type="hidden" id="web3-authorize" value="${esc(authorize ?? '')}">
 <button id="web3-connect" class="btn" type="button">连接钱包并登录</button>
 <p id="web3-status" class="muted" style="margin-top:10px"></p>
 `)}
 <div class="row" style="margin-top:12px">
-<p class="muted">其它登录方式：<a href="${esc(base)}/register">账号密码注册</a> · <a href="${esc(base)}/login">账号密码登录</a> · <a href="${esc(base)}/auth/github">GitHub</a></p>
+<p class="muted">其它登录方式：<a href="${esc(base)}/register${authorize ? `?authorize=${esc(authorize)}` : ''}">账号密码注册</a> · <a href="${esc(base)}/login">账号密码登录</a> · <a href="${esc(base)}/auth/github${authorize ? `?authorize=${esc(authorize)}` : ''}">GitHub</a></p>
 </div>
 <p><a href="${esc(base)}/">← 返回首页</a></p>
 <script>
 (function(){
   var btn=document.getElementById('web3-connect');
   var status=document.getElementById('web3-status');
+  var authorize=document.getElementById('web3-authorize').value||'';
   var setStatus=function(s){status.textContent=s;};
   if(!window.ethereum){
     setStatus('未检测到钱包（MetaMask 等）。请先安装并解锁钱包。');
@@ -466,16 +442,26 @@ ${card(`
       var address=accts&&accts[0];
       if(!address){setStatus('未能获取钱包地址。');btn.disabled=false;return;}
       setStatus('已连接 '+address.slice(0,6)+'…'+address.slice(-4)+'，正在领取签名挑战…');
-      var nonceResp=await fetch('${esc(base)}/web3/nonce?address='+encodeURIComponent(address));
+      var nonceUrl='${esc(base)}/web3/nonce?address='+encodeURIComponent(address);
+      if(authorize) nonceUrl+='&authorize='+encodeURIComponent(authorize);
+      var nonceResp=await fetch(nonceUrl);
       if(!nonceResp.ok){setStatus('获取挑战失败：'+(nonceResp.status));btn.disabled=false;return;}
       var nonceData=await nonceResp.json();
       setStatus('请在钱包中对下方文案签名…');
       var sig=await window.ethereum.request({method:'personal_sign',params:[nonceData.message,address]});
       setStatus('签名完成，正在校验…');
-      var vResp=await fetch('${esc(base)}/web3/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({address:address,signature:sig})});
+      var body={address:address,signature:sig};
+      if(authorize) body.authorize=authorize;
+      var vResp=await fetch('${esc(base)}/web3/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      // OAuth 授权流程：服务端校验后直接返回「正在跳回客户端」页，渲染它即可自动回跳发起方
+      var ctype=vResp.headers.get('content-type')||'';
+      if(vResp.ok && ctype.indexOf('text/html')!==-1){
+        var html=await vResp.text();
+        document.open();document.write(html);document.close();return;
+      }
       var vData=await vResp.json();
       if(!vResp.ok){setStatus('校验失败：'+(vData.error_description||vResp.status));btn.disabled=false;return;}
-      // 跳到带令牌的结果页（避免令牌出现在地址栏，用 POST 后重定向）
+      // 普通登录：跳到带令牌的结果页（避免令牌出现在地址栏，用 POST 后重定向）
       var q=new URLSearchParams({token:vData.token});
       window.location.href='${esc(base)}/web3?'+q.toString();
     }catch(e){
@@ -661,10 +647,12 @@ export function createApp() {
     res.type('html').send(loginHtml(deriveBase(req)));
   });
 
-  // web3 钱包登录页（MetaMask 等）
+  // web3 钱包登录页（MetaMask 等）。?authorize= 来自 OAuth 授权页，登录完成后回跳发起方。
   app.get('/web3', (req: Request, res: Response) => {
     const token = typeof req.query.token === 'string' ? req.query.token : undefined;
-    res.type('html').send(web3LoginHtml(deriveBase(req), undefined, token));
+    const authorize =
+      typeof req.query.authorize === 'string' ? req.query.authorize : undefined;
+    res.type('html').send(web3LoginHtml(deriveBase(req), undefined, token, authorize));
   });
 
   // 账号密码登录（POST 表单）。跨站表单防护 + async 兜底。

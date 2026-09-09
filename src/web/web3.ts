@@ -1,14 +1,20 @@
 /**
  * web3 钱包登录的 HTTP 端点（公开、允许跨域）：
- *   GET  /web3/nonce?address=0x...   领取一次性挑战与待签名文案
- *   POST /web3/verify                 校验签名并签发令牌 { address, signature }
+ *   GET  /web3/nonce?address=0x...&authorize=<ticket>   领取一次性挑战与待签名文案
+ *   POST /web3/verify                                   { address, signature, authorize? }
  *
  * 这两个端点与 /register 一样属于「公开注册入口」，不经过 /mcp 的鉴权闸门。
+ *
+ * authorize 票据（可选）：来自 /oauth/authorize 登录页的「用钱包签名登录并授权」入口。
+ * 带上它时，校验签名成功后会像 OAuth 一样签发授权码并回跳发起方（redirect_uri），
+ * 而非返回 JSON 令牌——这样 MCP 客户端（Codex / Claude Desktop 等）登录完能直接回到本地监听。
+ * 不带时维持原行为：返回令牌，由前端跳到 /web3?token=... 结果页。
  */
 import { Router, type Request, type Response } from 'express';
-import { allowPublicCors, wrap } from './http.js';
+import { allowPublicCors, deriveBase, wrap } from './http.js';
 import { AuthError } from '../auth/manager.js';
 import * as web3 from '../auth/web3.js';
+import { completeAuthorizeFromTicket } from '../oauth/complete.js';
 
 const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
 
@@ -29,7 +35,12 @@ export function createWeb3Router(): Router {
         return;
       }
       const { nonce, message } = web3.getNonce(address);
-      res.status(200).json({ address, nonce, message });
+      const authorize =
+        typeof req.query.authorize === 'string' ? req.query.authorize : undefined;
+      const body: Record<string, string> = { address, nonce, message };
+      // 原样回显 authorize 票据，便于调用方在下一步 /web3/verify 中继续携带
+      if (authorize) body.authorize = authorize;
+      res.status(200).json(body);
     }),
   );
 
@@ -38,9 +49,10 @@ export function createWeb3Router(): Router {
     '/web3/verify',
     allowPublicCors,
     wrap((req: Request, res: Response) => {
-      const body = (req.body ?? {}) as { address?: string; signature?: string };
+      const body = (req.body ?? {}) as { address?: string; signature?: string; authorize?: string };
       const address = typeof body.address === 'string' ? body.address.trim() : '';
       const signature = typeof body.signature === 'string' ? body.signature.trim() : '';
+      const authorize = typeof body.authorize === 'string' ? body.authorize : undefined;
       if (!ADDRESS_RE.test(address)) {
         res.status(400).json({
           error: 'invalid_address',
@@ -54,6 +66,12 @@ export function createWeb3Router(): Router {
       }
       try {
         const result = web3.verifyWeb3Signature(address, signature);
+        // OAuth 授权流程：签发授权码并回跳发起方（与账号密码 / GitHub 登录共用最后一跳）
+        const oauthHtml = completeAuthorizeFromTicket(result, deriveBase(req), authorize);
+        if (oauthHtml) {
+          res.status(200).type('html').send(oauthHtml);
+          return;
+        }
         res.status(200).json({
           token: result.token,
           user: {
