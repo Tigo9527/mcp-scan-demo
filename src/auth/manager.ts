@@ -230,6 +230,13 @@ export function registerOneClick(profile?: {
   return { user, token: issueToken(user) };
 }
 
+/** web3 登录：按钱包地址 find-or-create 用户（provider='web3'）并签发令牌。
+ *  调用方需先通过签名验证确认地址归属（见 ./web3.ts）。 */
+export function registerWeb3(address: string): AuthResult {
+  const user = store.upsertWeb3User({ address });
+  return { user, token: issueToken(user) };
+}
+
 /** 账号密码注册：校验格式、查重、哈希口令后创建本地用户并返回令牌。口令绝不进 JWT。 */
 export function registerWithPassword(username: string, password: string): AuthResult {
   const usernameErr = validateUsername(username);

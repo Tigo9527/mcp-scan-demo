@@ -15,7 +15,7 @@ import { readdirSync } from 'node:fs';
 import { config } from '../config.js';
 import { getDataDir, loadJsonSync, scheduleSave } from '../persist.js';
 
-export type AuthProvider = 'local' | 'github';
+export type AuthProvider = 'local' | 'github' | 'web3';
 
 export interface User {
   id: string;
@@ -27,6 +27,8 @@ export interface User {
   githubToken?: string;
   /** 账号密码用户的口令哈希（scrypt，格式 `saltHex:hashHex`）。GitHub/一键注册用户无此字段。绝不进 JWT。 */
   passwordHash?: string;
+  /** web3 登录用户的钱包地址（0x + 40 位十六进制）。provider 为 web3 时存在。 */
+  walletAddress?: string;
   createdAt: string;
   /** 最近一次携带有效令牌访问本实例的时间 */
   lastSeenAt?: string;
@@ -49,6 +51,7 @@ export interface ListUsersOptions {
 const byId = new Map<string, User>();
 const byUsername = new Map<string, string>();
 const byGithubLogin = new Map<string, string>();
+const byWallet = new Map<string, string>();
 
 const FILE = `users-${config.instanceId}`;
 let loaded = false;
@@ -58,6 +61,8 @@ function indexBestEffort(user: User): void {
   if (u && !byUsername.has(u)) byUsername.set(u, user.id);
   const g = user.githubLogin?.toLowerCase();
   if (g && !byGithubLogin.has(g)) byGithubLogin.set(g, user.id);
+  const w = user.walletAddress?.toLowerCase();
+  if (w && !byWallet.has(w)) byWallet.set(w, user.id);
 }
 
 function ensureLoaded(): void {
@@ -107,6 +112,7 @@ export function createUser(input: {
   githubLogin?: string;
   githubToken?: string;
   passwordHash?: string;
+  walletAddress?: string;
 }): User {
   ensureLoaded();
   const user: User = {
@@ -117,6 +123,7 @@ export function createUser(input: {
     githubLogin: input.githubLogin,
     githubToken: input.githubToken,
     passwordHash: input.passwordHash,
+    walletAddress: input.walletAddress,
     createdAt: new Date().toISOString(),
     lastSeenAt: new Date().toISOString(),
   };
@@ -159,6 +166,25 @@ export function upsertGitHubUser(input: {
     provider: 'github',
     githubLogin: input.githubLogin,
     githubToken: input.githubToken,
+  });
+}
+
+/** web3 用户：按钱包地址 find-or-create。首次登录即注册（用户名即地址，provider='web3'）。 */
+export function upsertWeb3User(input: { address: string }): User {
+  ensureLoaded();
+  const key = input.address.toLowerCase();
+  const existingId = byWallet.get(key);
+  if (existingId) {
+    const user = byId.get(existingId)!;
+    user.lastSeenAt = new Date().toISOString();
+    markDirty();
+    return user;
+  }
+  return createUser({
+    username: input.address,
+    email: null,
+    provider: 'web3',
+    walletAddress: input.address,
   });
 }
 
@@ -272,6 +298,8 @@ export function deleteUser(id: string): boolean {
   }
   const g = user.githubLogin?.toLowerCase();
   if (g && byGithubLogin.get(g) === id) byGithubLogin.delete(g);
+  const w = user.walletAddress?.toLowerCase();
+  if (w && byWallet.get(w) === id) byWallet.delete(w);
   markDirty();
   return true;
 }

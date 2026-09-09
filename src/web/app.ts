@@ -49,6 +49,7 @@ import { createAdminRouter } from './admin.js';
 import { createProfileRouter } from './profile.js';
 import { createAuthorizeRouter, completeAuthorize, type AuthorizeParams, type AuthorizeTicket } from '../oauth/authorize.js';
 import { createRegisterRouter } from '../oauth/register.js';
+import { createWeb3Router } from './web3.js';
 import { createTokenRouter } from '../oauth/token.js';
 import { readClient, redirectUriAllowed } from '../oauth/clients.js';
 import { open } from '../oauth/tickets.js';
@@ -256,6 +257,12 @@ ${copyBlock(publicMcpConfigJson(base), {
 `)}
 
 ${card(`
+<h3>⑥ web3 钱包登录（MetaMask）</h3>
+<p>无需密码：用 MetaMask 等钱包对挑战文案签名即完成注册 / 登录，身份即钱包地址。</p>
+<div class="row"><a class="btn alt" href="${esc(base)}/web3">用钱包签名登录</a></div>
+`)}
+
+${card(`
 <h3>⑤ 查看资料与统计</h3>
 <p>用户可在 <code>/profile?token=&lt;你的令牌&gt;</code> 查看个人资料与调用统计；管理员可进入 Admin 管理端查看用户列表与全局统计。</p>
 <div class="row"><a class="btn small alt" href="${esc(base)}/profile">我的 Profile</a>
@@ -408,6 +415,76 @@ ${card(`
 <p class="muted">还没有账号？<a href="${esc(base)}/register">去注册</a> · 或 <a href="${esc(base)}/auth/github">用 GitHub 注册 / 登录</a></p>
 </div>
 <p><a href="${esc(base)}/">← 返回首页</a></p>
+`,
+  });
+}
+
+/** web3 钱包登录页：连接 MetaMask，签名挑战，拿令牌。 */
+function web3LoginHtml(base: string, error?: string, token?: string): string {
+  if (token) {
+    return page({
+      title: 'web3 登录成功',
+      base,
+      body: `
+<h1>🦊 web3 登录成功</h1>
+${card(`<b>钱包：</b> <code>${esc(token)}</code>`)}
+<p>下面这串访问令牌可直接配置到 MCP 客户端调用受保护工具；或用 <code>/profile?token=...</code> 查看资料。</p>
+${copyBlock(token, { title: '访问令牌（Bearer）' })}
+<div class="row" style="margin:16px 0"><a class="btn" href="${esc(`${base}/profile?token=${token}`)}">查看我的 Profile →</a>
+<a class="btn alt" href="${esc(base)}/">返回首页</a></div>
+`,
+    });
+  }
+  return page({
+    title: 'web3 钱包登录',
+    base,
+    body: `
+<h1>🦊 web3 钱包登录</h1>
+${error ? notice(esc(error)) : ''}
+${card(`
+<p>用 MetaMask（或其它注入 <code>window.ethereum</code> 的钱包）签名一段挑战文案完成登录，无需密码。首次签名即注册。</p>
+<button id="web3-connect" class="btn" type="button">连接钱包并登录</button>
+<p id="web3-status" class="muted" style="margin-top:10px"></p>
+`)}
+<div class="row" style="margin-top:12px">
+<p class="muted">其它登录方式：<a href="${esc(base)}/register">账号密码注册</a> · <a href="${esc(base)}/login">账号密码登录</a> · <a href="${esc(base)}/auth/github">GitHub</a></p>
+</div>
+<p><a href="${esc(base)}/">← 返回首页</a></p>
+<script>
+(function(){
+  var btn=document.getElementById('web3-connect');
+  var status=document.getElementById('web3-status');
+  var setStatus=function(s){status.textContent=s;};
+  if(!window.ethereum){
+    setStatus('未检测到钱包（MetaMask 等）。请先安装并解锁钱包。');
+    btn.disabled=true;return;
+  }
+  btn.addEventListener('click',async function(){
+    btn.disabled=true;setStatus('请在钱包中确认连接…');
+    try{
+      var accts=await window.ethereum.request({method:'eth_requestAccounts'});
+      var address=accts&&accts[0];
+      if(!address){setStatus('未能获取钱包地址。');btn.disabled=false;return;}
+      setStatus('已连接 '+address.slice(0,6)+'…'+address.slice(-4)+'，正在领取签名挑战…');
+      var nonceResp=await fetch('${esc(base)}/web3/nonce?address='+encodeURIComponent(address));
+      if(!nonceResp.ok){setStatus('获取挑战失败：'+(nonceResp.status));btn.disabled=false;return;}
+      var nonceData=await nonceResp.json();
+      setStatus('请在钱包中对下方文案签名…');
+      var sig=await window.ethereum.request({method:'personal_sign',params:[nonceData.message,address]});
+      setStatus('签名完成，正在校验…');
+      var vResp=await fetch('${esc(base)}/web3/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({address:address,signature:sig})});
+      var vData=await vResp.json();
+      if(!vResp.ok){setStatus('校验失败：'+(vData.error_description||vResp.status));btn.disabled=false;return;}
+      // 跳到带令牌的结果页（避免令牌出现在地址栏，用 POST 后重定向）
+      var q=new URLSearchParams({token:vData.token});
+      window.location.href='${esc(base)}/web3?'+q.toString();
+    }catch(e){
+      setStatus('出错：'+(e&&e.message?e.message:String(e)));
+      btn.disabled=false;
+    }
+  });
+})();
+</script>
 `,
   });
 }
@@ -584,6 +661,12 @@ export function createApp() {
     res.type('html').send(loginHtml(deriveBase(req)));
   });
 
+  // web3 钱包登录页（MetaMask 等）
+  app.get('/web3', (req: Request, res: Response) => {
+    const token = typeof req.query.token === 'string' ? req.query.token : undefined;
+    res.type('html').send(web3LoginHtml(deriveBase(req), undefined, token));
+  });
+
   // 账号密码登录（POST 表单）。跨站表单防护 + async 兜底。
   app.post(
     '/login',
@@ -735,6 +818,7 @@ export function createApp() {
   app.use(createRegisterRouter());
   app.use(createAuthorizeRouter());
   app.use(createTokenRouter());
+  app.use(createWeb3Router());
 
   // ---- MCP Streamable HTTP 端点（无状态模式）----
   // 多副本部署下内存会话无法跨副本共享，因此每次请求都新建一个独立的 transport + McpServer

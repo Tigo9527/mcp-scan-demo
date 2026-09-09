@@ -20,12 +20,13 @@ const TOOL_NAMES = [
   'login',
   'whoami',
   'register_user',
+  'web3_login',
   'my_stats',
   'search_repos',
 ];
 
 /** 无需登录即可调用的公开工具（供未登录客户端安装后获取登录入口 / 一键注册）。 */
-export const PUBLIC_MCP_TOOLS = new Set(['server_info', 'login', 'register_user']);
+export const PUBLIC_MCP_TOOLS = new Set(['server_info', 'login', 'register_user', 'web3_login']);
 
 export function createMcpServer(): McpServer {
   const server = new McpServer({
@@ -76,6 +77,29 @@ export function createMcpServer(): McpServer {
         mcpConfig: { mcpServers: { 'mcp-demo': { url: `${base}/mcp`, transport: 'streamable-http' } } },
         howToUseToken:
           '登录（账号密码或 GitHub）后会得到一个 mcp_demo_ 开头的令牌。把它配置到 MCP 客户端：请求头 X-Authorization: Bearer <token>，或在 MCP 端点 URL 后追加 ?token=<token>；把令牌拼到 profileUrl 后可查看个人资料与调用统计。mcpConfig 是不含令牌的客户端配置，可直接复制使用；先连上再登录，无需一开始就配令牌。',
+      });
+    },
+  );
+
+  server.tool(
+    'web3_login',
+    '获取 web3 钱包登录入口。未携带有效令牌时调用本工具，返回 MetaMask 等钱包签名登录的页面与端点（/web3/nonce 领取挑战、/web3/verify 校验签名拿令牌）。适合无密码、用钱包地址即身份的场景。',
+    {},
+    async () => {
+      const base = getRequestBaseUrl();
+      return text({
+        message:
+          '本服务支持 web3 钱包签名登录（MetaMask 等）：用钱包对服务器下发的挑战文案签名，即可注册/登录并拿到令牌。',
+        web3LoginPage: `${base}/web3`,
+        nonceEndpoint: `${base}/web3/nonce?address=<你的钱包地址>`,
+        verifyEndpoint: `${base}/web3/verify`,
+        flow: [
+          '1) GET /web3/nonce?address=0x... 领取一次性挑战 nonce 与待签名文案 message',
+          '2) 用钱包 personal_sign 对 message 签名，得到 signature',
+          '3) POST /web3/verify { address, signature }，校验通过即返回 token',
+        ],
+        howToUseToken:
+          '把返回的 token 配置到 MCP 客户端：请求头 X-Authorization: Bearer <token>，或 MCP 端点 URL 后追加 ?token=<token>。',
       });
     },
   );
