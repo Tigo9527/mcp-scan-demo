@@ -13,7 +13,7 @@ import { config } from '../config.js';
 import * as auth from '../auth/manager.js';
 import * as store from '../auth/store.js';
 import { authContext, baseUrlContext } from '../auth/context.js';
-import { createMcpServer, PUBLIC_MCP_TOOLS } from '../mcp/server.js';
+import { createMcpServer } from '../mcp/server.js';
 import {
   createState,
   exchangeAndLogin,
@@ -410,8 +410,21 @@ ${card(`
   });
 }
 
-function oauthSuccessHtml(user: User, token: string, base: string): string {
-  const profileUrl = `${base}/profile?token=${token}`;
+/**
+ * 判断请求体是否**只**包含通知类消息（`notifications/*`）。
+ * 通知没有响应、也不该要求鉴权；对它们返回 401 会打断客户端的初始化流程。
+ */
+function isNotificationOnly(body: unknown): boolean {
+  const messages: unknown[] = Array.isArray(body) ? body : [body];
+  if (messages.length === 0) return false;
+  return messages.every((m) => {
+    if (!m || typeof m !== 'object') return false;
+    const method = (m as { method?: unknown }).method;
+    return typeof method === 'string' && method.startsWith('notifications/');
+  });
+}
+
+function oauthSuccessHtml(user: User, token: string, base: string): string {  const profileUrl = `${base}/profile?token=${token}`;
   return page({
     title: 'GitHub 登录成功',
     base,
@@ -426,48 +439,6 @@ ${card(`<b>访问令牌（Bearer）：</b><br><code>${esc(token)}</code>`)}
 <a class="btn alt" href="${esc(base)}/">返回首页</a>
 </div>
 `,
-  });
-}
-
-/**
- * 判断请求体是否**只**包含通知类消息（`notifications/*`）。
- * 通知没有响应、也不该要求鉴权；对它们返回 401 会打断客户端的初始化流程。
- */
-/**
- * 是否允许匿名（未登录）请求。
- *
- * 设计目标：让 web / 桌面客户端**先装好 MCP**（完成握手与工具枚举），
- * 真正调用受保护工具（whoami / my_stats / search_repos）时再提示登录。
- * 允许匿名的有三类：
- *   1. 通知类（notifications/*，无响应，按协议本就不要求鉴权）；
- *   2. 握手 / 发现类方法（initialize / ping / tools|resources|prompts/list），安装与枚举工具所需；
- *   3. 公开工具调用（server_info / login / register_user），未登录也能拿到登录入口或一键注册。
- * 其余（尤其是受保护工具的 tools/call）仍要求登录 —— 返回 401 + WWW-Authenticate，
- * 既能让支持 OAuth 的客户端（Codex / Claude Desktop 等）发起授权发现，也能向 web 客户端给出登录提示。
- */
-function isAnonymousEligible(body: unknown): boolean {
-  const messages: unknown[] = Array.isArray(body) ? body : [body];
-  if (messages.length === 0) return false;
-  return messages.every((m) => {
-    if (!m || typeof m !== 'object') return false;
-    const msg = m as { method?: unknown; params?: unknown };
-    const method = msg.method;
-    if (typeof method !== 'string') return false;
-    if (method.startsWith('notifications/')) return true;
-    if (
-      method === 'initialize' ||
-      method === 'ping' ||
-      method === 'tools/list' ||
-      method === 'resources/list' ||
-      method === 'prompts/list'
-    ) {
-      return true;
-    }
-    if (method === 'tools/call') {
-      const name = (msg.params as { name?: unknown } | undefined)?.name;
-      return typeof name === 'string' && PUBLIC_MCP_TOOLS.has(name);
-    }
-    return false;
   });
 }
 
@@ -729,13 +700,13 @@ export function createApp() {
     const user = authenticateUserRequest(req);
     const base = deriveBase(req);
 
-    // —— 仅 POST 需要按 JSON-RPC body 做「匿名合法」判定 ——
-    // GET/DELETE 没有 JSON-RPC body：GET 是建立 SSE 流（不触发工具调用），DELETE 是终止会话，
-    // 二者都不走工具调用，故不做 body 级匿名判定；鉴权由工具自身（HTTP 层按令牌解析 user）保证。
-    // 标准 MCP 授权发现：握手/发现类方法与公开工具允许匿名（先装好、先列工具），受保护工具调用仍
-    // 要求登录；未登录直接 401 + WWW-Authenticate，客户端据此启动 OAuth 流程（Codex/Claude 等），
-    // 或向 web 客户端给出「如何登录」的提示。用 MCP_DEMO_REQUIRE_AUTH=off 可恢复旧的匿名握手。
-    if (req.method === 'POST' && !user && requireAuthForMcp() && !isAnonymousEligible(req.body)) {
+    // —— 标准 MCP 授权发现：未鉴权一律返回 401 + WWW-Authenticate ——
+    // 这是 revert 旧版「未授权也返回 200」后的默认行为。标准 MCP 客户端（Codex / Claude Desktop /
+    // Cursor 等）只有在收到 401 时才会去读 /.well-known/oauth-protected-resource 并启动 OAuth 流程；
+    // 永远返回 200 会让客户端一路绿灯、压根不触发登录发现。仅通知类（notifications/*，无响应、
+    // 按协议本就不要求鉴权）放行，避免打断初始化。web 客户端则在 401 响应里拿到「如何登录」的提示。
+    // 用 MCP_DEMO_REQUIRE_AUTH=off 可恢复旧的匿名握手。
+    if (req.method === 'POST' && !user && requireAuthForMcp() && !isNotificationOnly(req.body)) {
       res
         .status(401)
         .setHeader('WWW-Authenticate', wwwAuthenticate(base))

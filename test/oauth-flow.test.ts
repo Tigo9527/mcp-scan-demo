@@ -190,7 +190,8 @@ async function mcpCall(token: string): Promise<Response> {
 
 describe('发现链：401 → PRM → AS → 注册端点', () => {
   it('从 401 头一路能走到 DCR，且每跳地址都真的可用', async () => {
-    // initialize 现在允许匿名（先装好），受保护工具 whoami 未带令牌才 401，触发 OAuth 发现
+    // 受保护工具 whoami 未带令牌必须 401，触发标准 OAuth 发现（revert 旧版匿名放行后，
+    // 包括 initialize 在内的未鉴权请求统一返回 401）
     const unauth = await fetch(`${base}/mcp`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },

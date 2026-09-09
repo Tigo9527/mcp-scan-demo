@@ -127,11 +127,13 @@ describe('授权服务器元数据（RFC 8414）', () => {
 describe('未鉴权请求的 401 与 WWW-Authenticate', () => {
   const whoamiBody = { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'whoami', arguments: {} } };
 
-  it('握手类方法（initialize）未带令牌返回 200——先让客户端装好', async () => {
+  it('握手类方法（initialize）未带令牌返回 401——标准 MCP，触发 OAuth 发现', async () => {
     const init = await mcpPost(initializeBody);
-    expect(init.status).toBe(200);
-    const json = (await init.json()) as Record<string, any>;
-    expect(json.result?.serverInfo?.name).toBe('mcp-demo');
+    expect(init.status).toBe(401);
+    const header = init.headers.get('www-authenticate') ?? '';
+    const match = RESOURCE_METADATA_RE.exec(header);
+    expect(match, `401 应带 WWW-Authenticate 的 resource_metadata，实际：${header}`).toBeTruthy();
+    expect(match![1]).toBe(`${base}/.well-known/oauth-protected-resource${MCP_PATH}`);
   });
 
   it('受保护工具（whoami）未带令牌才 401，且头可被官方 SDK 正则解析', async () => {
@@ -159,19 +161,16 @@ describe('未鉴权请求的 401 与 WWW-Authenticate', () => {
     expect(json.result?.serverInfo?.name).toBe('mcp-demo');
   });
 
-  it('匿名可装：tools/list 与公开工具（login / server_info）免登录可用', async () => {
+  it('未带令牌的 tools/list / 公开工具（login / server_info）也返回 401', async () => {
+    // revert 旧版「未授权也返回 200」后，默认严格模式下连「公开」工具也要求先登录，
+    // 由客户端走标准 OAuth 发现拿令牌后再调用（install-first 模式见后续参数化测试）。
     const list = await mcpPost({ jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} });
-    expect(list.status).toBe(200);
-    const data = (await list.json()) as Record<string, any>;
-    const names: string[] = (data.result?.tools ?? []).map((t: { name: string }) => t.name);
-    expect(names).toEqual(
-      expect.arrayContaining(['server_info', 'login', 'register_user', 'whoami', 'my_stats', 'search_repos']),
-    );
+    expect(list.status).toBe(401);
 
     const login = await mcpPost({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'login', arguments: {} } });
-    expect(login.status).toBe(200);
+    expect(login.status).toBe(401);
     const info = await mcpPost({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'server_info', arguments: {} } });
-    expect(info.status).toBe(200);
+    expect(info.status).toBe(401);
   });
 
   it('受保护工具（my_stats / search_repos）未带令牌也 401', async () => {

@@ -3,10 +3,11 @@
  *   1) 健康检查可用（含 instanceId）
  *   2) 一键注册返回令牌
  *   3) 带令牌调用 MCP whoami / register_user 成功
- *   4) 匿名也能完成握手（不返回 401），由工具返回登录引导
+ *   4) 未带令牌的 MCP 请求返回 401 + WWW-Authenticate（标准 MCP 发现入口）
  *
- * 注意：早期版本这里断言「无令牌必须返回 401」，现已改为匿名放行 + 登录引导，
- * 不要再改回 401（AGENTS.md 里也同步修正了）。
+ * 本文件验证的是**默认严格模式**（MCP_DEMO_REQUIRE_AUTH 缺省为 on）：
+ * 未鉴权请求统一返回 401，由客户端走标准 OAuth 发现。早期的「未授权也返回 200」已 revert。
+ * 完全匿名的逃生通道（MCP_DEMO_REQUIRE_AUTH=off）与「先装后登录」参数化模式见对应测试。
  *
  * 运行后会把「可访问 URL」打印到 stdout，供 Codex 转述给用户。
  * 运行方式：npm test  （或 npx vitest run）
@@ -26,10 +27,8 @@ beforeAll(async () => {
   // 测试期间关闭落盘，避免污染 data/ 目录
   configure({ enabled: false });
 
-  // 本文件验证的是「匿名放行 + 工具内登录引导」这一路（钉钉等客户端场景）。
-  // 默认已是严格模式（未鉴权直接 401 + WWW-Authenticate），那部分由 test/oauth.test.ts 覆盖。
-  vi.stubEnv('MCP_DEMO_REQUIRE_AUTH', 'off');
-
+  // 默认严格模式（未鉴权直接 401 + WWW-Authenticate），正是本文件要验证的行为。
+  // oauth.test.ts 用 vi.stubEnv 显式锁 on；这里依赖默认值即可，二者一致。
   server = createApp().listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', () => resolve()));
   const addr = server.address();
@@ -159,34 +158,56 @@ describe('MCP demo server', () => {
     expect(r.result?.content?.[0]?.text).toContain('mcp_demo_');
   });
 
-  it('anonymous handshake works and tools/list exposes the login tool', async () => {
-    // 不加任何令牌：端点应允许握手（不再返回 401），并暴露引导登录的工具
-    const { sessionId, body } = await mcpInitialize();
-    expect(body.result?.serverInfo?.name).toBe('mcp-demo');
-
-    const list = await mcpCall(undefined, sessionId, 'tools/list', {});
-    const names = (list.result?.tools ?? []).map((t: any) => t.name);
-    expect(names).toContain('login');
-    expect(names).toContain('whoami');
+  it('unauthenticated initialize returns 401 (standard MCP: triggers OAuth discovery)', async () => {
+    // revert 旧版「未授权也返回 200」后，未带令牌的握手应返回 401 + WWW-Authenticate，
+    // 让支持标准的客户端（Codex / Claude 等）据此启动授权发现。
+    const init = await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers: { 'Content-Type': JSON_RPC, Accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'vitest-client', version: '1.0.0' } },
+      }),
+    });
+    expect(init.status).toBe(401);
+    expect(init.headers.get('www-authenticate') ?? '').toContain('resource_metadata');
+    const body = (await init.json()) as any;
+    expect(body.error?.message ?? '').toMatch(/登录|register/);
   });
 
-  it('anonymous whoami returns a login hint (not a hard error)', async () => {
-    const { sessionId } = await mcpInitialize();
-    const whoami = await mcpCall(undefined, sessionId, 'tools/call', {
-      name: 'whoami',
-      arguments: {},
-    });
-    const text = whoami.result?.content?.[0]?.text ?? JSON.stringify(whoami);
-    expect(text).toContain('未登录');
-    expect(text).toMatch(/register|登录/);
+  it('unauthenticated tools/list and public tools also return 401', async () => {
+    // 默认严格模式下，连 tools/list / login / server_info 这类「公开」工具也要求先登录。
+    for (const m of [
+      { method: 'tools/list', params: {} },
+      { method: 'tools/call', params: { name: 'login', arguments: {} } },
+      { method: 'tools/call', params: { name: 'server_info', arguments: {} } },
+    ]) {
+      const res = await fetch(`${base}/mcp`, {
+        method: 'POST',
+        headers: { 'Content-Type': JSON_RPC, Accept: 'application/json, text/event-stream' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, ...m }),
+      });
+      expect(res.status).toBe(401);
+    }
   });
 
-  it('login tool returns a register URL', async () => {
-    const { sessionId } = await mcpInitialize();
-    const login = await mcpCall(undefined, sessionId, 'tools/call', {
-      name: 'login',
-      arguments: {},
+  it('unauthenticated whoami returns a 401 with a login hint', async () => {
+    const whoami = await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers: { 'Content-Type': JSON_RPC, Accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'whoami', arguments: {} } }),
     });
+    expect(whoami.status).toBe(401);
+    const body = (await whoami.json()) as any;
+    expect(body.error?.message ?? '').toMatch(/登录|register/);
+  });
+
+  it('login tool (when authenticated) returns a register URL', async () => {
+    const token = await registerAndGetToken('erin');
+    const { sessionId } = await mcpInitialize(token);
+    const login = await mcpCall(token, sessionId, 'tools/call', { name: 'login', arguments: {} });
     const text = login.result?.content?.[0]?.text ?? '';
     expect(text).toContain('/register');
   });
