@@ -159,7 +159,7 @@ export function allowPublicCors(req: Request, res: Response, next: NextFunction)
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader(
     'Access-Control-Allow-Headers',
-    'Authorization, X-Authorization, Content-Type, MCP-Protocol-Version, MCP-Session-Id',
+    'Authorization, X-Authorization, Content-Type, MCP-Protocol-Version, MCP-Session-Id, MCP-Unauthorized-Status',
   );
   // 少了这一行，浏览器 JS 读不到 401 响应上的 WWW-Authenticate，发现流程无从触发
   res.setHeader('Access-Control-Expose-Headers', 'WWW-Authenticate, MCP-Session-Id');

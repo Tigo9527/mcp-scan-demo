@@ -260,3 +260,52 @@ describe('MCP demo server', () => {
     expect(text).toContain('byTool');
   });
 });
+
+describe('MCP-Unauthorized-Status 参数（客户端指定未授权返回码）', () => {
+  const post = (body: unknown, status?: string): Promise<Response> => {
+    const headers: Record<string, string> = {
+      'Content-Type': JSON_RPC,
+      Accept: 'application/json, text/event-stream',
+    };
+    if (status) headers['MCP-Unauthorized-Status'] = status;
+    return fetch(`${base}/mcp`, { method: 'POST', headers, body: JSON.stringify(body) });
+  };
+  const initBody = {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'initialize',
+    params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'vitest', version: '1' } },
+  };
+
+  it('带 MCP-Unauthorized-Status: 200 时，握手/发现/公开工具放行（200）', async () => {
+    const init = await post(initBody, '200');
+    expect(init.status).toBe(200);
+    const b = (await init.json()) as any;
+    expect(b.result?.serverInfo?.name).toBe('mcp-demo');
+
+    const list = await post({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, '200');
+    expect(list.status).toBe(200);
+    const login = await post({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'login', arguments: {} } }, '200');
+    expect(login.status).toBe(200);
+    const info = await post({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'server_info', arguments: {} } }, '200');
+    expect(info.status).toBe(200);
+  });
+
+  it('MCP-Unauthorized-Status: 200 时，受保护工具返回 200 + 登录引导（而非 401）', async () => {
+    const whoami = await post({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'whoami', arguments: {} } }, '200');
+    expect(whoami.status).toBe(200);
+    const b = (await whoami.json()) as any;
+    expect(b.error?.message ?? '').toMatch(/登录|register/);
+  });
+
+  it('不带参数（默认）仍严格 401，符合标准 MCP', async () => {
+    const init = await post(initBody);
+    expect(init.status).toBe(401);
+    expect(init.headers.get('www-authenticate') ?? '').toContain('resource_metadata');
+  });
+
+  it('非法参数值（如 500）按默认 401 处理', async () => {
+    const init = await post(initBody, '500');
+    expect(init.status).toBe(401);
+  });
+});

@@ -50,7 +50,7 @@ export function createMcpServer(): McpServer {
         githubAuthUrl: `${base}/auth/github`,
         setupUrl: `${base}/setup`,
         mcpConfig: { mcpServers: { 'mcp-demo': { url: `${base}/mcp`, transport: 'streamable-http' } } },
-        note: '未携带有效令牌时，调用 login 工具即可获取登录入口；或在浏览器打开 loginUrl 完成注册后，将令牌配置到客户端请求头 X-Authorization: Bearer <token>（或 MCP 端点 URL 后追加 ?token=<token>）。setupUrl 是免登录的接入说明页，可直接发给新用户（含可直接复制的 mcpConfig）。',
+        note: '未携带有效令牌时，调用 login 工具即可获取登录入口；或在浏览器打开 loginUrl 完成注册后，将令牌配置到客户端请求头 X-Authorization: Bearer <token>（或 MCP 端点 URL 后追加 ?token=<token>）。setupUrl 是免登录的接入说明页，可直接发给新用户（含可直接复制的 mcpConfig）。未授权默认返回 401（标准 MCP，触发 OAuth 发现）；若客户端想「先装后登录」，可在请求头带 MCP-Unauthorized-Status: 200，此时握手/发现/公开工具放行、受保护工具返回 200 + 引导文案。',
         mcpEndpoint: `${base}/mcp`,
         profileUrl: `${base}/profile`,
         githubConfigured: isGitHubConfigured(),

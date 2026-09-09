@@ -13,7 +13,7 @@ import { config } from '../config.js';
 import * as auth from '../auth/manager.js';
 import * as store from '../auth/store.js';
 import { authContext, baseUrlContext } from '../auth/context.js';
-import { createMcpServer } from '../mcp/server.js';
+import { createMcpServer, PUBLIC_MCP_TOOLS } from '../mcp/server.js';
 import {
   createState,
   exchangeAndLogin,
@@ -185,6 +185,8 @@ ${copyBlock(headerMcpConfigJson(base), {
   title: '写法 B：用 X-Authorization 头（推荐）',
   hint: '务必用 X-Authorization，不要用 Authorization —— 部署平台网关会改写 Authorization 头。',
 })}
+<p class="muted">想「先装后登录」（装好客户端、列完工具，调用受保护工具时再提示登录）？
+在 MCP 请求头加 <code>MCP-Unauthorized-Status: 200</code> 即可，未授权时返回 200 + 引导而非 401。</p>
 `)}
 
 ${card(`
@@ -424,7 +426,57 @@ function isNotificationOnly(body: unknown): boolean {
   });
 }
 
-function oauthSuccessHtml(user: User, token: string, base: string): string {  const profileUrl = `${base}/profile?token=${token}`;
+/**
+ * 是否允许「客户端指定未授权返回码为 200」时的匿名请求。
+ * 仅当客户端显式请求「先装后登录」（MCP-Unauthorized-Status: 200）时才启用，默认（无该头）不启用。
+ * 允许匿名的有三类：
+ *   1. 通知类（notifications/*，无响应，按协议本就不要求鉴权）；
+ *   2. 握手 / 发现类方法（initialize / ping / tools|resources|prompts/list），安装与枚举工具所需；
+ *   3. 公开工具调用（server_info / login / register_user），未登录也能拿到登录入口或一键注册。
+ * 其余（尤其是受保护工具的 tools/call）仍要求登录。
+ */
+function isAnonymousEligible(body: unknown): boolean {
+  const messages: unknown[] = Array.isArray(body) ? body : [body];
+  if (messages.length === 0) return false;
+  return messages.every((m) => {
+    if (!m || typeof m !== 'object') return false;
+    const msg = m as { method?: unknown; params?: unknown };
+    const method = msg.method;
+    if (typeof method !== 'string') return false;
+    if (method.startsWith('notifications/')) return true;
+    if (
+      method === 'initialize' ||
+      method === 'ping' ||
+      method === 'tools/list' ||
+      method === 'resources/list' ||
+      method === 'prompts/list'
+    ) {
+      return true;
+    }
+    if (method === 'tools/call') {
+      const name = (msg.params as { name?: unknown } | undefined)?.name;
+      return typeof name === 'string' && PUBLIC_MCP_TOOLS.has(name);
+    }
+    return false;
+  });
+}
+
+/**
+ * 读取客户端指定的「未授权返回码」。
+ *
+ * 标准 MCP 约定未授权返回 **401**（触发 OAuth 发现），故默认 401。
+ * 客户端若想「先装后登录」（装好客户端、列完工具，真正调用受保护工具时再提示登录），
+ * 可在请求头带 `MCP-Unauthorized-Status: 200`，本服务则对可匿名请求放行、
+ * 对不可匿名请求返回 200 + 引导文案（而非 401）。仅接受 200 / 401，其余按默认 401 处理。
+ */
+function getUnauthorizedStatus(req: Request): number {
+  const raw = req.headers['mcp-unauthorized-status'];
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  return v === '200' ? 200 : 401;
+}
+
+function oauthSuccessHtml(user: User, token: string, base: string): string {
+  const profileUrl = `${base}/profile?token=${token}`;
   return page({
     title: 'GitHub 登录成功',
     base,
@@ -700,28 +752,35 @@ export function createApp() {
     const user = authenticateUserRequest(req);
     const base = deriveBase(req);
 
-    // —— 标准 MCP 授权发现：未鉴权一律返回 401 + WWW-Authenticate ——
-    // 这是 revert 旧版「未授权也返回 200」后的默认行为。标准 MCP 客户端（Codex / Claude Desktop /
-    // Cursor 等）只有在收到 401 时才会去读 /.well-known/oauth-protected-resource 并启动 OAuth 流程；
-    // 永远返回 200 会让客户端一路绿灯、压根不触发登录发现。仅通知类（notifications/*，无响应、
-    // 按协议本就不要求鉴权）放行，避免打断初始化。web 客户端则在 401 响应里拿到「如何登录」的提示。
-    // 用 MCP_DEMO_REQUIRE_AUTH=off 可恢复旧的匿名握手。
-    if (req.method === 'POST' && !user && requireAuthForMcp() && !isNotificationOnly(req.body)) {
-      res
-        .status(401)
-        .setHeader('WWW-Authenticate', wwwAuthenticate(base))
-        .json({
-          jsonrpc: '2.0',
-          error: {
-            code: -32000,
-            message:
-              '需要登录后才能调用受保护工具（whoami / my_stats / search_repos 等）。' +
-              '可先调用 login 工具获取登录入口，或调用 register_user 一键注册拿到令牌；' +
-              `也可按 WWW-Authenticate 头里的 resource_metadata 走标准 OAuth 2.1 流程，或打开 ${base}/setup 查看接入说明。`,
-          },
-          id: null,
-        });
-      return;
+    // —— 标准 MCP 授权发现：未鉴权默认 401；客户端可指定返回码 ——
+    // 默认（不带头）按 MCP 标准返回 401 + WWW-Authenticate，让客户端（Codex / Claude Desktop /
+    // Cursor 等）据此启动 OAuth 发现；永远返回 200 会让客户端不触发登录发现。
+    // 客户端若想「先装后登录」，可带请求头 `MCP-Unauthorized-Status: 200`：此时可匿名请求
+    // （握手/发现/公开工具 server_info|login|register_user）放行，不可匿名的（受保护工具）返回
+    // 200 + 引导文案。仅通知类（notifications/*，无响应、本就不要求鉴权）两种模式都放行。
+    // 用 MCP_DEMO_REQUIRE_AUTH=off 可恢复完全匿名逃生通道。
+    if (req.method === 'POST' && !user && requireAuthForMcp()) {
+      const anonMode = getUnauthorizedStatus(req) === 200;
+      const allowed = isNotificationOnly(req.body) || (anonMode && isAnonymousEligible(req.body));
+      if (!allowed) {
+        const status = anonMode ? 200 : 401;
+        res
+          .status(status)
+          .setHeader('WWW-Authenticate', wwwAuthenticate(base))
+          .json({
+            jsonrpc: '2.0',
+            error: {
+              code: -32000,
+              message:
+                '需要登录后才能调用受保护工具（whoami / my_stats / search_repos 等）。' +
+                '可先调用 login 工具获取登录入口，或调用 register_user 一键注册拿到令牌；' +
+                `也可按 WWW-Authenticate 头里的 resource_metadata 走标准 OAuth 2.1 流程，或打开 ${base}/setup 查看接入说明。`,
+            },
+            id: null,
+          });
+        return;
+      }
+      // anonMode 且可匿名：作为匿名请求继续执行（user 保持 null，由公开工具返回登录入口/数据）
     }
 
     // —— RFC 8707：校验令牌受众（aud） ——
