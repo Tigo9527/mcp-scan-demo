@@ -273,6 +273,51 @@ describe('MCP demo server', () => {
   });
 });
 
+describe('ConfluxScan 工具必须登录后才能调用（防回归）', () => {
+  // 这两个工具底层是公开只读的 ConfluxScan API，但调用入口必须登录（已从 PUBLIC_MCP_TOOLS 移除）。
+  // 回归保护：防止被重新加回公开集合后，匿名客户端直接拿到链上数据。
+  const scanTools = ['list_cfx_transfers', 'list_latest_transactions'] as const;
+
+  for (const name of scanTools) {
+    it(`匿名 tools/call ${name} 默认模式返回 401（不泄露数据）`, async () => {
+      const res = await fetch(`${base}/mcp`, {
+        method: 'POST',
+        headers: { 'Content-Type': JSON_RPC, Accept: 'application/json, text/event-stream' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: { name, arguments: { limit: 1 } },
+        }),
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it(`匿名 tools/call ${name} 在 anonMode 下返回错误引导而非真实数据`, async () => {
+      const res = await fetch(`${base}/mcp`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': JSON_RPC,
+          Accept: 'application/json, text/event-stream',
+          'MCP-Unauthorized-Status': '200',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: { name, arguments: { limit: 1 } },
+        }),
+      });
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as { result?: { isError?: boolean }; error?: unknown };
+      // 要么顶层 error，要么 result.isError —— 总之不能出现真实链上数据（如 code:0 / total）
+      const body = JSON.stringify(json);
+      expect(json.error ?? json.result?.isError).toBeTruthy();
+      expect(body).not.toContain('"code":0');
+    });
+  }
+});
+
 describe('MCP-Unauthorized-Status 参数（客户端指定未授权返回码）', () => {
   const post = (body: unknown, status?: string): Promise<Response> => {
     const headers: Record<string, string> = {
