@@ -6,6 +6,6 @@
     "type": "http",
     "url": "https://mcp-demo.confluxscan.org/mcp"
   },
-  "author": "agent3k",
-  "homepage": "https://cnb.cool/agent3k/mcp-demo"
+  "author": "mcp-demo",
+  "homepage": "https://mcp-demo.confluxscan.org"
 }

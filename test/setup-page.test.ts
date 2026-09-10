@@ -186,8 +186,8 @@ describe('aiaw.app 服务清单配置（/setup）', () => {
     for (const m of list) {
       expect(m.transport.url).toBe(`${base}/mcp`);
       expect(m.transport.type).toBe('http');
-      expect(m.author).toBe('agent3k');
-      expect(m.homepage).toBe('https://cnb.cool/agent3k/mcp-demo');
+      expect(m.author).toBe('mcp-demo');
+      expect(m.homepage).toBe('https://mcp-demo.confluxscan.org');
     }
   });
 

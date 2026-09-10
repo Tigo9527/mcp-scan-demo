@@ -123,8 +123,8 @@ const AIAW_CONFIG_FALLBACK = {
   title: 'MCP Demo',
   description: '示例 MCP 服务：提供账号登录、用户信息查询、仓库搜索等工具，支持 OAuth 2.1 授权登录。',
   transport: { type: 'http', url: 'https://mcp-demo.confluxscan.org/mcp' },
-  author: 'agent3k',
-  homepage: 'https://cnb.cool/agent3k/mcp-demo',
+  author: 'mcp-demo',
+  homepage: 'https://mcp-demo.confluxscan.org',
 };
 
 /**
