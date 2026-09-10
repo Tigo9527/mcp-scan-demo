@@ -116,35 +116,57 @@ function curlInitialize(base: string): string {
   return `curl -N -X POST ${base}/mcp \\\n  -H 'Content-Type: application/json' \\\n  -H 'Accept: application/json, text/event-stream' \\\n  -d '${payload}'`;
 }
 
+/** mcp-config-aiaw.json 的内置副本，文件读不到时兜底，保证 /setup 永不崩。 */
+const AIAW_CONFIG_FALLBACK = {
+  id: 'mcp-demo',
+  title: 'MCP Demo',
+  description: '示例 MCP 服务：提供账号登录、用户信息查询、仓库搜索等工具，支持 OAuth 2.1 授权登录。',
+  transport: { type: 'http', url: 'https://mcp-demo.confluxscan.org/mcp' },
+  author: 'agent3k',
+  homepage: 'https://cnb.cool/agent3k/mcp-demo',
+};
+
 /**
- * 读取 mcp-config-aiaw.json（aiaw.app 服务清单格式）原文，用于在 /setup 页面展示可复制。
- * 优先按运行位置解析文件，全部失败则回退到内置副本，保证页面永不崩。
+ * 生成 aiaw.app 等「服务清单」格式配置（id / title / description / transport / author / homepage）。
+ *
+ * 模板取自仓库根目录的 mcp-config-aiaw.json（读不到则用内置副本），并把 transport.url 换成
+ * **当前访问域名**——页面上其余配置都按访问域名生成，清单里的固定域名在多域名部署下会张冠李戴。
+ *
+ * withUnauthorizedStatus=true 时追加 `MCP-Unauthorized-Status: 200` 请求头（「先装后登录」模式）。
  */
-function loadAiawConfigJson(): string {
-  const fallback = JSON.stringify(
-    {
-      id: 'mcp-demo',
-      title: 'MCP Demo',
-      description: '示例 MCP 服务：提供账号登录、用户信息查询、仓库搜索等工具，支持 OAuth 2.1 授权登录。',
-      transport: { type: 'http', url: 'https://mcp-demo.confluxscan.org/mcp' },
-      author: 'agent3k',
-      homepage: 'https://cnb.cool/agent3k/mcp-demo',
-    },
-    null,
-    2,
-  );
+function aiawConfigJson(base: string, withUnauthorizedStatus = false): string {
+  const cfg: Record<string, unknown> = { ...AIAW_CONFIG_FALLBACK };
   const candidates = [
     path.resolve(process.cwd(), 'mcp-config-aiaw.json'),
     fileURLToPath(new URL('../mcp-config-aiaw.json', import.meta.url)),
   ];
   for (const p of candidates) {
     try {
-      return readFileSync(p, 'utf8').trim();
+      const parsed = JSON.parse(readFileSync(p, 'utf8')) as Record<string, unknown>;
+      if (parsed && typeof parsed === 'object') Object.assign(cfg, parsed);
+      break;
     } catch {
       /* 尝试下一个候选路径 */
     }
   }
-  return fallback;
+  const transport: Record<string, unknown> =
+    cfg.transport && typeof cfg.transport === 'object'
+      ? { ...(cfg.transport as Record<string, unknown>) }
+      : {};
+  transport.type = typeof transport.type === 'string' ? transport.type : 'http';
+  transport.url = `${base}/mcp`;
+  if (withUnauthorizedStatus) {
+    const headers: Record<string, unknown> =
+      transport.headers && typeof transport.headers === 'object'
+        ? { ...(transport.headers as Record<string, unknown>) }
+        : {};
+    headers['MCP-Unauthorized-Status'] = '200';
+    transport.headers = headers;
+  } else {
+    delete transport.headers;
+  }
+  cfg.transport = transport;
+  return JSON.stringify(cfg, null, 2);
 }
 
 /** 免登录的接入说明页（/setup）。刻意不含任何令牌，链接可直接发给新用户。 */
@@ -167,7 +189,20 @@ ${card(`
 <h3>🧩 aiaw.app 等「服务清单」格式客户端</h3>
 <p>以下为 <code>mcp-config-aiaw.json</code>（id / title / description / transport / author / homepage 清单格式），
 直接复制到 aiaw.app 的「添加服务」即可。</p>
-${copyBlock(loadAiawConfigJson(), { title: 'aiaw.app 服务清单（mcp-config-aiaw.json）' })}
+
+${step(1, '标准版：未授权返回 401，由客户端自动走 OAuth 登录')}
+${copyBlock(aiawConfigJson(base), {
+  title: '标准版清单（未授权 401，触发 OAuth 发现）',
+  hint: '推荐：客户端（Codex / Claude Desktop / Inspector 等）收到 401 + WWW-Authenticate 后会自动发现授权服务器并引导登录。',
+})}
+
+${step(2, '想「先装后登录」：加一个请求头即可')}
+${notice(`<b>想「先装后登录」（装好客户端、列完工具，调用受保护工具时再提示登录）？</b><br>
+在 MCP 请求头加 <code>MCP-Unauthorized-Status: 200</code> 即可，未授权时返回 200 + 引导而非 401。`)}
+${copyBlock(aiawConfigJson(base, true), {
+  title: '先装后登录版清单（未授权 200 + 引导）',
+  hint: '带该头后：握手 / 发现 / 公开工具（server_info、login、register_user、web3_login）放行；受保护工具返回 200 + 登录引导，而不是 401。仅接受 200 / 401 两个值，其它值按 401 处理。',
+})}
 `)}
 
 ${card(`
@@ -188,7 +223,8 @@ ${copyBlock(headerMcpConfigJson(base), {
   hint: '务必用 X-Authorization，不要用 Authorization —— 部署平台网关会改写 Authorization 头。',
 })}
 <p class="muted">想「先装后登录」（装好客户端、列完工具，调用受保护工具时再提示登录）？
-在 MCP 请求头加 <code>MCP-Unauthorized-Status: 200</code> 即可，未授权时返回 200 + 引导而非 401。</p>
+在 MCP 请求头加 <code>MCP-Unauthorized-Status: 200</code> 即可，未授权时返回 200 + 引导而非 401
+（清单格式的写法见上方第 2 步，请求头对所有客户端通用）。</p>
 `)}
 
 ${card(`

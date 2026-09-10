@@ -83,7 +83,24 @@
 ## 代码推送到 CNB（git push）— 反复踩坑，务必照此执行
 
 本仓库托管在 **`cnb.cool`**（注意：不是 `cnb.woa.com`，`cnb-connector` 技能文档里写的 woa.com 不适用本仓库）。
-推送走的是 remote URL 内嵌的 OAuth2 token：`https://oauth2:<token>@cnb.cool/agent3k/mcp-demo.git`。
+推送认证有两条路，**先走第 1 条**。
+
+### ✅ 首选：干净 remote URL + 平台 credential helper（2026-09 实测有效）
+
+环境里已配好全局凭据助手（`git config --global --get credential.helper` → `/usr/local/bin/git-credential-helper`），
+**remote 保持干净**即可，凭据由 helper 自动提供：
+
+```bash
+cd /workspace/mcp-demo
+git remote set-url origin https://cnb.cool/agent3k/mcp-demo.git   # 复位成不带 token 的形式
+GIT_TERMINAL_PROMPT=0 git push origin master
+```
+
+⚠️ **别没事就往 remote URL 里塞 token**：URL 内嵌凭据优先级高于 helper，一旦塞的是只读 token（见下），
+就会**盖掉 helper 里那个有写权限的**，表现为明明能推却报 `Repository Not Found`。
+排查推送失败时，先把 remote 复位再试一次，比折腾 token 快得多。
+
+### 备选：手工取 OAuth token 内嵌（仅当 helper 失效）
 
 ⚠️ **禁区：不要自己 curl 内部 token 端点。** `http://cnb-apikey.agent-gateway.auth-proxy.local/_internal/accesstoken`
 返回的是**只读 deploy token**（JSON 的 `data` 字段，且只绑定到别的仓库）。用它 push 会一直报
@@ -92,6 +109,17 @@
 ✅ **正确做法：用 `cnb-connector` 技能取 token。** 它的 `get_token.sh cnb` 按候选顺序
 `cnb → cnb-apikey → enterprise_cnb-apikey` 取，解析的是 **`access_token`** 字段（这才是带本仓库权限的 OAuth token），
 导出到环境变量 `$CNB_TOKEN`。技能目录本环境在 `/root/.codebuddy/skills/cnb-connector`。
+
+⚠️ **`cnb` connector 可能返回 404（授权失效），此时脚本会静默回退到 `cnb-apikey` 并"成功"返回**——
+拿到的是只读 token，push 必失败。先确认拿的是哪个 connector：
+
+```bash
+for c in cnb cnb-apikey enterprise_cnb-apikey; do
+  curl -s -o /dev/null -w "$c %{http_code}\n" --max-time 20 "http://$c.agent-gateway.auth-proxy.local/_internal/accesstoken"
+done
+```
+
+只有 `cnb` 返回 200 时取到的 token 才带写权限；否则别在这条路上耗，回到上面的 helper 方案。
 
 ⚠️ **token 必须 URL-encode 才能塞进 remote URL。** 该 `access_token` 含 `+/=/` 等 URL 不安全字符，
 直接拼进 URL 会触发 libcurl `Malformed input to a URL function`。用 `urllib.parse.quote(token, safe="")` 编码。
