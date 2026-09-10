@@ -34,8 +34,6 @@ export const PUBLIC_MCP_TOOLS = new Set([
   'login',
   'register_user',
   'web3_login',
-  'list_cfx_transfers',
-  'list_latest_transactions',
 ]);
 
 export function createMcpServer(): McpServer {
@@ -261,9 +259,22 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'list_cfx_transfers',
-    '使用 ConfluxScan API 列出某个 Conflux Core 账户的原生 CFX 转账记录（公开只读数据，无需登录）。',
+    '使用 ConfluxScan API 列出某个 Conflux Core 账户的原生 CFX 转账记录（公开只读数据，但本工具需要登录后调用）。',
     confluxscan.listCfxTransfersSchema.shape,
     async (input) => {
+      const user = getCurrentUser();
+      if (!user) {
+        const base = getRequestBaseUrl();
+        return {
+          isError: true,
+          ...text({
+            error: '未登录：当前请求未携带有效令牌，无法调用 list_cfx_transfers。',
+            action: '调用 login 工具获取登录入口，或调用 register_user 一键注册后再试。',
+            registerUrl: `${base}/register`,
+            githubAuthUrl: `${base}/auth/github`,
+          }),
+        };
+      }
       const data = await confluxscan.listCfxTransfers(
         input as confluxscan.ListCfxTransfersInput,
       );
@@ -273,9 +284,22 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'list_latest_transactions',
-    '使用 ConfluxScan 浏览器 API 列出 Conflux Core 的最新交易（公开只读数据，无需登录）。',
+    '使用 ConfluxScan 浏览器 API 列出 Conflux Core 的最新交易（公开只读数据，但本工具需要登录后调用）。',
     confluxscan.listLatestTransactionsSchema.shape,
     async (input) => {
+      const user = getCurrentUser();
+      if (!user) {
+        const base = getRequestBaseUrl();
+        return {
+          isError: true,
+          ...text({
+            error: '未登录：当前请求未携带有效令牌，无法调用 list_latest_transactions。',
+            action: '调用 login 工具获取登录入口，或调用 register_user 一键注册后再试。',
+            registerUrl: `${base}/register`,
+            githubAuthUrl: `${base}/auth/github`,
+          }),
+        };
+      }
       const data = await confluxscan.listLatestTransactions(
         input as confluxscan.ListLatestTransactionsInput,
       );

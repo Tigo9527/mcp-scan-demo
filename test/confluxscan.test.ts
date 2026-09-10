@@ -7,7 +7,7 @@
  *  - epoch / timestamp 区间校验在发起请求前短路抛错；
  *  - 业务 code !== 0 与 HTTP 非 2xx 都抛错；
  *  - 可用环境变量覆盖 API 基地址；
- *  - 两个工具已注册进 PUBLIC_MCP_TOOLS（无需登录即可调用）。
+ *  - 两个工具已退出 PUBLIC_MCP_TOOLS，需登录后才能调用。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as confluxscan from '../src/confluxscan.js';
@@ -124,9 +124,9 @@ describe('list_latest_transactions（ConfluxScan 浏览器 API）', () => {
   });
 });
 
-describe('公开工具注册', () => {
-  it('两个 conflux scan 工具在 PUBLIC_MCP_TOOLS 中（无需登录即可调用）', () => {
-    expect(PUBLIC_MCP_TOOLS.has('list_cfx_transfers')).toBe(true);
-    expect(PUBLIC_MCP_TOOLS.has('list_latest_transactions')).toBe(true);
+describe('登录保护', () => {
+  it('两个 conflux scan 工具不在 PUBLIC_MCP_TOOLS 中（需登录后才能调用）', () => {
+    expect(PUBLIC_MCP_TOOLS.has('list_cfx_transfers')).toBe(false);
+    expect(PUBLIC_MCP_TOOLS.has('list_latest_transactions')).toBe(false);
   });
 });
