@@ -9,6 +9,7 @@ import { getCurrentUser, getRequestBaseUrl } from '../auth/context.js';
 import * as auth from '../auth/manager.js';
 import { isGitHubConfigured } from '../auth/github.js';
 import { getUserStats } from '../stats.js';
+import * as confluxscan from '../confluxscan.js';
 
 const text = (obj: unknown) => ({
   content: [{ type: 'text' as const, text: JSON.stringify(obj, null, 2) }],
@@ -23,10 +24,19 @@ const TOOL_NAMES = [
   'web3_login',
   'my_stats',
   'search_repos',
+  'list_cfx_transfers',
+  'list_latest_transactions',
 ];
 
 /** 无需登录即可调用的公开工具（供未登录客户端安装后获取登录入口 / 一键注册）。 */
-export const PUBLIC_MCP_TOOLS = new Set(['server_info', 'login', 'register_user', 'web3_login']);
+export const PUBLIC_MCP_TOOLS = new Set([
+  'server_info',
+  'login',
+  'register_user',
+  'web3_login',
+  'list_cfx_transfers',
+  'list_latest_transactions',
+]);
 
 export function createMcpServer(): McpServer {
   const server = new McpServer({
@@ -246,6 +256,30 @@ export function createMcpServer(): McpServer {
           description: r.description,
         })),
       });
+    },
+  );
+
+  server.tool(
+    'list_cfx_transfers',
+    '使用 ConfluxScan API 列出某个 Conflux Core 账户的原生 CFX 转账记录（公开只读数据，无需登录）。',
+    confluxscan.listCfxTransfersSchema.shape,
+    async (input) => {
+      const data = await confluxscan.listCfxTransfers(
+        input as confluxscan.ListCfxTransfersInput,
+      );
+      return text(data);
+    },
+  );
+
+  server.tool(
+    'list_latest_transactions',
+    '使用 ConfluxScan 浏览器 API 列出 Conflux Core 的最新交易（公开只读数据，无需登录）。',
+    confluxscan.listLatestTransactionsSchema.shape,
+    async (input) => {
+      const data = await confluxscan.listLatestTransactions(
+        input as confluxscan.ListLatestTransactionsInput,
+      );
+      return text(data);
     },
   );
 
