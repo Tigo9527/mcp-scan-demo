@@ -69,8 +69,18 @@ async function actAsUser(authorizationUrl: URL): Promise<string> {
     body: new URLSearchParams({ ...hidden, username: USERNAME, password: PASSWORD }).toString(),
     redirect: 'manual',
   });
-  if (res.status !== 302) throw new Error(`登录后返回 ${res.status}，期望 302`);
-  const code = new URL(res.headers.get('location')!).searchParams.get('code');
+  let callbackUrl: string | null = null;
+  if (res.status === 302) {
+    callbackUrl = res.headers.get('location');
+  } else if (res.status === 200) {
+    const html = await res.text();
+    const match = html.match(/id="cb-link"[^>]+href="([^"]+)"/);
+    callbackUrl = match ? decodeEntities(match[1]) : null;
+  } else {
+    throw new Error(`登录后返回 ${res.status}，期望 200 或 302`);
+  }
+  if (!callbackUrl) throw new Error('授权完成页没有回调地址');
+  const code = new URL(callbackUrl).searchParams.get('code');
   if (!code) throw new Error('回调里没有 code');
   return code;
 }
