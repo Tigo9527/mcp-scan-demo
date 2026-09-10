@@ -222,22 +222,34 @@ describe('MCP demo server', () => {
     expect(typeof json.users).toBe('number');
   });
 
-  it('GET /mcp opens an SSE stream (200 text/event-stream) for SSE clients', async () => {
-    // 无状态模式下 GET 用于建立 SSE 流；官方 SDK 初始化后会 GET /mcp 打开该流。
-    // 正确行为：返回 200 + text/event-stream（而非过去误报的 405），让客户端不再在 console 打印红字。
-    const res = await fetch(`${base}/mcp`, {
-      headers: { Accept: 'text/event-stream' },
-    });
-    expect(res.status).toBe(200);
-    expect(res.headers.get('content-type') ?? '').toContain('text/event-stream');
-    // 主动收尾，避免测试进程悬挂在常驻流上
-    await res.body?.cancel();
+  it('GET /mcp returns 405 Method Not Allowed with Allow: POST', async () => {
+    // 无状态模式下本端点只接受 POST；GET 直接 405（与 Streamable HTTP 规范及 Tavily 一致），
+    // 不再尝试开 SSE 流（无会话无法向客户端主动推送）。
+    const res = await fetch(`${base}/mcp`);
+    expect(res.status).toBe(405);
+    expect(res.headers.get('allow')).toBe('POST');
+    expect(res.status).not.toBe(401); // 关键不变量：GET 绝不能 401，否则 SSE 客户端会触发 OAuth 死循环
   });
 
-  it('GET /mcp without Accept: text/event-stream is 406 (Not Acceptable)', async () => {
-    // 不带 SSE Accept 头的 GET 是非法探测，应按规范返回 406（而不是 405）
-    const res = await fetch(`${base}/mcp`, { headers: { Accept: 'application/json' } });
-    expect(res.status).toBe(406);
+  it('GET /mcp with any Accept header still 405 (no SSE / 406 path)', async () => {
+    const res = await fetch(`${base}/mcp`, { headers: { Accept: 'text/event-stream' } });
+    expect(res.status).toBe(405);
+    const res2 = await fetch(`${base}/mcp`, { headers: { Accept: 'application/json' } });
+    expect(res2.status).toBe(405);
+  });
+
+  it('未登录 401 的 JSON-RPC 错误回显请求 id（而非 null）', async () => {
+    // 标准 JSON-RPC 要求 error.id 与对应请求一致；过去写死 null 会让严格客户端无法关联错误。
+    const res = await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'my_stats', arguments: {} } }),
+    });
+    expect(res.status).toBe(401);
+    const json = (await res.json()) as { jsonrpc: string; error: { code: number }; id: number };
+    expect(json.jsonrpc).toBe('2.0');
+    expect(json.error.code).toBe(-32000);
+    expect(json.id).toBe(7);
   });
 
   it('register page escapes HTML (no XSS via username)', async () => {
