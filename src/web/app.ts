@@ -538,6 +538,20 @@ function getUnauthorizedStatus(req: Request): number {
   return v === '200' ? 200 : 401;
 }
 
+/**
+ * 从 JSON-RPC 请求体提取 id，供错误响应回显。
+ * 标准 JSON-RPC 要求 error 对象的 id 与对应请求一致；过去这里写死 null，
+ * 导致请求带 id=1 却回 id=null，部分严格客户端无法把错误关联回请求。
+ * 支持单条对象与批量数组（数组回显首个元素的 id）。
+ */
+function extractJsonRpcId(body: unknown): number | string | null {
+  const messages: unknown[] = Array.isArray(body) ? body : [body];
+  const first = messages[0];
+  if (!first || typeof first !== 'object') return null;
+  const id = (first as { id?: unknown }).id;
+  return typeof id === 'number' || typeof id === 'string' ? id : null;
+}
+
 function oauthSuccessHtml(user: User, token: string, base: string): string {
   const profileUrl = `${base}/profile?token=${token}`;
   return page({
@@ -814,13 +828,25 @@ export function createApp() {
   // 鉴权：默认要求登录，未携带有效令牌直接 401 + WWW-Authenticate（见下方 requireAuthForMcp 分支）；
   // 设 MCP_DEMO_REQUIRE_AUTH=off 可恢复旧的匿名握手（user 为 null，由工具返回注册引导）。
   const handleMcp = wrap(async (req: Request, res: Response) => {
-    // 无状态模式下 GET /mcp 用于建立 SSE 流（客户端接收服务端主动消息，如 notifications/*），
-    // DELETE /mcp 用于终止会话。过去为「防止常驻 SSE 连接累积」显式返回 405，但官方 SDK 的
-    // StreamableHTTPClientTransport 在初始化后会尝试 GET /mcp 打开 SSE 流：收到 405 虽被
-    // 「静默忽略」（视为服务端不支持 SSE），浏览器却仍会在 console 打印红字 net::ERR_ABORTED 405，
-    // 看起来像故障。这里改为把 GET/DELETE 也交给 StreamableHTTPServerTransport，由它按规范返回
-    // 200 (text/event-stream) / 406 等，既消除误报，又兼容需要 SSE 的客户端；无状态 + 无会话
-    // 意味着多副本间无需共享 SSE 状态，单条流空闲时随客户端断开自动回收（见下方 res.on('close')）。
+    // 无状态模式下本端点只接受 POST 发送 JSON-RPC 请求。GET/DELETE 等非 POST 方法直接 405，
+    // 与 Streamable HTTP 规范及 Tavily 等参考实现一致（405 Method Not Allowed 语义比过去的 406 更准）。
+    // 不再把 GET 交给 transport 去开 SSE 流：无状态 + 无会话意味着服务端无法向客户端主动推送
+    // （notifications/* 等本就由客户端在 POST 响应里收），强行开 SSE 只是空流。
+    if (req.method !== 'POST') {
+      res
+        .status(405)
+        .setHeader('Allow', 'POST')
+        .setHeader('Content-Type', 'application/json')
+        .json({
+          jsonrpc: '2.0',
+          error: {
+            code: -32000,
+            message: '仅支持 POST 方法，请使用 POST /mcp 发送 JSON-RPC 请求。',
+          },
+          id: null,
+        });
+      return;
+    }
     const user = authenticateUserRequest(req);
     const base = deriveBase(req);
 
@@ -848,7 +874,7 @@ export function createApp() {
                 '可先调用 login 工具获取登录入口，或调用 register_user 一键注册拿到令牌；' +
                 `也可按 WWW-Authenticate 头里的 resource_metadata 走标准 OAuth 2.1 流程，或打开 ${base}/setup 查看接入说明。`,
             },
-            id: null,
+            id: extractJsonRpcId(req.body),
           });
         return;
       }
@@ -883,7 +909,7 @@ export function createApp() {
                   base,
                 )}。请重新走一次授权流程获取绑定本资源的令牌。`,
             },
-            id: null,
+            id: extractJsonRpcId(req.body),
           });
         return;
       }
