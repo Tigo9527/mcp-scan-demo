@@ -79,3 +79,42 @@
 - 统计断言请用**增量**（`diffStats`）而不是绝对值：统计是模块级单例，跨用例会累积。
 - GitHub OAuth 也可在 Admin 管理端 → GitHub 设置里在线配置，无需重启。
   未配置时一键注册与令牌鉴权不受影响。
+
+## 代码推送到 CNB（git push）— 反复踩坑，务必照此执行
+
+本仓库托管在 **`cnb.cool`**（注意：不是 `cnb.woa.com`，`cnb-connector` 技能文档里写的 woa.com 不适用本仓库）。
+推送走的是 remote URL 内嵌的 OAuth2 token：`https://oauth2:<token>@cnb.cool/agent3k/mcp-demo.git`。
+
+⚠️ **禁区：不要自己 curl 内部 token 端点。** `http://cnb-apikey.agent-gateway.auth-proxy.local/_internal/accesstoken`
+返回的是**只读 deploy token**（JSON 的 `data` 字段，且只绑定到别的仓库）。用它 push 会一直报
+`Repository Not Found` / `could not read Username`——token 有效但无本仓库权限，极具迷惑性。
+
+✅ **正确做法：用 `cnb-connector` 技能取 token。** 它的 `get_token.sh cnb` 按候选顺序
+`cnb → cnb-apikey → enterprise_cnb-apikey` 取，解析的是 **`access_token`** 字段（这才是带本仓库权限的 OAuth token），
+导出到环境变量 `$CNB_TOKEN`。技能目录本环境在 `/root/.codebuddy/skills/cnb-connector`。
+
+⚠️ **token 必须 URL-encode 才能塞进 remote URL。** 该 `access_token` 含 `+/=/` 等 URL 不安全字符，
+直接拼进 URL 会触发 libcurl `Malformed input to a URL function`。用 `urllib.parse.quote(token, safe="")` 编码。
+
+完整命令（token 全程走环境变量，禁止 `echo $CNB_TOKEN` / 明文写值）：
+
+```bash
+# 1. 取 token（导出 $CNB_TOKEN）
+source /root/.codebuddy/skills/cnb-connector/scripts/get_token.sh cnb
+
+# 2. 进入仓库
+cd /workspace/mcp-demo
+
+# 3. 编码并写入 remote URL（关键：encode）
+TOKEN_ENC=$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1],safe=""))' "$CNB_TOKEN")
+git remote set-url origin "https://oauth2:${TOKEN_ENC}@cnb.cool/agent3k/mcp-demo.git"
+
+# 4. 推送
+git push origin master
+```
+
+- **token 会过期**。遇到 401/403 或 `Repository Not Found`，重跑第 1 步取新 token 再 push 即可；
+  无需改动工作区。
+- 一次成功后 remote URL 已带 token，短期内同会话可直推；跨会话/过期后重跑 `get_token.sh cnb`。
+- `git push` 会卡在等密码提示（无 TTY）→ 用 `GIT_TERMINAL_PROMPT=0` 或在 remote URL 已带 token 时直接推。
+- 安全红线：禁止把 token 值打印到 stdout、禁止明文写进任何命令/文件。
