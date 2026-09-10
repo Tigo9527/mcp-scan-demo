@@ -155,3 +155,63 @@ describe('MCP 工具里的接入信息', () => {
     expect(data.mcpConfig).not.toHaveProperty('token');
   });
 });
+
+describe('aiaw.app 服务清单配置（/setup）', () => {
+  /** 把页面里所有 <pre><code> 块反转义，挑出能解析成 JSON 的 */
+  function jsonBlocks(html: string): Array<Record<string, any>> {
+    const out: Array<Record<string, any>> = [];
+    for (const m of html.matchAll(/<pre><code>([\s\S]*?)<\/code><\/pre>/g)) {
+      const raw = m[1]
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&amp;/g, '&');
+      try {
+        out.push(JSON.parse(raw) as Record<string, any>);
+      } catch {
+        /* 不是 JSON 的块（curl 命令等）跳过 */
+      }
+    }
+    return out;
+  }
+
+  const manifests = (html: string) => jsonBlocks(html).filter((o) => o.id === 'mcp-demo');
+
+  it('清单里的 transport.url 跟随当前访问域名（不是写死的线上域名）', async () => {
+    const { status, body } = await get('/setup');
+    expect(status).toBe(200);
+    const list = manifests(body);
+    expect(list.length).toBeGreaterThanOrEqual(1);
+    for (const m of list) {
+      expect(m.transport.url).toBe(`${base}/mcp`);
+      expect(m.transport.type).toBe('http');
+      expect(m.author).toBe('agent3k');
+      expect(m.homepage).toBe('https://cnb.cool/agent3k/mcp-demo');
+    }
+  });
+
+  it('标准版不带请求头，「先装后登录」版带 MCP-Unauthorized-Status: 200', async () => {
+    const { body } = await get('/setup');
+    const list = manifests(body);
+    const plain = list.filter((m) => !m.transport.headers);
+    const withHeader = list.filter((m) => m.transport.headers?.['MCP-Unauthorized-Status'] === '200');
+    expect(plain.length).toBeGreaterThanOrEqual(1);
+    expect(withHeader.length).toBeGreaterThanOrEqual(1);
+    expect(withHeader[0].transport.url).toBe(`${base}/mcp`);
+  });
+
+  it('页面上明示「先装后登录」的提示文案', async () => {
+    const { body } = await get('/setup');
+    expect(body).toContain('先装后登录');
+    expect(body).toContain('MCP-Unauthorized-Status');
+    expect(body).toContain('未授权时返回 200 + 引导而非 401');
+  });
+
+  it('清单配置依然不含任何令牌', async () => {
+    const { body } = await get('/setup');
+    for (const m of manifests(body)) {
+      expect(JSON.stringify(m)).not.toMatch(TOKEN_RE);
+    }
+  });
+});
