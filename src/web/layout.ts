@@ -5,6 +5,7 @@
  * `registeredHtml` 直接把 `?username=` 的值插进 HTML，服务部署在公网上等于可直接利用的 XSS。
  * 这里统一收口：所有页面共用同一份 CSS，并且**所有插值一律 esc()**（含属性位置）。
  */
+import { serverInfo } from '../version.js';
 const CSS = `
 :root{--fg:#1a1a1a;--muted:#6b7280;--line:#e5e7eb;--bg:#fff;--soft:#f6f8fa;--acc:#0969da;--ok:#1f883d;--warn:#bf8700;--err:#cf222e}
 *{box-sizing:border-box}
@@ -50,6 +51,8 @@ nav a.active{opacity:1;font-weight:600;color:var(--acc)}
 .badge.err{color:var(--err);border-color:#f3c3c6;background:#fdecec}
 .notice{border-left:4px solid var(--warn);background:#fdf6e3;padding:10px 14px;border-radius:0 8px 8px 0;margin:14px 0;font-size:.92em}
 .empty{color:var(--muted);padding:16px 0}
+.version-footer{margin-top:32px;padding-top:12px;border-top:1px solid var(--line);
+  color:var(--muted);font-size:.85em}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .codeblock{border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:12px 0}
 .codeblock .cb-head{display:flex;align-items:center;gap:8px;background:var(--soft);
@@ -154,7 +157,17 @@ export function page(opts: PageOptions): string {
   return `<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(opts.title)}</title><style>${CSS}</style></head>
-<body>${nav}${opts.body}${COPY_SCRIPT}</body></html>`;
+<body>${nav}${opts.body}${versionFooter()}${COPY_SCRIPT}</body></html>`;
+}
+
+/**
+ * 页脚版本信息：所有经 page() 渲染的页面都会带上，方便用户/排查时一眼看到
+ * 当前运行的版本、提交与启动时间。动态值均经 esc() 转义。
+ */
+function versionFooter(): string {
+  return `<footer class="version-footer">v${esc(serverInfo.version)} · commit <code>${esc(
+    serverInfo.commit,
+  )}</code> · 启动 ${fmtTime(serverInfo.startedAt)}</footer>`;
 }
 
 export function card(inner: string, cls = ''): string {

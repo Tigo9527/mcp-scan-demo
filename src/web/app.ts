@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { config } from '../config.js';
+import { serverInfo } from '../version.js';
 import * as auth from '../auth/manager.js';
 import * as store from '../auth/store.js';
 import { authContext, baseUrlContext } from '../auth/context.js';
@@ -306,7 +307,7 @@ ${card(`
 <a class="btn small alt" href="${esc(base)}/admin">Admin 管理端</a></div>
 `)}
 
-<p class="muted">健康检查：<a href="${esc(base)}/health">${esc(base)}/health</a> · 当前实例 <code>${esc(config.instanceId)}</code></p>
+<p class="muted">健康检查：<a href="${esc(base)}/health">${esc(base)}/health</a> · 当前实例 <code>${esc(config.instanceId)}</code> · 版本 v${esc(serverInfo.version)}（commit ${esc(serverInfo.commit)}）</p>
 `,
   });
 }
@@ -620,7 +621,8 @@ export function createApp() {
     res.json({
       ok: true,
       name: 'mcp-demo',
-      version: '1.0.0',
+      version: serverInfo.version,
+      commit: serverInfo.commit,
       instanceId: config.instanceId,
       startedAt: config.startedAt,
       uptimeSeconds: Math.round(process.uptime()),
