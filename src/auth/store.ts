@@ -32,6 +32,8 @@ export interface User {
   createdAt: string;
   /** 最近一次携带有效令牌访问本实例的时间 */
   lastSeenAt?: string;
+  /** 最近一次连接所用 MCP 客户端的自我声明（initialize 握手的 clientInfo：name/version），用于识别客户端来源 */
+  clientInfo?: { name?: string; version?: string; lastSeenAt: string };
   /** 内部字段：最近一次物化所用的 JWT iat（秒），用于保证数据单向前进 */
   tokenIat?: number;
 }
@@ -313,6 +315,22 @@ export function duplicatedUsernames(): Set<string> {
     counts.set(k, (counts.get(k) ?? 0) + 1);
   }
   return new Set([...counts.entries()].filter(([, n]) => n > 1).map(([k]) => k));
+}
+
+/**
+ * 记录用户最近一次连接的 MCP 客户端特征（initialize 握手的 clientInfo：name/version）。
+ * 匿名 / 未找到的用户静默忽略。仅保留最近一次（如需多客户端留痕可后续改为列表）。
+ */
+export function recordClientInfo(id: string, info: { name?: string; version?: string }): void {
+  ensureLoaded();
+  const user = byId.get(id);
+  if (!user) return;
+  user.clientInfo = {
+    name: info.name,
+    version: info.version,
+    lastSeenAt: new Date().toISOString(),
+  };
+  markDirty();
 }
 
 /** 测试用：清空内存态（不落盘） */

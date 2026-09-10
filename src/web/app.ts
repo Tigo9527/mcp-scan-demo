@@ -14,7 +14,7 @@ import { serverInfo } from '../version.js';
 import * as auth from '../auth/manager.js';
 import * as store from '../auth/store.js';
 import { authContext, baseUrlContext } from '../auth/context.js';
-import { createMcpServer, PUBLIC_MCP_TOOLS } from '../mcp/server.js';
+import { createMcpServer, captureClientInfo, PUBLIC_MCP_TOOLS } from '../mcp/server.js';
 import {
   createState,
   exchangeAndLogin,
@@ -991,6 +991,18 @@ export function createApp() {
           stats.recordResponse(message);
           return originalSend(message, options);
         };
+
+        // 初始化握手（Initialization Phase）：客户端在 initialize 请求的 clientInfo 字段声明自己是谁
+        // （name + version）。本项目为无状态模式（每次 /mcp 请求都会新建 McpServer 实例），initialize 与
+        // 随后的 initialized 通知分属不同请求、不同实例，SDK 的 oninitialized 通知回调彼时拿不到
+        // clientInfo，故直接在 HTTP 入口读取 initialize 请求体采集，最可靠。
+        const rb = req.body as
+          | { method?: string; params?: { clientInfo?: { name?: string; version?: string } } }
+          | Array<{ method?: string; params?: { clientInfo?: { name?: string; version?: string } } }>;
+        const initMsg = Array.isArray(rb) ? rb.find((m) => m.method === 'initialize') : rb;
+        if (initMsg?.method === 'initialize' && initMsg.params?.clientInfo) {
+          captureClientInfo(user, initMsg.params.clientInfo);
+        }
 
         const server = createMcpServer();
         await server.connect(transport);

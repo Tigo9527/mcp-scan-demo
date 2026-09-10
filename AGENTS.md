@@ -82,7 +82,7 @@
 
 ## 代码推送到 CNB（git push）— 反复踩坑，务必照此执行
 
-本仓库托管在 **`cnb.cool`**（注意：不是 `cnb.woa.com`，`cnb-connector` 技能文档里写的 woa.com 不适用本仓库）。
+本仓库托管在某个代码平台（域名用占位 `<平台域名>` 表示）。推送凭据通过平台连接器（如 `cnb-connector` 技能）获取，而非写死域名。
 推送认证有两条路，**先走第 1 条**。
 
 ### ✅ 首选：干净 remote URL + 平台 credential helper（2026-09 实测有效）
@@ -92,7 +92,7 @@
 
 ```bash
 cd /workspace/mcp-demo
-git remote set-url origin https://cnb.cool/agent3k/mcp-demo.git   # 复位成不带 token 的形式
+git remote set-url origin https://<平台域名>/<owner>/<仓库名>.git   # 复位成不带 token 的形式（示例占位）
 GIT_TERMINAL_PROMPT=0 git push origin master
 ```
 
@@ -135,7 +135,7 @@ cd /workspace/mcp-demo
 
 # 3. 编码并写入 remote URL（关键：encode）
 TOKEN_ENC=$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1],safe=""))' "$CNB_TOKEN")
-git remote set-url origin "https://oauth2:${TOKEN_ENC}@cnb.cool/agent3k/mcp-demo.git"
+git remote set-url origin "https://oauth2:${TOKEN_ENC}@<平台域名>/<owner>/<仓库名>.git"
 
 # 4. 推送
 git push origin master

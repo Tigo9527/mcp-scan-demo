@@ -146,6 +146,10 @@ describe('MCP demo server', () => {
       arguments: {},
     });
     expect(whoami.result?.content?.[0]?.text).toContain('bob');
+    // 初始化握手声明的 clientInfo 应被采集并写入用户附属信息，whoami 可见
+    const whoamiJson = JSON.parse(whoami.result?.content?.[0]?.text ?? '{}');
+    expect(whoamiJson.clientInfo?.name).toBe('vitest-client');
+    expect(whoamiJson.clientInfo?.version).toBe('1.0.0');
   });
 
   it('register_user tool returns a fresh token', async () => {

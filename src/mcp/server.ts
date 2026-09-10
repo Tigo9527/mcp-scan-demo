@@ -7,6 +7,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { getCurrentUser, getRequestBaseUrl } from '../auth/context.js';
 import * as auth from '../auth/manager.js';
+import { recordClientInfo, getUser, type User } from '../auth/store.js';
 import { isGitHubConfigured } from '../auth/github.js';
 import { getUserStats } from '../stats.js';
 import * as confluxscan from '../confluxscan.js';
@@ -131,13 +132,18 @@ export function createMcpServer(): McpServer {
           }),
         };
       }
+      // 基本信息用鉴权上下文的用户即可；clientInfo 等「附属信息」是运行时采集、只存在 store 里，
+      // 故从这里读最新的一份（JWT 还原的对象不含它）。跨副本尚未物化时回退到鉴权用户。
+      const stored = getUser(user.id);
+      const info = stored ?? user;
       return text({
-        id: user.id,
-        username: user.username,
-        email: user.email,
-        provider: user.provider,
-        githubLogin: user.githubLogin ?? null,
-        createdAt: user.createdAt,
+        id: info.id,
+        username: info.username,
+        email: info.email,
+        provider: info.provider,
+        githubLogin: info.githubLogin ?? null,
+        createdAt: info.createdAt,
+        clientInfo: info.clientInfo ?? null,
       });
     },
   );
@@ -308,4 +314,25 @@ export function createMcpServer(): McpServer {
   );
 
   return server;
+}
+
+/**
+ * 采集 MCP 客户端在初始化握手阶段通过 initialize 请求的 clientInfo 字段（name + version）声明的身份，
+ * 记录日志（区分 Claude Desktop / Cursor / 自定义客户端，便于调试遥测），并在已登录时把该特征
+ * 写入当前用户的「附属信息」clientInfo。
+ *
+ * 为什么不在 SDK 的 `oninitialized` 回调里做：本项目为无状态模式（每次 /mcp 请求都新建 McpServer 实例），
+ * 客户端的 initialize 与随后的 initialized 通知分属不同请求、不同实例，而 SDK 仅在收到 initialized 通知时
+ * 触发 `oninitialized`，彼时实例未经历 initialize、拿不到 clientInfo。故改为在 HTTP 入口处读取 initialize
+ * 请求体采集（见 src/web/app.ts 的 handleMcp），此处只暴露采集函数。
+ */
+export function captureClientInfo(user: User | null, clientInfo?: { name?: string; version?: string }): void {
+  console.log('[mcp-demo] MCP client initialized', {
+    name: clientInfo?.name ?? null,
+    version: clientInfo?.version ?? null,
+    user: user?.username ?? null,
+  });
+  if (user && (clientInfo?.name || clientInfo?.version)) {
+    recordClientInfo(user.id, { name: clientInfo.name, version: clientInfo.version });
+  }
 }
