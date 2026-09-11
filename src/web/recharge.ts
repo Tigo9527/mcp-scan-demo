@@ -210,7 +210,8 @@ ${rows.length === 0
   function poll(hash){
     var tries=0,timer=null;
     function step(){
-      fetch(claimUrl,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({txHash:hash,token:token})})
+      // 令牌走 X-Authorization 头：本服务只认这个头 / ?token= 查询参数，不读 body 里的 token
+      fetch(claimUrl,{method:'POST',headers:{'Content-Type':'application/json','X-Authorization':'Bearer '+token},body:JSON.stringify({txHash:hash})})
       .then(function(r){return r.json().catch(function(){return {};});})
       .then(function(d){
         if(d.ok){
