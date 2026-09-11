@@ -44,8 +44,10 @@ export interface UserBilling {
   userId: string | null;
   /** 累计已消耗点数 */
   used: number;
-  /** 当前余额（免费额度 - 已消耗）。匿名桶恒为 0（无意义）。 */
+  /** 当前余额（免费额度 + 充值 - 已消耗）。匿名桶恒为 0（无意义）。 */
   balance: number;
+  /** 累计充值所得点数（不含赠送额度） */
+  recharged: number;
   firstSeenAt: string;
   lastSeenAt: string;
 }
@@ -59,6 +61,8 @@ export interface TotalBilling {
   users: number;
   /** 匿名桶累计消耗 */
   anonymousUsed: number;
+  /** 所有用户累计充值点数 */
+  rechargedTotal: number;
   /** 每个用户的明细，按已消耗降序 */
   byUser: Array<{ userId: string | null; username: string; used: number; balance: number }>;
 }
@@ -77,7 +81,14 @@ let loaded = false;
 let state: Record<string, UserBilling> = {};
 
 function emptyEntry(userId: string | null, iso: string): UserBilling {
-  return { userId, used: 0, balance: userId ? config.billingFreeCredits : 0, firstSeenAt: iso, lastSeenAt: iso };
+  return {
+    userId,
+    used: 0,
+    balance: userId ? config.billingFreeCredits : 0,
+    recharged: 0,
+    firstSeenAt: iso,
+    lastSeenAt: iso,
+  };
 }
 
 function ensureLoaded(): void {
@@ -92,6 +103,7 @@ function ensureLoaded(): void {
         userId: v.userId ?? (k === ANONYMOUS ? null : k),
         used: Number(v.used) || 0,
         balance: Number(v.balance) || 0,
+        recharged: Number(v.recharged) || 0,
         firstSeenAt: v.firstSeenAt ?? new Date().toISOString(),
         lastSeenAt: v.lastSeenAt ?? v.firstSeenAt ?? new Date().toISOString(),
       };
@@ -163,6 +175,30 @@ export function getBalance(userId: string): number {
   return entry?.balance ?? config.billingFreeCredits;
 }
 
+/**
+ * 充值入账：给指定用户加余额，并累计 `recharged`。
+ *
+ * 与 `recordCall` 不同，这里是**显式业务操作**（不是埋点），出错必须让调用方知道，
+ * 否则会出现「链上已扣款、点数没到账」的静默故障，故参数非法时直接抛错。
+ */
+export function creditBalance(userId: string, points: number): UserBilling {
+  ensureLoaded();
+  if (!userId) throw new Error('creditBalance 需要已登录用户 id');
+  const n = Number(points);
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new Error(`充值点数必须为正数，收到：${String(points)}`);
+  }
+  const now = new Date().toISOString();
+  const entry = state[userId] ?? emptyEntry(userId, now);
+  entry.userId = userId;
+  entry.balance += n;
+  entry.recharged += n;
+  entry.lastSeenAt = now;
+  state[userId] = entry;
+  markDirty();
+  return structuredClone(entry);
+}
+
 /** 聚合总计费数据（本实例视角） */
 export function getTotalBilling(): TotalBilling {
   ensureLoaded();
@@ -170,6 +206,7 @@ export function getTotalBilling(): TotalBilling {
   let balance = 0;
   let users = 0;
   let anonymousUsed = 0;
+  let rechargedTotal = 0;
   const rows: Array<{ userId: string | null; username: string; used: number; balance: number }> = [];
 
   for (const [k, v] of Object.entries(state)) {
@@ -179,13 +216,14 @@ export function getTotalBilling(): TotalBilling {
       rows.push({ userId: null, username: '匿名', used: v.used, balance: 0 });
     } else {
       balance += v.balance;
+      rechargedTotal += v.recharged ?? 0;
       users += 1;
       rows.push({ userId: k, username: v.userId ? k : k, used: v.used, balance: v.balance });
     }
   }
 
   rows.sort((a, b) => b.used - a.used);
-  return { used, balance, users, anonymousUsed, byUser: rows };
+  return { used, balance, users, anonymousUsed, rechargedTotal, byUser: rows };
 }
 
 /** 定价表（用于页面展示与测试） */

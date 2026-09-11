@@ -8,6 +8,7 @@ import {
   getToolCost,
   getPricingTable,
   resetBilling,
+  creditBalance,
 } from '../src/billing.js';
 import { config } from '../src/config.js';
 
@@ -97,5 +98,24 @@ describe('计费账本（billing）', () => {
     const table = getPricingTable();
     expect(table[0]!.cost).toBeGreaterThanOrEqual(table[table.length - 1]!.cost);
     expect(table.find((t) => t.tool === 'list_cfx_transfers')?.cost).toBe(10);
+  });
+
+  it('creditBalance 充值加余额并累计 recharged', () => {
+    recordCall('u-r', 'search_repos'); // -5
+    const before = getBalance('u-r');
+    const entry = creditBalance('u-r', 100);
+    expect(entry.recharged).toBe(100);
+    expect(entry.balance).toBe(before + 100);
+    // 再充一次，累加而非覆盖
+    creditBalance('u-r', 50);
+    expect(getUserBilling('u-r')!.recharged).toBe(150);
+    expect(getTotalBilling().rechargedTotal).toBe(150);
+  });
+
+  it('creditBalance 拒绝非法入参（不静默吞掉充值）', () => {
+    expect(() => creditBalance('', 10)).toThrow();
+    expect(() => creditBalance('u-r2', 0)).toThrow();
+    expect(() => creditBalance('u-r2', Number.NaN)).toThrow();
+    expect(getTotalBilling().rechargedTotal).toBe(0);
   });
 });

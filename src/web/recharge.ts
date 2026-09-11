@@ -1,0 +1,311 @@
+/**
+ * 用户充值页 `/recharge`：
+ *   GET  /recharge          展示收款配置 + MetaMask 转账 + 手动补单 + 自己的充值历史
+ *   POST /recharge          提交交易哈希入账（幂等；同一哈希只入账一次）
+ *
+ * 与 /profile 一样靠 `authenticateUserRequest` 识别用户（令牌走 `?token=` 或 X-Authorization），
+ * 未登录时给出引导而不是 401 —— 这是浏览器页面，不是 MCP 端点。
+ *
+ * 「交易完成即到账」：MetaMask 返回哈希后前端立刻回填并提交补单；原生币即使尚未打包
+ * 也按 tx.value 入账（状态 pending），ERC20 需要等打包读 Transfer 事件，故可能提示稍后重试。
+ */
+import { Router, type Request, type Response } from 'express';
+import {
+  authenticateUserRequest,
+  deriveBase,
+  requireSameOrigin,
+  resolveUserToken,
+  wrap,
+} from './http.js';
+import { badge, card, copyBlock, esc, fmtTime, notice, page, table } from './layout.js';
+import {
+  getRechargeConfig,
+  listRecharges,
+  submitRechargeTx,
+  type RechargeConfig,
+} from '../recharge.js';
+import * as billing from '../billing.js';
+
+/** ERC20 transfer(address,uint256) 的 4 字节选择器，前端据此拼 calldata */
+const TRANSFER_SELECTOR = '0xa9059cbb';
+
+function noAuthHtml(base: string): string {
+  return page({
+    title: '充值',
+    base,
+    active: 'recharge',
+    body: `
+<h1>💰 充值点数</h1>
+${notice('请先登录后再充值。可在 URL 后追加你的令牌：<code>/recharge?token=mcp_demo_xxx</code>')}
+<div class="row"><a class="btn" href="${esc(base)}/login">去登录</a>
+<a class="btn alt" href="${esc(base)}/">返回首页</a></div>
+`,
+  });
+}
+
+function notConfiguredHtml(base: string): string {
+  return page({
+    title: '充值',
+    base,
+    active: 'recharge',
+    body: `
+<h1>💰 充值点数</h1>
+${notice('管理员尚未配置收款地址，暂时无法充值。')}
+<p class="muted">配置路径：Admin 管理端 → 充值设置（支持 EVM 原生币与 ERC20）。</p>
+<div class="row"><a class="btn alt" href="${esc(base)}/">返回首页</a></div>
+`,
+  });
+}
+
+function rechargeHtml(opts: {
+  base: string;
+  token: string;
+  cfg: RechargeConfig;
+  rows: ReturnType<typeof listRecharges>;
+  balance: number;
+  recharged: number;
+  message?: { kind: 'ok' | 'err'; text: string };
+}): string {
+  const { base, cfg, rows } = opts;
+  const isToken = Boolean(cfg.tokenAddress);
+  const decimals = cfg.tokenDecimals ?? 18;
+  const symbol = isToken ? cfg.tokenSymbol || 'ERC20' : 'ETH（原生币）';
+
+  const meta = {
+    recipient: cfg.recipient,
+    tokenAddress: cfg.tokenAddress,
+    decimals,
+    selector: TRANSFER_SELECTOR,
+  };
+
+  return page({
+    title: '充值',
+    base,
+    active: 'recharge',
+    body: `
+<h1>💰 充值点数</h1>
+${opts.message ? notice(esc(opts.message.text)) : ''}
+
+${card(`
+<div class="grid">
+<div class="stat"><div class="v">${esc(String(opts.balance))}</div><div class="l">当前余额（点）</div></div>
+<div class="stat"><div class="v">${esc(String(opts.recharged))}</div><div class="l">累计充值（点）</div></div>
+<div class="stat"><div class="v">${esc(String(cfg.rate))}</div><div class="l">汇率（1 ${esc(isToken ? (cfg.tokenSymbol || '代币') : 'ETH')} = ? 点）</div></div>
+</div>
+`)}
+
+<h2>收款信息</h2>
+${card(`
+${table(
+  ['项', '值'],
+  [
+    ['收款地址', `<code>${esc(cfg.recipient)}</code>`],
+    ['收取币种', esc(symbol)],
+    [
+      '代币合约',
+      isToken ? `<code>${esc(cfg.tokenAddress)}</code>` : '<span class="muted">原生币（无需合约）</span>',
+    ],
+    [
+      '代币元数据',
+      isToken
+        ? `${esc(cfg.tokenName || '—')}（${esc(cfg.tokenSymbol || '—')}）· decimals ${esc(String(decimals))}`
+        : '<span class="muted">—</span>',
+    ],
+    ['链 ID', cfg.chainId ? `<code>${esc(cfg.chainId)}</code>` : '<span class="muted">未指定</span>'],
+  ],
+)}
+${copyBlock(cfg.recipient, { title: '收款地址（复制）' })}
+`)}
+
+<h2>方式一：用 MetaMask 转账</h2>
+${card(`
+<label for="amount">转账数量（${esc(isToken ? (cfg.tokenSymbol || '代币') : 'ETH')}）</label>
+<input id="amount" type="text" inputmode="decimal" placeholder="0.01" style="max-width:240px">
+<p class="muted">按当前汇率 1 ≈ ${esc(String(cfg.rate))} 点，预计到账 <b id="estimate">0</b> 点。</p>
+<button id="send" class="btn" type="button">用钱包发送</button>
+<p id="status" class="muted" style="margin-top:10px"></p>
+<p class="muted">点击后会拉起钱包确认；确认成功即自动回填哈希并提交补单，无需等待打包。</p>
+`)}
+
+<h2>方式二：手动补单</h2>
+${card(`
+<p class="muted">已经在别处转过账？直接填交易哈希补单即可。同一哈希只会入账一次。</p>
+<form id="recharge-form" method="post" action="${esc(base)}/recharge">
+<input type="hidden" name="token" value="${esc(opts.token)}">
+<label for="txHash">交易哈希（0x…）</label>
+<input id="txHash" name="txHash" placeholder="0x + 64 位十六进制" style="max-width:520px">
+<button class="btn" type="submit">提交补单</button>
+</form>
+`)}
+
+<h2>我的充值历史</h2>
+${rows.length === 0
+  ? '<div class="empty">还没有充值记录。</div>'
+  : table(
+      ['时间', '币种', '数量', '点数', '状态', '交易哈希'],
+      rows.map((r) => [
+        esc(fmtTime(r.createdAt)),
+        esc(r.token),
+        esc(r.amount),
+        String(r.points),
+        badge(r.status === 'pending' ? '待确认' : '已到账', r.status === 'pending' ? 'warn' : 'ok'),
+        `<code>${esc(r.txHash.slice(0, 10))}…${esc(r.txHash.slice(-6))}</code>`,
+      ]),
+    )}
+
+<div class="row" style="margin-top:20px">
+<a class="btn alt" href="${esc(`${base}/profile?token=${encodeURIComponent(opts.token)}`)}">我的 Profile</a>
+<a class="btn alt" href="${esc(base)}/">返回首页</a>
+</div>
+
+<script>
+(function(){
+  var cfg=${JSON.stringify(meta)};
+  var rate=${JSON.stringify(cfg.rate)};
+  var amountEl=document.getElementById('amount');
+  var estEl=document.getElementById('estimate');
+  var btn=document.getElementById('send');
+  var status=document.getElementById('status');
+  var hashEl=document.getElementById('txHash');
+  var form=document.getElementById('recharge-form');
+  var setStatus=function(s){status.textContent=s;};
+
+  function toRaw(v){
+    // 用字符串解析避免浮点误差：'0.1' * 10^18
+    var s=String(v||'').trim();
+    if(!/^\\d*(\\.\\d*)?$/.test(s)||s===''||s==='.') return null;
+    var neg=s[0]==='-'; if(neg) s=s.slice(1);
+    var parts=s.split('.');
+    var int=parts[0]||'0';
+    var frac=(parts[1]||'');
+    if(frac.length>cfg.decimals) frac=frac.slice(0,cfg.decimals);
+    while(frac.length<cfg.decimals) frac+='0';
+    var raw=BigInt(int||'0')*BigInt('1'+new Array(cfg.decimals+1).join('0'))+BigInt(frac||'0');
+    return neg?-raw:raw;
+  }
+  function padHex(hex,len){ while(hex.length<len) hex='0'+hex; return hex; }
+  function padWord(hex){ return padHex(hex,64); }
+
+  if(amountEl){
+    amountEl.addEventListener('input',function(){
+      var raw=toRaw(amountEl.value);
+      estEl.textContent = raw===null? '0' : String(Number(raw)/Math.pow(10,cfg.decimals)*rate|0);
+    });
+  }
+  if(!window.ethereum){
+    setStatus('未检测到钱包（MetaMask 等）。请安装钱包，或用下方手动补单。');
+    btn.disabled=true; return;
+  }
+  btn.addEventListener('click',async function(){
+    var raw=toRaw(amountEl.value);
+    if(raw===null||raw<=0n){setStatus('请输入正确的转账数量。');return;}
+    btn.disabled=true;setStatus('请在钱包中确认交易…');
+    try{
+      var accts=await window.ethereum.request({method:'eth_requestAccounts'});
+      var from=accts&&accts[0];
+      if(!from){setStatus('未能获取钱包地址。');btn.disabled=false;return;}
+      var params;
+      if(cfg.tokenAddress){
+        var data=cfg.selector+padWord(cfg.recipient.toLowerCase().replace(/^0x/,''))+padWord(raw.toString(16));
+        params={from:from,to:cfg.tokenAddress,data:data};
+      }else{
+        params={from:from,to:cfg.recipient,value:'0x'+raw.toString(16)};
+      }
+      var hash=await window.ethereum.request({method:'eth_sendTransaction',params:[params]});
+      setStatus('交易已提交：'+hash+'，正在补单…');
+      hashEl.value=hash;
+      form.submit();
+    }catch(e){
+      setStatus('失败：'+(e&&e.message?e.message:String(e)));
+      btn.disabled=false;
+    }
+  });
+})();
+</script>
+`,
+  });
+}
+
+export function createRechargeRouter(): Router {
+  const router = Router();
+
+  router.get(
+    '/recharge',
+    wrap((req: Request, res: Response) => {
+      // 令牌可能出现在 URL 里，禁止 Referer 外泄
+      res.setHeader('Referrer-Policy', 'no-referrer');
+      const base = deriveBase(req);
+      const user = authenticateUserRequest(req);
+      if (!user) {
+        res.type('html').send(noAuthHtml(base));
+        return;
+      }
+      const cfg = getRechargeConfig();
+      if (!cfg) {
+        res.type('html').send(notConfiguredHtml(base));
+        return;
+      }
+
+      const q = req.query as Record<string, unknown>;
+      const token = resolveUserToken(req) ?? '';
+      const message =
+        q.ok === '1'
+          ? { kind: 'ok' as const, text: String(q.msg ?? '充值已到账。') }
+          : q.err
+            ? { kind: 'err' as const, text: String(q.err) }
+            : undefined;
+
+      const bill = billing.getUserBilling(user.id);
+      res.type('html').send(
+        rechargeHtml({
+          base,
+          token,
+          cfg,
+          rows: listRecharges({ userId: user.id }),
+          balance: bill?.balance ?? 0,
+          recharged: bill?.recharged ?? 0,
+          message,
+        }),
+      );
+    }),
+  );
+
+  router.post(
+    '/recharge',
+    requireSameOrigin,
+    wrap(async (req: Request, res: Response) => {
+      const base = deriveBase(req);
+      const user = authenticateUserRequest(req);
+      if (!user) {
+        res.redirect(302, `${base}/login`);
+        return;
+      }
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const txHash = String(body.txHash ?? '').trim();
+      const token = String(body.token ?? '').trim();
+
+      const back = new URL(`${base}/recharge`);
+      if (token) back.searchParams.set('token', token);
+
+      try {
+        const { record, duplicated } = await submitRechargeTx({
+          userId: user.id,
+          username: user.username,
+          txHash,
+        });
+        back.searchParams.set('ok', '1');
+        back.searchParams.set(
+          'msg',
+          duplicated
+            ? `该交易此前已入账（${record.points} 点），未重复加分。`
+            : `充值成功，到账 ${record.points} 点。`,
+        );
+      } catch (err) {
+        back.searchParams.set('err', err instanceof Error ? err.message : '补单失败');
+      }
+      res.redirect(302, back.toString());
+    }),
+  );
+
+  return router;
+}

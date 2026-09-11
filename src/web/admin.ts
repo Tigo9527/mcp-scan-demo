@@ -22,6 +22,7 @@ import * as authManager from '../auth/manager.js';
 import { getGithub, getRaw, resetGithub, setGithub } from '../settings.js';
 import { getStatsSnapshot } from '../stats.js';
 import * as billing from '../billing.js';
+import * as recharge from '../recharge.js';
 import { persistStatus } from '../persist.js';
 import { deriveBase, originOk, readCookie, requestOrigin, requireSameOrigin, wrap } from './http.js';
 import {
@@ -192,6 +193,7 @@ function dashboardHtml(base: string, adminToken: string): string {
   const gh = getGithub();
   const ps = persistStatus();
   const b = billing.getTotalBilling();
+  const rc = recharge.getRechargeStats();
 
   const topTools = Object.entries(s.byTool)
     .sort((a, b) => b[1] - a[1])
@@ -233,6 +235,7 @@ ${statCard(s.counters.errors, '错误响应数')}
 ${statCard(users.total, '用户数')}
 ${statCard(Object.keys(s.byUser).length, '活跃调用方', '含匿名桶')}
 ${statCard(b.used, '总计费点数', `所有用户累计消耗；匿名 ${b.anonymousUsed}`)}
+${statCard(b.rechargedTotal, '总充值点数', `累计充值入账；共 ${rc.count} 笔`)}
 </div>
 <p class="muted">统计起点 ${esc(fmtTime(s.since))} · 落盘 ${ps.enabled ? `已启用（${esc(ps.dir)}）` : '已关闭'}${ps.lastError ? ` · <span style="color:var(--err)">最近错误：${esc(ps.lastError)}</span>` : ''}</p>
 
@@ -286,6 +289,8 @@ ${recent.length === 0 ? '<div class="empty">暂无记录。</div>' : table(['时
 <div class="row" style="margin-top:20px">
 <a class="btn alt" href="${esc(adminHref('/admin/users', adminToken))}">用户管理</a>
 <a class="btn alt" href="${esc(adminHref('/admin/settings', adminToken))}">GitHub 设置</a>
+<a class="btn alt" href="${esc(adminHref('/admin/recharge', adminToken))}">充值记录</a>
+<a class="btn alt" href="${esc(adminHref('/admin/recharge-settings', adminToken))}">充值设置</a>
 <a class="btn small" href="${esc(adminHref('/admin/api/stats', adminToken))}">统计 JSON</a>
 <a class="btn small" href="${esc(adminHref('/admin/logout', adminToken))}">退出</a>
 </div>
@@ -487,6 +492,152 @@ ${card(`
   });
 }
 
+function rechargeSettingsHtml(
+  base: string,
+  adminToken: string,
+  saved?: boolean,
+  error?: string,
+): string {
+  const cfg = recharge.getRechargeConfig();
+  const c = cfg ?? { recipient: '', rpcUrl: '', rate: 0, tokenAddress: '', chainId: '' };
+  const isToken = Boolean(c.tokenAddress);
+
+  return page({
+    title: 'Admin · 充值设置',
+    base,
+    active: 'admin',
+    adminToken,
+    body: `
+<h1>充值设置（Crypto → 点数）</h1>
+${saved ? notice('已保存，立即生效（无需重启）。') : ''}
+${error ? notice(esc(error)) : ''}
+
+${card(`
+<h3>当前生效配置</h3>
+${table(
+  ['项', '值'],
+  [
+    ['收款地址', c.recipient ? `<code>${esc(c.recipient)}</code>` : '<span class="muted">未配置</span>'],
+    ['RPC', c.rpcUrl ? `<code>${esc(c.rpcUrl)}</code>` : '<span class="muted">未配置</span>'],
+    ['收取资产', isToken ? `ERC20 <code>${esc(c.tokenAddress)}</code>` : badge('原生币', '')],
+    [
+      '代币元数据',
+      isToken
+        ? `${esc(c.tokenName || '—')}（${esc(c.tokenSymbol || '—')}）· decimals ${esc(String(c.tokenDecimals ?? 18))}`
+        : '<span class="muted">—</span>',
+    ],
+    ['汇率', c.rate ? `1 ${esc(isToken ? (c.tokenSymbol || '代币') : 'ETH')} = ${esc(String(c.rate))} 点` : '<span class="muted">未配置</span>'],
+    ['链 ID', c.chainId ? `<code>${esc(c.chainId)}</code>` : '<span class="muted">未指定</span>'],
+  ],
+)}
+<p class="muted">最近更新：${esc(fmtTime(c.updatedAt))}${c.updatedBy ? ` 由 ${esc(c.updatedBy)}` : ''}</p>
+`)}
+
+<h2>修改</h2>
+${card(`
+<form method="post" action="${esc(adminHref('/admin/recharge-settings', adminToken))}">
+<label for="recipient">收款地址（0x…）</label>
+<input id="recipient" name="recipient" value="${esc(c.recipient)}" placeholder="0x 开头 40 位十六进制">
+
+<label for="rpcUrl">RPC 地址</label>
+<input id="rpcUrl" name="rpcUrl" value="${esc(c.rpcUrl)}" placeholder="https://eth.llamarpc.com">
+
+<label for="tokenAddress">ERC20 合约地址（留空则收原生币）</label>
+<input id="tokenAddress" name="tokenAddress" value="${esc(c.tokenAddress)}" placeholder="留空 = 收取原生币">
+<p class="muted">填写后保存时会**自动读取**链上的 name / symbol / decimals 并回显；读不到则<b>不保存</b>，方便直接修正。</p>
+
+<label for="rate">汇率（1 个代币兑换多少点数）</label>
+<input id="rate" name="rate" type="number" step="any" min="0" value="${c.rate ? esc(String(c.rate)) : ''}" placeholder="如 1000">
+
+<label for="chainId">链 ID（可选，仅展示）</label>
+<input id="chainId" name="chainId" value="${esc(c.chainId)}" placeholder="如 1 / 56 / 1030">
+
+<button class="btn" type="submit">保存</button>
+</form>
+`)}
+
+<div class="row" style="margin-top:20px">
+<a class="btn alt" href="${esc(adminHref('/admin', adminToken))}">← 返回仪表盘</a>
+<a class="btn alt" href="${esc(adminHref('/admin/recharge', adminToken))}">充值记录</a>
+</div>
+`,
+  });
+}
+
+function rechargeRecordsHtml(
+  base: string,
+  adminToken: string,
+  filter: { userId?: string; kind?: string; status?: string },
+): string {
+  const rows = recharge.listRecharges({
+    userId: filter.userId || undefined,
+    kind: (filter.kind || '') as '' | 'native' | 'erc20',
+    status: (filter.status || '') as '' | 'credited' | 'pending',
+  });
+  const s = recharge.getRechargeStats(rows);
+
+  return page({
+    title: 'Admin · 充值记录',
+    base,
+    active: 'admin',
+    adminToken,
+    body: `
+<h1>充值记录</h1>
+<div class="grid">
+${statCard(s.count, '笔数', '当前筛选结果')}
+${statCard(s.points, '点数合计')}
+${statCard(s.nativePoints, '原生币充值')}
+${statCard(s.erc20Points, 'ERC20 充值')}
+${statCard(s.pendingCount, '待确认', '已入账但链上尚未打包')}
+</div>
+
+<h2>筛选</h2>
+${card(`
+<form method="get" action="${esc(adminHref('/admin/recharge', adminToken))}">
+<label for="userId">用户 ID</label>
+<input id="userId" name="userId" value="${esc(filter.userId ?? '')}" placeholder="留空 = 全部用户">
+<label for="kind">类型</label>
+<select id="kind" name="kind">
+<option value="">全部</option>
+<option value="native"${filter.kind === 'native' ? ' selected' : ''}>原生币</option>
+<option value="erc20"${filter.kind === 'erc20' ? ' selected' : ''}>ERC20</option>
+</select>
+<label for="status">状态</label>
+<select id="status" name="status">
+<option value="">全部</option>
+<option value="credited"${filter.status === 'credited' ? ' selected' : ''}>已到账</option>
+<option value="pending"${filter.status === 'pending' ? ' selected' : ''}>待确认</option>
+</select>
+<button class="btn" type="submit">筛选</button>
+<a class="btn alt" href="${esc(adminHref('/admin/recharge', adminToken))}">重置</a>
+</form>
+`)}
+
+<h2>明细</h2>
+${rows.length === 0
+  ? '<div class="empty">没有符合条件的充值记录。</div>'
+  : table(
+      ['时间', '用户', '类型', '币种', '数量', '点数', '状态', '交易哈希'],
+      rows.map((r) => [
+        esc(fmtTime(r.createdAt)),
+        `<a href="${esc(adminHref(`/admin/users/${encodeURIComponent(r.userId)}`, adminToken))}">${esc(r.username)}</a>`,
+        r.kind === 'native' ? badge('原生币', '') : badge('ERC20', ''),
+        esc(r.token),
+        esc(r.amount),
+        String(r.points),
+        badge(r.status === 'pending' ? '待确认' : '已到账', r.status === 'pending' ? 'warn' : 'ok'),
+        `<code>${esc(r.txHash.slice(0, 10))}…${esc(r.txHash.slice(-6))}</code>`,
+      ]),
+    )}
+
+<div class="row" style="margin-top:20px">
+<a class="btn alt" href="${esc(adminHref('/admin', adminToken))}">← 返回仪表盘</a>
+<a class="btn alt" href="${esc(adminHref('/admin/recharge-settings', adminToken))}">充值设置</a>
+</div>
+`,
+  });
+}
+
 // ---------- 路由 ----------
 
 export function createAdminRouter(): Router {
@@ -652,6 +803,50 @@ export function createAdminRouter(): Router {
     const target = new URL(adminHref('/admin/settings', token), base);
     target.searchParams.set('saved', '1');
     res.redirect(302, target.toString());
+  });
+
+  router.get('/admin/recharge-settings', requireAdmin, (req: Request, res: Response) => {
+    const token = resolveAdminToken(req) ?? '';
+    const saved = (req.query as Record<string, unknown>).saved === '1';
+    res.type('html').send(rechargeSettingsHtml(deriveBase(req), token, saved));
+  });
+
+  router.post(
+    '/admin/recharge-settings',
+    requireAdmin,
+    requireSameOrigin,
+    wrap(async (req: Request, res: Response) => {
+      const token = resolveAdminToken(req) ?? '';
+      const base = deriveBase(req);
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const str = (v: unknown) => String(v ?? '').trim();
+
+      const result = await recharge.setRechargeConfig({
+        recipient: str(body.recipient),
+        rpcUrl: str(body.rpcUrl),
+        tokenAddress: str(body.tokenAddress),
+        rate: Number(str(body.rate)),
+        chainId: str(body.chainId),
+      });
+
+      const target = new URL(adminHref('/admin/recharge-settings', token), base);
+      if (result.ok) target.searchParams.set('saved', '1');
+      else target.searchParams.set('err', result.error);
+      res.redirect(302, target.toString());
+    }),
+  );
+
+  router.get('/admin/recharge', requireAdmin, (req: Request, res: Response) => {
+    const token = resolveAdminToken(req) ?? '';
+    const q = req.query as Record<string, unknown>;
+    const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+    res.type('html').send(
+      rechargeRecordsHtml(deriveBase(req), token, {
+        userId: str(q.userId),
+        kind: str(q.kind),
+        status: str(q.status),
+      }),
+    );
   });
 
   router.post(

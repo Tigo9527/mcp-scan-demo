@@ -49,6 +49,7 @@ import { requireAuthForMcp, isBillingEnforced } from '../config.js';
 import * as billing from '../billing.js';
 import { createAdminRouter } from './admin.js';
 import { createProfileRouter } from './profile.js';
+import { createRechargeRouter } from './recharge.js';
 import { createAuthorizeRouter, completeAuthorize, type AuthorizeParams, type AuthorizeTicket } from '../oauth/authorize.js';
 import { completeAuthorizeFromTicket } from '../oauth/complete.js';
 import { createRegisterRouter } from '../oauth/register.js';
@@ -617,6 +618,8 @@ export function createApp() {
   app.use('/admin', express.urlencoded({ extended: false, limit: '32kb' }));
   // /oauth/authorize 的登录表单是 urlencoded；缺了它 POST 时 req.body 会是 undefined
   app.use('/oauth', express.urlencoded({ extended: false, limit: '32kb' }));
+  // /recharge 的补单表单同样是 urlencoded
+  app.use('/recharge', express.urlencoded({ extended: false, limit: '16kb' }));
 
   app.get('/health', (_req: Request, res: Response) => {
     res.json({
@@ -811,6 +814,9 @@ export function createApp() {
 
   // 用户 Profile
   app.use(createProfileRouter());
+
+  // 用户充值（Crypto → 点数）
+  app.use(createRechargeRouter());
 
   // Admin 管理端
   app.use(createAdminRouter());

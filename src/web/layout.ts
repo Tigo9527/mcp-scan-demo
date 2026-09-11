@@ -123,7 +123,7 @@ export interface PageOptions {
   /** 页面主体 HTML（调用方负责对所有动态值做 esc） */
   body: string;
   /** 导航栏高亮项 */
-  active?: 'home' | 'admin' | 'profile' | 'setup' | 'web3';
+  active?: 'home' | 'admin' | 'profile' | 'setup' | 'web3' | 'recharge';
   /** 对外基础地址，用于拼导航链接 */
   base?: string;
   /** admin 令牌：有值时 admin 内部链接会带上，保证网关不透传 Cookie 时也能正常跳转 */
@@ -144,6 +144,7 @@ export function page(opts: PageOptions): string {
     { href: `${base}/web3`, key: 'web3', label: 'web3 登录' },
     { href: `${base}/setup`, key: 'setup', label: '接入配置' },
     { href: `${base}/profile`, key: 'profile', label: '我的 Profile' },
+    { href: `${base}/recharge`, key: 'recharge', label: '充值' },
     { href: adminHref('/admin', opts.adminToken), key: 'admin', label: 'Admin 管理端' },
   ];
 
