@@ -55,7 +55,7 @@ export function createProfileRouter(): Router {
       .map((d) => ({ date: d, calls: days[d] as number }));
     const maxTool = Math.max(1, ...Object.values(tools));
 
-    // 计费账本（本实例视角）：余额/消耗，及定价表
+    // 计费账本：余额/消耗，及定价表
     const bill = billing.getUserBilling(user.id);
     const usedPoints = bill?.used ?? 0;
     const balancePoints = bill?.balance ?? config.billingFreeCredits;
@@ -72,7 +72,7 @@ export function createProfileRouter(): Router {
       ['用户 ID', `<code>${esc(user.id)}</code>`],
       ['注册时间', esc(fmtTime(user.createdAt))],
       ['最近活跃', esc(fmtTime(stat?.lastSeenAt ?? user.lastSeenAt))],
-      ['首次被本实例记录', esc(fmtTime(stat?.firstSeenAt))],
+      ['首次记录时间', esc(fmtTime(stat?.firstSeenAt))],
     ];
 
     const toolRows = Object.entries(tools)
@@ -110,16 +110,16 @@ ${statCard(Object.keys(tools).length, '使用过的工具数')}
 </div>
 ${toolRows.length > 0 ? `<h3>按工具分布</h3>${table(['工具', '次数', ''], toolRows)}` : '<div class="empty">还没有工具调用记录。</div>'}
 ${dayRows.length > 0 ? `<h3>最近 7 天</h3>${table(['日期', '请求数', ''], dayRows)}` : ''}
-<p class="muted">统计为<b>本实例视角</b>：部署平台是多副本的，数据不跨副本共享，因此这里只包含处理了你请求的那些实例（当前实例 <code>${esc(config.instanceId)}</code>）。</p>
+<p class="muted">统计口径：「请求总数」含 initialize / tools/list 等所有带 id 的请求，「工具调用次数」只算 tools/call；匿名请求不计入个人统计。</p>
 
 <h2>我的计费</h2>
 ${lowBalance ? notice('你的调用余额已用尽，收费工具（如 ConfluxScan 查询、search_repos）会被拒绝执行。请联系管理员充值，或登录获取新的额度。') : ''}
 <div class="grid">
-${statCard(balancePoints, '剩余额度', `本实例赠送 ${config.billingFreeCredits} 点`)}
+${statCard(balancePoints, '剩余额度', `注册赠送 ${config.billingFreeCredits} 点`)}
 ${statCard(usedPoints, '已消耗点数', '按调用累计')}
 </div>
 ${table(['工具', '单价'], pricing)}
-<p class="muted">计费为<b>本实例视角</b>：余额与消耗按实例分片记录（多副本各算各的）。免费工具不扣点；外部 API 类工具（ConfluxScan 查询、search_repos）单价较高。硬计费开启时余额耗尽将拒绝执行收费工具。</p>
+<p class="muted">免费工具不扣点；外部 API 类工具（ConfluxScan 查询、search_repos）单价较高。硬计费开启时余额耗尽将拒绝执行收费工具；充值可在「充值」页完成。</p>
 
 <h2>MCP 客户端配置</h2>
 ${card(`

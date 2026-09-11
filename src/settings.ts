@@ -33,7 +33,7 @@ export interface EffectiveGithubSettings {
   source: 'env' | 'admin';
 }
 
-/** GitHub 配置是全局项（OAuth 回调落到任一副本都必须一致），故不按实例分片 */
+/** GitHub 配置是全局项（`settings.json`，一份即可） */
 const FILE = 'settings';
 
 let loaded = false;

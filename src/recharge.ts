@@ -7,8 +7,8 @@
  * - **交易完成即到账**：MetaMask 返回哈希后立刻补单；原生币在 receipt 还没打包时（pending）
  *   也按 `tx.value` 入账，ERC20 必须读到 Transfer 事件才认（没有 receipt 无法知道金额）。
  * - **幂等**：同一 txHash 只入账一次，重复提交返回已有记录。
- * - **落盘**：配置是全局项（`recharge-settings`，仿 settings.ts，不按实例分片）；
- *   充值记录按实例分片 `recharge-<instanceId>.json`（与 billing / stats 同一模式）。
+ * - **落盘**：配置是全局项（`recharge-settings`，仿 settings.ts）；
+ *   充值记录单一文件 `recharge.json`（与 billing / stats 同一模式）。
  *
  * 金额一律用**最小单位的十进制字符串**存 `rawAmount`，另存人类可读的 `amount`，
  * 避免 JS number 在 18 位精度下失真。
@@ -143,7 +143,7 @@ const TRANSFER_IFACE = new Interface([
 const TRANSFER_TOPIC = keccakId('Transfer(address,address,uint256)');
 
 const SETTINGS_FILE = 'recharge-settings';
-const RECORD_FILE = `recharge-${config.instanceId}`;
+const RECORD_FILE = 'recharge';
 
 let settingsLoaded = false;
 let settings: RechargeConfig | null = null;

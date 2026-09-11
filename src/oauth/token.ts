@@ -3,7 +3,7 @@
  *
  * 支持两种 grant：`authorization_code`（强制 PKCE S256）与 `refresh_token`。
  * 全部状态都在票据里，服务端只额外维护一张**尽力而为**的「已用授权码」表：
- * 多副本下没有共享存储，这张表只覆盖本副本，真正的重放防线是
+ * 这张表只在当前进程内有效，真正的重放防线是
  * 「60 秒有效期 + PKCE」—— 攻击者必须同时截获授权码与 code_verifier。
  */
 import { Router, type Request, type Response } from 'express';
@@ -15,7 +15,7 @@ import { canonicalResourceUri } from './metadata.js';
 import { open } from './tickets.js';
 import { deriveBase, wrap } from '../web/http.js';
 
-/** jti → 过期时间（毫秒）。仅本副本有效，见文件头说明。 */
+/** jti → 过期时间（毫秒）。仅当前进程有效，见文件头说明。 */
 const usedCodes = new Map<string, number>();
 
 function pruneUsedCodes(): void {
@@ -53,7 +53,7 @@ function oauthError(
     .json({ error: code, error_description: description });
 }
 
-/** 按 id 找用户；跨副本可能查不到（用户是在别的副本注册的），退回用票据里的声明重建。 */
+/** 按 id 找用户；查不到时（例如数据目录被重置）退回用票据里的声明重建。 */
 function resolveUser(data: {
   sub?: string;
   username?: string;

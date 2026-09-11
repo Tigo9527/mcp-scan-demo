@@ -46,7 +46,8 @@
   ③ **绝不能**在 AS 元数据里声明 `client_id_metadata_document_supported`
   —— SDK 一见到它就走 CIMD，绕过我们的 DCR 端点。
 - **OAuth 状态一律走自包含加密票据（`src/oauth/tickets.ts`），不要改成「存起来再查」**：
-  多副本部署下 `persist.ts` 无锁无 CAS、数据按 `instanceId` 分片，副本 A 存的东西副本 B 查不到。
+  `persist.ts` 无锁无 CAS（并发写会互相覆盖）、`settings.json` 每个进程只读一次，
+  存进去的东西下次不一定读得到。
   票据用 HKDF 从 `JWT_SECRET` 派生密钥（不复用 HMAC 的），并用 AES-GCM 的 AAD 绑定用途
   （`dcr` / `code`），防止一枚 client_id 票据被当成授权码去换令牌。
 - **改了 OAuth 相关代码后必须同时跑 `npm test` 和 `npm run oauth:e2e`**。后者用官方 SDK 的
@@ -65,6 +66,10 @@
 - **`/setup` 是免登录的接入说明页，页面里绝不能出现任何令牌**（它是直接转发给新用户的）。
   同理首页 `/` 的配置块也只能用不含令牌的 `publicMcpConfigJson()`。
   `test/setup-page.test.ts` 用 `mcp_demo_` 正则锁住了这一点，改这两处后必须跑。
+- **落盘不要引入「多副本 / 分片」设计**：`src/persist.ts` 只认调用方给的固定 name，
+  数据集与文件一一对应（`users.json` / `stats.json` / `billing.json` / `recharge.json`）。
+  不要再搞 `instanceId` 后缀、按进程拆分文件名、启动合并分片这类东西；页面与接口文案里
+  也不要再写「本实例视角 / 数据不跨副本共享」之类的说明。
 - **所有 HTML 插值必须过 `esc()`**（src/web/layout.ts），包括属性位置。
   用户名来自用户输入，历史上这里出过 XSS。
 - **所有 async Express 路由必须用 `wrap()` 包一层**。Express 4 不捕获 async 的 rejection，

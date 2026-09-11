@@ -125,7 +125,7 @@ describe('account/password auth (manager)', () => {
     expect(payload.password).toBeUndefined();
   });
 
-  it('upsertById 不覆盖既有 passwordHash（跨副本物化安全）', () => {
+  it('upsertById 不覆盖既有 passwordHash（按需落库安全）', () => {
     const { user } = auth.registerWithPassword('mat_u1', 'password123');
     const rebuilt = auth.authenticate(auth.issueToken(user)); // 从 JWT 还原，无 passwordHash
     expect(rebuilt?.passwordHash).toBeUndefined();

@@ -78,7 +78,7 @@ describe('admin 鉴权', () => {
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('仪表盘');
-    expect(html).toContain('本实例视角');
+    expect(html).toContain('工具调用 Top 10');
   });
 
   it('X-Admin-Token 请求头可用', async () => {

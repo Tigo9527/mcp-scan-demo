@@ -42,10 +42,8 @@ export const config = {
   billingFreeCredits: Math.max(0, Number(process.env.BILLING_FREE_CREDITS ?? '1000') || 0),
 
   /**
-   * 本实例标识，用作落盘文件名（users-<instanceId>.json）。
-   * 默认 'default'：单机/重启场景下稳定复用同一文件，避免早期「每次启动随机生成」
-   * 导致用户散落多个分片、互相看不见、登录时查不到而反复回登录页。
-   * 多副本部署请为每个副本设置不同的 INSTANCE_ID（但本服务仍建议替换为共享数据库）。
+   * 进程标识，仅用于日志与健康检查展示（**不参与落盘文件名**：数据文件是固定名字，
+   * 见 src/persist.ts）。通过 env INSTANCE_ID 覆盖。
    */
   instanceId: process.env.INSTANCE_ID ?? 'default',
   /** 进程启动时间 */
@@ -59,7 +57,7 @@ export const DEFAULT_ADMIN_TOKEN = 'dev-admin-change-me';
 
 /**
  * 读取 admin 令牌。**惰性读取** env，便于测试在 beforeAll 里覆盖。
- * 多副本部署下必须是固定值（启动时随机会导致每个副本都不一样、根本登不进去），
+ * 必须是固定值（启动时随机会导致重启后令牌就变了、根本登不进去），
  * 所以走环境变量注入而非启动生成。
  */
 export function getAdminToken(): string {

@@ -11,7 +11,7 @@ import { flush, registerShutdownFlush } from './persist.js';
 import type { Server } from 'node:http';
 
 // 兜底：Express 4 不捕获 async handler 的 rejection，一旦逃逸出来 Node 20 默认直接终止进程。
-// 这里只记录不退出，避免一次偶发异常就让整个副本挂掉。
+// 这里只记录不退出，避免一次偶发异常就让整个进程挂掉。
 process.on('unhandledRejection', (reason) => {
   console.error('[mcp-demo] 未捕获的 Promise rejection：', reason);
 });

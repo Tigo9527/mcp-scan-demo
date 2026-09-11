@@ -13,7 +13,6 @@
  * 内存增长防护：byUser 按 userId 分桶并设上限（按 lastSeenAt 淘汰）、
  * byDay 只保留最近 90 天、recent 用固定长度环形缓冲。
  */
-import { config } from './config.js';
 import { loadJsonSync, scheduleSave } from './persist.js';
 
 const RECENT_MAX = 200;
@@ -50,7 +49,6 @@ export interface RecentCall {
 }
 
 export interface StatsSnapshot {
-  instanceId: string;
   /** 统计起点 */
   since: string;
   counters: {
@@ -85,14 +83,13 @@ export interface RpcMessageLike {
   error?: unknown;
 }
 
-const FILE = `stats-${config.instanceId}`;
+const FILE = 'stats';
 
 let loaded = false;
 let state: StatsSnapshot = emptyState();
 
 function emptyState(): StatsSnapshot {
   return {
-    instanceId: config.instanceId,
     since: new Date().toISOString(),
     counters: { requests: 0, toolCalls: 0, errors: 0 },
     byMethod: {},
@@ -114,7 +111,6 @@ function ensureLoaded(): void {
     state = {
       ...emptyState(),
       ...saved,
-      instanceId: config.instanceId,
       counters: { ...emptyState().counters, ...saved.counters },
       byMethod: saved.byMethod ?? {},
       byTool: saved.byTool ?? {},

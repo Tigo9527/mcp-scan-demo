@@ -180,13 +180,6 @@ ${card(`
   });
 }
 
-/** 本实例视角提示（多副本下数据不完整，必须说清楚，否则用户会以为是 bug） */
-function instanceNotice(): string {
-  return notice(
-    `<b>本实例视角</b>：部署平台为多副本，进程内数据不跨副本共享。以下用户列表与统计<b>仅包含当前实例</b>（instanceId <code>${esc(config.instanceId)}</code>，启动于 ${esc(fmtTime(config.startedAt))}）。用户会随着请求打到本实例而逐步补全。`,
-  );
-}
-
 function dashboardHtml(base: string, adminToken: string): string {
   const s = getStatsSnapshot();
   const users = store.listUsers();
@@ -225,9 +218,8 @@ function dashboardHtml(base: string, adminToken: string): string {
     adminToken,
     body: `
 <h1>仪表盘</h1>
-${instanceNotice()}
 
-<h2>总计（本实例）</h2>
+<h2>总计</h2>
 <div class="grid">
 ${statCard(s.counters.requests, '请求总数', '带 id 的 JSON-RPC 请求')}
 ${statCard(s.counters.toolCalls, '工具调用次数', '仅 tools/call')}
@@ -265,7 +257,7 @@ ${topUsers.length === 0 ? '<div class="empty">暂无记录。</div>' : table(['�
     return [label, String(v.calls), String(toolSum), bar(v.calls, maxUser)];
   }))}
 
-<h2>计费明细（本实例）</h2>
+<h2>计费明细</h2>
 ${b.byUser.length === 0 ? '<div class="empty">暂无计费记录。</div>' : table(['用户', '已消耗', '余额', ''], b.byUser.slice(0, 15).map((r) => {
     const bar2 = bar(r.used, Math.max(1, ...b.byUser.map((x) => x.used)));
     const label = r.userId
@@ -328,7 +320,6 @@ function usersHtml(base: string, adminToken: string, query: string): string {
     adminToken,
     body: `
 <h1>用户管理</h1>
-${instanceNotice()}
 
 <form method="get" action="${esc(base)}/admin/users" class="row" style="margin:12px 0">
 <input name="q" value="${esc(query)}" placeholder="按用户名 / 邮箱 / GitHub / ID 搜索" style="max-width:320px">
@@ -336,7 +327,7 @@ ${instanceNotice()}
 <a class="btn small alt" href="${esc(adminHref('/admin/users', adminToken))}">重置</a>
 </form>
 
-<p class="muted">共 ${total} 个用户${shown < total ? `（显示前 ${shown} 条）` : ''} ·「请求数 / 工具调用」列为该用户在本实例的统计</p>
+<p class="muted">共 ${total} 个用户${shown < total ? `（显示前 ${shown} 条）` : ''} ·「请求数 / 工具调用」列为该用户的累计统计</p>
 ${table(['用户名', '邮箱', '来源', 'GitHub', '注册时间', '最近活跃', '请求/工具', '操作'], rows)}
 
 <div class="row" style="margin-top:20px">
@@ -376,21 +367,20 @@ function userDetailHtml(
     adminToken,
     body: `
 <h1>用户详情</h1>
-${instanceNotice()}
 
 <h2>基本信息</h2>
 ${table(['字段', '值'], infoRows)}
 
-<h2>调用统计（本实例）</h2>
+<h2>调用统计</h2>
 <div class="grid">
 ${statCard(stat?.calls ?? 0, '请求总数')}
 ${statCard(toolSum, '工具调用次数')}
 ${statCard(Object.keys(tools).length, '使用过的工具数')}
 </div>
-${Object.keys(tools).length > 0 ? table(['工具', '次数', ''], Object.entries(tools).sort((a, b) => b[1] - a[1]).map(([n, c]) => [esc(n), String(c), bar(c, maxTool)])) : '<div class="empty">该用户在本实例暂无调用记录。</div>'}
+${Object.keys(tools).length > 0 ? table(['工具', '次数', ''], Object.entries(tools).sort((a, b) => b[1] - a[1]).map(([n, c]) => [esc(n), String(c), bar(c, maxTool)])) : '<div class="empty">该用户暂无调用记录。</div>'}
 <p class="muted">首次记录 ${esc(fmtTime(stat?.firstSeenAt))} · 最近记录 ${esc(fmtTime(stat?.lastSeenAt))}</p>
 
-<h2>计费（本实例）</h2>
+<h2>计费</h2>
 <div class="grid">
 ${statCard(bill?.balance ?? config.billingFreeCredits, '剩余额度')}
 ${statCard(bill?.used ?? 0, '已消耗点数')}
@@ -399,7 +389,7 @@ ${statCard(bill?.used ?? 0, '已消耗点数')}
 
 <h2>签发新令牌</h2>
 ${card(`
-<p>为该用户签发一枚新的访问令牌（JWT，有效期 7 天）。令牌内嵌用户身份，任意副本都能校验。</p>
+<p>为该用户签发一枚新的访问令牌（JWT，有效期 7 天）。令牌内嵌用户身份，服务端无需保存会话。</p>
 ${
   issued
     ? `<div style="margin:10px 0"><b>新令牌：</b><br><code>${esc(issued.token)}</code></div>
@@ -733,7 +723,7 @@ export function createAdminRouter(): Router {
             base,
             active: 'admin',
             adminToken: token,
-            body: `<h1>用户不存在</h1><p class="muted">该用户不在本实例内存中（多副本部署时可能注册在其它副本上）。</p>
+            body: `<h1>用户不存在</h1><p class="muted">该用户不在用户存储中（可能已被删除，或数据目录被重置）。</p>
 <div class="row"><a class="btn alt" href="${esc(adminHref('/admin/users', token))}">← 返回用户列表</a></div>`,
           }),
         );

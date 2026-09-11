@@ -133,7 +133,7 @@ export function createMcpServer(): McpServer {
         };
       }
       // 基本信息用鉴权上下文的用户即可；clientInfo 等「附属信息」是运行时采集、只存在 store 里，
-      // 故从这里读最新的一份（JWT 还原的对象不含它）。跨副本尚未物化时回退到鉴权用户。
+      // 故从这里读最新的一份（JWT 还原的对象不含它）。存储里没有时回退到鉴权用户。
       const stored = getUser(user.id);
       const info = stored ?? user;
       return text({
@@ -212,7 +212,7 @@ export function createMcpServer(): McpServer {
         firstSeenAt: stat?.firstSeenAt ?? null,
         lastSeenAt: stat?.lastSeenAt ?? null,
         profileUrl: `${base}/profile`,
-        note: '统计为本实例视角（平台多副本部署，数据不跨副本共享）。',
+        note: '统计口径：requests 含 initialize / tools/list 等全部带 id 的请求，toolCalls 只算 tools/call。',
       });
     },
   );

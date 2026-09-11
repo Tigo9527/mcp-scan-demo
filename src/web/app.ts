@@ -732,7 +732,7 @@ export function createApp() {
     }),
   );
 
-  // GitHub OAuth：跳转授权（state 为自签名 JWT，跨副本可校验）。
+  // GitHub OAuth：跳转授权（state 为自签名 JWT，服务端无需保存）。
   // 若带 authorize 票据（来自 /oauth/authorize 的「通过 GitHub 登录」链接），一并塞进 state，
   // 让登录完成后能还原原始授权请求并回跳客户端。
   app.get('/auth/github', (req: Request, res: Response) => {
@@ -868,8 +868,8 @@ export function createApp() {
   app.use(createWeb3Router());
 
   // ---- MCP Streamable HTTP 端点（无状态模式）----
-  // 多副本部署下内存会话无法跨副本共享，因此每次请求都新建一个独立的 transport + McpServer
-  // （sessionIdGenerator 留空 = 关闭会话管理）。配合无状态 JWT 鉴权，任意副本都能独立处理。
+  // 不依赖进程内会话状态，因此每次请求都新建一个独立的 transport + McpServer
+  // （sessionIdGenerator 留空 = 关闭会话管理）。配合无状态 JWT 鉴权，重启后也能直接处理。
   // 鉴权：默认要求登录，未携带有效令牌直接 401 + WWW-Authenticate（见下方 requireAuthForMcp 分支）；
   // 设 MCP_DEMO_REQUIRE_AUTH=off 可恢复旧的匿名握手（user 为 null，由工具返回注册引导）。
   const handleMcp = wrap(async (req: Request, res: Response) => {
@@ -960,8 +960,8 @@ export function createApp() {
       }
     }
 
-    // 跨副本物化：JWT 是无状态的，在别的副本注册的用户本副本内存里没有。
-    // 流量打到哪个副本，就在哪个副本补全一份，让 admin 用户列表逐步完整。
+    // 按需落库：JWT 是无状态的，令牌里还原出的用户可能不在存储里（例如数据目录被重置）。
+    // 这里按 id 补一份，保证 admin 用户列表完整。
     if (user) {
       try {
         store.upsertById(user);

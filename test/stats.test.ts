@@ -163,7 +163,7 @@ describe('MCP 调用统计', () => {
     expect(b.counters.requests).not.toBe(99999);
   });
 
-  it('跨副本物化：用其它实例签发的令牌调用后，本实例能补全该用户', async () => {
+  it('按需落库：用 admin 签发的令牌调用后，用户会被补进存储', async () => {
     const remoteId = randomUUID();
     const { token } = issueTokenForId(remoteId, 'remote_user');
     expect(store.getUser(remoteId)).toBeUndefined();

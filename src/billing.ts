@@ -6,8 +6,8 @@
  * - 默认**硬计费**：余额不足时拒绝执行（由 web 层返回 402，见 src/web/app.ts）。
  * - 匿名请求归到 `anonymous` 单桶，仅记消耗、无余额概念（匿名无法计费，收费工具会被要求登录）。
  *
- * 落盘：复用 persist 模块的 scheduleSave，按实例分片 `billing-<instanceId>.json`，
- * 与 stats.ts / store.ts 同一模式。多副本下各写各的，admin 总额仅含本实例（页面已注明「本实例视角」）。
+ * 落盘：复用 persist 模块的 scheduleSave，单一文件 `billing.json`，
+ * 与 stats.ts / store.ts 同一模式（防抖 + 原子写 + 读降级）。
  *
  * 内部逻辑**绝不抛异常**：埋点在 SDK 的请求处理链路上，任何抛出都会被吞掉并转成 400。
  */
@@ -75,7 +75,7 @@ export interface Allowance {
   reason?: 'insufficient_balance' | 'login_required';
 }
 
-const FILE = `billing-${config.instanceId}`;
+const FILE = 'billing';
 
 let loaded = false;
 let state: Record<string, UserBilling> = {};
@@ -199,7 +199,7 @@ export function creditBalance(userId: string, points: number): UserBilling {
   return structuredClone(entry);
 }
 
-/** 聚合总计费数据（本实例视角） */
+/** 聚合总计费数据 */
 export function getTotalBilling(): TotalBilling {
   ensureLoaded();
   let used = 0;
