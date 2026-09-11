@@ -40,6 +40,11 @@
   页面里也别再教用户往 URL 上拼令牌（令牌会漏进浏览器历史 / Referer）；
   URL 上带 `?token=` 的老链接由 `adoptTokenFromUrl()` 兜底转成 Cookie，
   且**只在尚无 Cookie 时写**，避免管理员点「以该用户身份打开 Profile」时顶掉自己的登录态。
+  ⚠️ **部署平台网关会把 Set-Cookie 里的 `SameSite=Lax` 改写成 `SameSite=None`**
+  （线上实测：`Path=/; Max-Age=604800; HttpOnly; Secure; SameSite=None`），
+  于是跨站请求也会带上会话 Cookie，**不能指望 SameSite 做 CSRF 防护**。
+  真正的防线是：① `/mcp` 不读 Cookie；② 所有写路由必须挂 `requireSameOrigin`（Origin 校验）。
+  **新增任何会改状态的 POST/DELETE 路由时，先问一句有没有挂 `requireSameOrigin`。**
 - **`/mcp` 默认要求登录：未携带有效令牌返回 401 + `WWW-Authenticate`**（`MCP_DEMO_REQUIRE_AUTH`
   默认 `on`，设成 `off` 才恢复旧的匿名握手）。**不要改回永远 200** —— 那正是「客户端识别不了
   登录方式」的根因：客户端只有收到 401 才会去读 `resource_metadata` 并启动标准 OAuth 发现。

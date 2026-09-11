@@ -112,6 +112,9 @@ npm start            # 启动后控制台会打印可访问 URL，含 /admin 与
 > 就是登录态，不必再往 URL 上拼 `?token=`（令牌也不该进浏览器历史）。
 > `/mcp` 端点**刻意不读**这份 Cookie —— 否则第三方页面能带着浏览器登录态调受保护工具（CSRF），
 > MCP 客户端必须显式带令牌。退出登录走 `/logout`。
+>
+> 注意：部署平台网关会把响应里的 `SameSite=Lax` 改写成 `SameSite=None`（跨站也会带 Cookie），
+> 所以 CSRF 防护不靠 SameSite，而是靠「`/mcp` 不读 Cookie」+「所有写路由校验 Origin」两道。
 
 1. 在 `/register`（或 `/auth/github`）完成注册 → 拿到 Bearer 令牌（浏览器已自动登录，页面上有「查看我的 Profile →」入口）
 2. 把令牌拼到端点 URL 后，或放到请求头 `X-Authorization`：
