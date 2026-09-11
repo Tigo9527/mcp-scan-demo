@@ -21,7 +21,7 @@ import {
   OAUTH_SCOPE,
 } from './metadata.js';
 import { seal } from './tickets.js';
-import { deriveBase, requireSameOrigin, wrap } from '../web/http.js';
+import { deriveBase, requireSameOrigin, setUserTokenCookie, wrap } from '../web/http.js';
 import { authorizeCompleteHtml, card, esc, notice, page } from '../web/layout.js';
 import { isGitHubConfigured } from '../auth/github.js';
 
@@ -313,7 +313,10 @@ export function createAuthorizeRouter(): Router {
 
       let user: store.User;
       try {
-        user = auth.loginWithPassword(username, password).user;
+        const result = auth.loginWithPassword(username, password);
+        user = result.user;
+        // 在授权页登录也算登录本站：落会话 Cookie，之后进 /profile、/recharge 不用再带令牌
+        setUserTokenCookie(req, res, result.token);
       } catch (err) {
         const msg =
           err instanceof auth.AuthError && err.status === 400 ? err.message : '用户名或密码错误';

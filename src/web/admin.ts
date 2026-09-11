@@ -383,6 +383,8 @@ ${
   issued
     ? `<div style="margin:10px 0"><b>新令牌：</b><br><code>${esc(issued.token)}</code></div>
 <p class="muted">请立即复制保存，此页面刷新后不再显示${issued.note ? `。${esc(issued.note)}` : ''}。</p>
+<!-- 这里必须带 ?token=：管理员浏览器里只有自己的会话 Cookie，不拼令牌看到的还是自己。
+     /profile 只在「尚无 Cookie」时才把 URL 令牌写进 Cookie，所以不会顶掉管理员自己的登录态。 -->
 <div class="row"><a class="btn small" href="${esc(base)}/profile?token=${encodeURIComponent(issued.token)}">以该用户身份打开 Profile</a></div>`
     : ''
 }

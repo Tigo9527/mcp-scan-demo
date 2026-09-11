@@ -91,7 +91,7 @@ export function printBanner(): void {
     `   访问门户 / 一键注册 :  ${base}/`,
     `   GitHub OAuth 登录   :  ${base}/auth/github`,
     `   MCP 端点 (Streamable HTTP): ${base}/mcp`,
-    `   用户 Profile        :  ${base}/profile?token=<你的令牌>`,
+    `   用户 Profile        :  ${base}/profile（浏览器登录一次即自动保持）`,
     `   Admin 管理端        :  ${base}/admin`,
     `   Admin 令牌          :  ${adminHint}`,
     `   健康检查            :  ${base}/health`,

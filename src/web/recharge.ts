@@ -3,7 +3,8 @@
  *   GET  /recharge          展示收款配置 + MetaMask 转账 + 手动补单 + 自己的充值历史
  *   POST /recharge          提交交易哈希入账（幂等；同一哈希只入账一次）
  *
- * 与 /profile 一样靠 `authenticateUserRequest` 识别用户（令牌走 `?token=` 或 X-Authorization），
+ * 与 /profile 一样靠 `authenticateWebUserRequest` 识别用户：请求头 `X-Authorization`、
+ * `?token=` 查询参数，以及登录时下发的**会话 Cookie**（登录态自动保持，不必再挂令牌）。
  * 未登录时给出引导而不是 401 —— 这是浏览器页面，不是 MCP 端点。
  *
  * 「交易完成即到账」：MetaMask 返回哈希后前端立刻回填并提交补单；原生币即使尚未打包
@@ -11,7 +12,8 @@
  */
 import { Router, type Request, type Response } from 'express';
 import {
-  authenticateUserRequest,
+  adoptTokenFromUrl,
+  authenticateWebUserRequest,
   deriveBase,
   requireSameOrigin,
   resolveUserToken,
@@ -37,7 +39,7 @@ function noAuthHtml(base: string): string {
     active: 'recharge',
     body: `
 <h1>💰 充值点数</h1>
-${notice('请先登录后再充值。可在 URL 后追加你的令牌：<code>/recharge?token=mcp_demo_xxx</code>')}
+${notice('请先登录后再充值。登录一次即可保持，之后直接进这个页面就行。')}
 <div class="row"><a class="btn" href="${esc(base)}/login">去登录</a>
 <a class="btn alt" href="${esc(base)}/">返回首页</a></div>
 `,
@@ -163,7 +165,7 @@ ${rows.length === 0
     )}
 
 <div class="row" style="margin-top:20px">
-<a class="btn alt" href="${esc(`${base}/profile?token=${encodeURIComponent(opts.token)}`)}">我的 Profile</a>
+<a class="btn alt" href="${esc(`${base}/profile`)}">我的 Profile</a>
 <a class="btn alt" href="${esc(base)}/">返回首页</a>
 </div>
 
@@ -298,7 +300,7 @@ export function createRechargeRouter(): Router {
       // 令牌可能出现在 URL 里，禁止 Referer 外泄
       res.setHeader('Referrer-Policy', 'no-referrer');
       const base = deriveBase(req);
-      const user = authenticateUserRequest(req);
+      const user = authenticateWebUserRequest(req);
       if (!user) {
         res.type('html').send(noAuthHtml(base));
         return;
@@ -310,7 +312,9 @@ export function createRechargeRouter(): Router {
       }
 
       const q = req.query as Record<string, unknown>;
-      const token = resolveUserToken(req) ?? '';
+      const token = resolveUserToken(req, { allowCookie: true }) ?? '';
+      // 老链接上还挂着 ?token= 时，顺手转成会话 Cookie（已有 Cookie 就不覆盖）
+      adoptTokenFromUrl(req, res, token);
       const message =
         q.ok === '1'
           ? { kind: 'ok' as const, text: String(q.msg ?? '充值已到账。') }
@@ -345,7 +349,7 @@ export function createRechargeRouter(): Router {
     requireSameOrigin,
     wrap(async (req: Request, res: Response) => {
       const base = deriveBase(req);
-      const user = authenticateUserRequest(req);
+      const user = authenticateWebUserRequest(req);
       if (!user) {
         res.redirect(302, `${base}/login`);
         return;
@@ -390,7 +394,7 @@ export function createRechargeRouter(): Router {
     '/recharge/claim',
     requireSameOrigin,
     wrap(async (req: Request, res: Response) => {
-      const user = authenticateUserRequest(req);
+      const user = authenticateWebUserRequest(req);
       if (!user) {
         res.status(401).json({ ok: false, code: 'error', error: '未登录或令牌无效。' });
         return;

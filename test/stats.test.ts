@@ -181,7 +181,7 @@ describe('用户 Profile 页面', () => {
   it('未携带令牌时提示去注册', async () => {
     const res = await fetch(`${base}/profile`);
     const html = await res.text();
-    expect(html).toContain('未提供有效令牌');
+    expect(html).toContain('你还没登录');
     expect(html).toContain('/register');
   });
 

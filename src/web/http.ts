@@ -29,27 +29,100 @@ export function deriveBase(req: Request): string {
 }
 
 /**
+ * 用户会话 Cookie 名。
+ *
+ * 为什么要有它：早先页面只认 `?token=` / `X-Authorization`，于是「登录后自动保持」
+ * 这件事不成立——用户每次进 /profile、/recharge 都得自己往 URL 后面粘令牌，
+ * 既不像正经网站，令牌还会漏进浏览器历史。登录后下发 Cookie 即可解决。
+ */
+export const USER_TOKEN_COOKIE = 'mcp_demo_user';
+/** 与访问令牌 TTL 对齐（7 天） */
+const USER_COOKIE_MAX_AGE = 7 * 24 * 60 * 60;
+
+function isHttps(req: Request): boolean {
+  const proto = (req.headers['x-forwarded-proto'] as string | undefined) ?? '';
+  return req.secure || proto.split(',')[0].trim() === 'https';
+}
+
+/** 下发用户会话 Cookie（HttpOnly + SameSite=Lax；https 下补 Secure）。 */
+export function setUserTokenCookie(req: Request, res: Response, token: string): void {
+  if (!token) return;
+  const parts = [
+    `${USER_TOKEN_COOKIE}=${encodeURIComponent(token)}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    `Max-Age=${USER_COOKIE_MAX_AGE}`,
+  ];
+  if (isHttps(req)) parts.push('Secure');
+  res.appendHeader('Set-Cookie', parts.join('; '));
+}
+
+/**
+ * URL 上带令牌（?token=…）时，把它落到会话 Cookie 里，让用户后续不用再挂参数。
+ *
+ * **只在浏览器还没有会话 Cookie 时写**：否则管理员从 Admin 点「以该用户身份打开 Profile」
+ * 这类临时身份链接时，会把自己的登录态顶掉（Cookie 是单值的）。
+ */
+export function adoptTokenFromUrl(req: Request, res: Response, token: string): void {
+  if (!token) return;
+  if (readCookie(req, USER_TOKEN_COOKIE)) return;
+  setUserTokenCookie(req, res, token);
+}
+
+/** 清除用户会话 Cookie（退出登录）。 */
+export function clearUserTokenCookie(req: Request, res: Response): void {
+  const parts = [
+    `${USER_TOKEN_COOKIE}=`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    'Max-Age=0',
+  ];
+  if (isHttps(req)) parts.push('Secure');
+  res.appendHeader('Set-Cookie', parts.join('; '));
+}
+
+/**
  * 从请求里提取本服务的用户令牌。
  *
  * 关键：部署平台网关会**拦截并改写 Authorization 头**（注入平台自己的 JWT），
  * 因此只采信带本服务前缀 `mcp_demo_` 的值，网关注入的一律忽略。
+ *
+ * `allowCookie` 默认关闭 —— MCP 端点绝不能开：一旦它认会话 Cookie，
+ * 任意第三方页面都能带着浏览器里的登录态去调受保护工具（CSRF）。
+ * MCP 客户端必须显式带令牌（X-Authorization 头或 ?token= 参数）。
+ *
+ * 提醒：块注释正文里别出现「星号紧跟斜杠」的组合，会把注释提前闭合（本项目踩过）。
  */
-export function resolveUserToken(req: Request): string | undefined {
+export function resolveUserToken(
+  req: Request,
+  opts: { allowCookie?: boolean } = {},
+): string | undefined {
   const candidates: unknown[] = [
     req.headers['x-authorization'],
     (req.query as Record<string, unknown> | undefined)?.token,
     (req.query as Record<string, unknown> | undefined)?.access_token,
     req.headers.authorization,
   ];
+  if (opts.allowCookie) candidates.push(readCookie(req, USER_TOKEN_COOKIE));
   for (const c of candidates) {
     if (typeof c === 'string' && c.includes(config.jwtTokenPrefix)) return c;
   }
   return undefined;
 }
 
-/** 校验当前请求携带的用户令牌，返回用户（匿名/无效返回 null）。 */
+/** 校验当前请求携带的用户令牌，返回用户（匿名/无效返回 null）。**不读 Cookie**（/mcp 用）。 */
 export function authenticateUserRequest(req: Request): User | null {
   return authManager.authenticate(resolveUserToken(req));
+}
+
+/**
+ * Web 页面（/profile、/recharge …）的用户识别：请求头 / 查询参数 / 会话 Cookie 都认。
+ * 有了 Cookie，登录完就能一直保持登录，不用再往 URL 上挂令牌。
+ */
+export function authenticateWebUserRequest(req: Request): User | null {
+  return authManager.authenticate(resolveUserToken(req, { allowCookie: true }));
 }
 
 /**

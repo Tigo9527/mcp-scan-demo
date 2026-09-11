@@ -1,11 +1,16 @@
 /**
- * 用户 Profile 页面：`GET /profile?token=<mcp 令牌>`
+ * 用户 Profile 页面：`GET /profile`（登录态靠会话 Cookie 自动保持，也兼容 `?token=` 老链接）
  *
  * 用户拿到令牌后（一键注册页 / GitHub 登录页 / register_user 工具），
  * 在这里查看自己的资料与**个人维度的调用统计**，并复制 MCP 客户端配置。
  */
 import { Router, type Request, type Response } from 'express';
-import { authenticateUserRequest, deriveBase, resolveUserToken } from './http.js';
+import {
+  adoptTokenFromUrl,
+  authenticateWebUserRequest,
+  deriveBase,
+  resolveUserToken,
+} from './http.js';
 import { getUserStats } from '../stats.js';
 import { isGitHubConfigured } from '../auth/github.js';
 import { bar, badge, card, esc, fmtTime, notice, page, statCard, table } from './layout.js';
@@ -19,7 +24,7 @@ function noTokenHtml(base: string): string {
     active: 'profile',
     body: `
 <h1>我的 Profile</h1>
-${notice('未提供有效令牌。请在 URL 后追加你的令牌：<code>/profile?token=mcp_demo_xxx</code>')}
+${notice('你还没登录（或登录已过期）。登录后会自动保持，不用再往链接上挂令牌。')}
 ${card(`
 <h3>还没有令牌？</h3>
 <p>去首页一键注册，注册成功后页面上会有「查看我的 Profile」入口，直接点进来即可。</p>
@@ -38,13 +43,15 @@ export function createProfileRouter(): Router {
     res.setHeader('Referrer-Policy', 'no-referrer');
 
     const base = deriveBase(req);
-    const user = authenticateUserRequest(req);
+    const user = authenticateWebUserRequest(req);
     if (!user) {
       res.type('html').send(noTokenHtml(base));
       return;
     }
 
-    const token = resolveUserToken(req) ?? '';
+    const token = resolveUserToken(req, { allowCookie: true }) ?? '';
+    // 老链接上还挂着 ?token= 时，顺手转成会话 Cookie（已有 Cookie 就不覆盖，避免顶掉登录态）
+    adoptTokenFromUrl(req, res, token);
     const stat = getUserStats(user.id);
     const tools = stat?.tools ?? {};
     const toolCalls = Object.values(tools).reduce((a, b) => a + b, 0);
@@ -138,7 +145,7 @@ ${card(
       : `<p>服务端尚未配置 GitHub OAuth（管理员可在 Admin 管理端设置）。</p>`,
 )}
 
-<p style="margin-top:24px"><a href="${esc(base)}/">← 返回首页</a></p>
+<p style="margin-top:24px"><a href="${esc(base)}/">← 返回首页</a> · <a href="${esc(base)}/logout">退出登录</a></p>
 `;
 
     res.type('html').send(page({ title: `Profile · ${user.username}`, base, active: 'profile', body }));

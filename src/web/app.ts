@@ -30,9 +30,11 @@ import { persistStatus } from '../persist.js';
 import {
   authenticateUserRequest,
   allowPublicCors,
+  clearUserTokenCookie,
   deriveBase,
   requireSameOrigin,
   resolveUserToken,
+  setUserTokenCookie,
   wrap,
 } from './http.js';
 import {
@@ -304,7 +306,7 @@ ${card(`
 
 ${card(`
 <h3>⑤ 查看资料与统计</h3>
-<p>用户可在 <code>/profile?token=&lt;你的令牌&gt;</code> 查看个人资料与调用统计；管理员可进入 Admin 管理端查看用户列表与全局统计。</p>
+<p>用户可在 <code>/profile</code> 查看个人资料与调用统计（登录一次即自动保持，不用往链接上拼令牌）；管理员可进入 Admin 管理端查看用户列表与全局统计。</p>
 <div class="row"><a class="btn small alt" href="${esc(base)}/profile">我的 Profile</a>
 <a class="btn small alt" href="${esc(base)}/admin">Admin 管理端</a></div>
 `)}
@@ -320,7 +322,7 @@ function tokenResultHtml(
   base: string,
   opts: { title: string; heading: string; intro: string },
 ): string {
-  const profileUrl = `${base}/profile?token=${result.token}`;
+  const profileUrl = `${base}/profile`;
   const configJson = JSON.stringify(
     {
       mcpServers: {
@@ -374,6 +376,21 @@ function loginSuccessHtml(result: AuthResult, base: string): string {
     title: '登录成功',
     heading: '🔓 登录成功',
     intro: '登录成功，下方是你的访问令牌（请妥善保管，页面刷新后不再显示）。',
+  });
+}
+
+/** 退出登录后的提示页。 */
+function loggedOutHtml(base: string): string {
+  return page({
+    title: '已退出登录',
+    base,
+    body: `
+<h1>已退出登录</h1>
+${notice('本机的登录会话已清除，页面不会再自动带上你的身份。', 'ok')}
+<p class="muted">已经发出去的访问令牌仍然有效（7 天有效期），只是浏览器不再自动携带；重新登录即可。</p>
+<div class="row"><a class="btn" href="${esc(base)}/login">重新登录</a>
+<a class="btn alt" href="${esc(base)}/">返回首页</a></div>
+`,
   });
 }
 
@@ -441,9 +458,9 @@ function web3LoginHtml(base: string, error?: string, token?: string, authorize?:
       body: `
 <h1>🦊 web3 登录成功</h1>
 ${card(`<b>钱包：</b> <code>${esc(token)}</code>`)}
-<p>下面这串访问令牌可直接配置到 MCP 客户端调用受保护工具；或用 <code>/profile?token=...</code> 查看资料。</p>
+<p>下面这串访问令牌可直接配置到 MCP 客户端调用受保护工具；浏览器里已自动登录，直接打开 <code>/profile</code> 就能查看资料。</p>
 ${copyBlock(token, { title: '访问令牌（Bearer）' })}
-<div class="row" style="margin:16px 0"><a class="btn" href="${esc(`${base}/profile?token=${token}`)}">查看我的 Profile →</a>
+<div class="row" style="margin:16px 0"><a class="btn" href="${esc(`${base}/profile`)}">查看我的 Profile →</a>
 <a class="btn alt" href="${esc(base)}/">返回首页</a></div>
 `,
     });
@@ -592,7 +609,7 @@ function extractJsonRpcId(body: unknown): number | string | null {
 }
 
 function oauthSuccessHtml(user: User, token: string, base: string): string {
-  const profileUrl = `${base}/profile?token=${token}`;
+  const profileUrl = `${base}/profile`;
   return page({
     title: 'GitHub 登录成功',
     base,
@@ -658,6 +675,8 @@ export function createApp() {
           username,
           email: req.query.email as string | undefined,
         });
+        // 落会话 Cookie：之后进 /profile、/recharge 自动保持登录，不用再往 URL 挂令牌
+        setUserTokenCookie(req, res, result.token);
         const oauth = completeAuthorizeFromTicket(result, base, authorizeTicket);
         res.type('html').send(oauth ?? registeredHtml(result, base));
       } catch (err) {
@@ -686,6 +705,7 @@ export function createApp() {
         typeof body.authorize === 'string' ? body.authorize : undefined;
       try {
         const result = auth.registerWithPassword(username, password);
+        setUserTokenCookie(req, res, result.token);
         const oauth = completeAuthorizeFromTicket(result, base, authorizeTicket);
         res.type('html').send(oauth ?? registeredHtml(result, base));
       } catch (err) {
@@ -723,6 +743,7 @@ export function createApp() {
       const password = String(body.password ?? '');
       try {
         const result = auth.loginWithPassword(username, password);
+        setUserTokenCookie(req, res, result.token);
         res.type('html').send(loginSuccessHtml(result, base));
       } catch (err) {
         // 统一回显「用户名或密码错误」，避免账号枚举
@@ -731,6 +752,13 @@ export function createApp() {
       }
     }),
   );
+
+  // 退出登录：清掉会话 Cookie。**故意不校验登录态**——Cookie 已失效时也要幂等成功，
+  // 否则用户在「已过期」状态下点退出会看到一个报错页，很莫名其妙。
+  app.get('/logout', (req: Request, res: Response) => {
+    clearUserTokenCookie(req, res);
+    res.type('html').send(loggedOutHtml(deriveBase(req)));
+  });
 
   // GitHub OAuth：跳转授权（state 为自签名 JWT，服务端无需保存）。
   // 若带 authorize 票据（来自 /oauth/authorize 的「通过 GitHub 登录」链接），一并塞进 state，
@@ -796,13 +824,15 @@ export function createApp() {
             scope: t.scope,
             resource: t.resource,
           };
-          const { user } = await exchangeAndLogin(code);
+          const { user, token } = await exchangeAndLogin(code);
+          setUserTokenCookie(req, res, token);
           res.status(200).type('html').send(completeAuthorize(base, p, user));
           return;
         }
 
         // 无票据：保持原有「GitHub 登录成功」页（向后兼容独立 GitHub 登录场景）
         const { user, token } = await exchangeAndLogin(code);
+        setUserTokenCookie(req, res, token);
         res.type('html').send(oauthSuccessHtml(user, token, base));
       } catch (err) {
         // 网络类错误要翻译成「部署环境未放行 github.com」，否则用户会一直去查 Client ID / 回调地址
@@ -892,6 +922,9 @@ export function createApp() {
         });
       return;
     }
+    // 刻意用「不读 Cookie」的版本：MCP 端点一旦认会话 Cookie，
+    // 任意第三方页面都能带着浏览器里的登录态调受保护工具（CSRF）。
+    // MCP 客户端必须显式带令牌（X-Authorization / ?token=）。
     const user = authenticateUserRequest(req);
     const base = deriveBase(req);
 

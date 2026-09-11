@@ -107,7 +107,13 @@ npm start            # 启动后控制台会打印可访问 URL，含 /admin 与
 
 > 网页注册/登录均为 `POST` 表单，配合 `SameSite=Lax` Cookie + Origin 校验防 CSRF；口令只经表单提交，绝不以 URL / `GET` / `Authorization` 传递。
 
-1. 在 `/register`（或 `/auth/github`）完成注册 → 拿到 Bearer 令牌（页面上有「查看我的 Profile →」入口）
+> **登录态自动保持**：注册 / 登录（账号密码、GitHub、钱包）成功后会下发会话 Cookie
+> `mcp_demo_user`（HttpOnly + SameSite=Lax + 7 天），之后直接访问 `/profile`、`/recharge`
+> 就是登录态，不必再往 URL 上拼 `?token=`（令牌也不该进浏览器历史）。
+> `/mcp` 端点**刻意不读**这份 Cookie —— 否则第三方页面能带着浏览器登录态调受保护工具（CSRF），
+> MCP 客户端必须显式带令牌。退出登录走 `/logout`。
+
+1. 在 `/register`（或 `/auth/github`）完成注册 → 拿到 Bearer 令牌（浏览器已自动登录，页面上有「查看我的 Profile →」入口）
 2. 把令牌拼到端点 URL 后，或放到请求头 `X-Authorization`：
 
 ```json
@@ -129,7 +135,7 @@ npm start            # 启动后控制台会打印可访问 URL，含 /admin 与
 
 ### 用户 Profile
 
-- 访问 `/profile?token=<你的令牌>` 查看自己的资料、按工具/按天的个人统计，并复制 MCP 客户端配置。
+- 登录后访问 `/profile` 查看自己的资料、按工具/按天的个人统计，并复制 MCP 客户端配置（登录态由会话 Cookie 保持，无需拼 `?token=`）。
 
 ### 调用统计
 

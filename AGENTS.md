@@ -14,14 +14,14 @@
      Web portal / one-click register : http://127.0.0.1:<port>/
      GitHub OAuth login              : http://127.0.0.1:<port>/auth/github
      MCP endpoint (Streamable HTTP)  : http://127.0.0.1:<port>/mcp
-     User profile                    : http://127.0.0.1:<port>/profile?token=<your-token>
+     User profile                    : http://127.0.0.1:<port>/profile
      Admin console                   : http://127.0.0.1:<port>/admin
      Health check                    : http://127.0.0.1:<port>/health
    ==========================================================
    ```
 
 4. **把上面这段 URL 逐字转述给用户**，并说明：门户可一键注册拿令牌；
-   把令牌拼到 `/profile?token=...` 可查看个人资料与调用统计；
+   浏览器里登录一次即自动保持，直接打开 `/profile` 就能看个人资料与调用统计（不用拼 `?token=`）；
    Admin 管理端用 `ADMIN_TOKEN` 登录（本地开发可用默认令牌 `dev-admin-change-me`）。
 
 ## 约定（重要）
@@ -31,6 +31,15 @@
   `.env` 不覆盖已存在的环境变量（`dotenv` 默认 `override: false`），
   故部署平台注入的 `JWT_SECRET` / `ADMIN_TOKEN` / `PUBLIC_BASE_URL` 永远优先。
   **改 env 相关代码后必须跑 `npx vitest run test/dotenv.test.ts`。**
+- **浏览器页面靠会话 Cookie 保持登录，`/mcp` 端点绝不认 Cookie**。
+  登录（一键注册 / 账号密码 / GitHub / 钱包）成功后一律 `setUserTokenCookie()` 下发
+  `mcp_demo_user`（HttpOnly + SameSite=Lax + Path=/ + 7 天，https 下补 Secure）；
+  Web 页面用 `authenticateWebUserRequest()`（读 Cookie），MCP 端点继续用
+  `authenticateUserRequest()`（**不读** Cookie）—— 否则任意第三方页面都能带着浏览器登录态调
+  受保护工具，就是一个 CSRF。**不要为了「让 MCP 也免登录」把 Cookie 开给 `/mcp`。**
+  页面里也别再教用户往 URL 上拼令牌（令牌会漏进浏览器历史 / Referer）；
+  URL 上带 `?token=` 的老链接由 `adoptTokenFromUrl()` 兜底转成 Cookie，
+  且**只在尚无 Cookie 时写**，避免管理员点「以该用户身份打开 Profile」时顶掉自己的登录态。
 - **`/mcp` 默认要求登录：未携带有效令牌返回 401 + `WWW-Authenticate`**（`MCP_DEMO_REQUIRE_AUTH`
   默认 `on`，设成 `off` 才恢复旧的匿名握手）。**不要改回永远 200** —— 那正是「客户端识别不了
   登录方式」的根因：客户端只有收到 401 才会去读 `resource_metadata` 并启动标准 OAuth 发现。
