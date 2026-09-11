@@ -22,6 +22,7 @@ import {
   getRechargeConfig,
   listRecharges,
   submitRechargeTx,
+  RechargePendingError,
   type RechargeConfig,
 } from '../recharge.js';
 import * as billing from '../billing.js';
@@ -65,6 +66,8 @@ function rechargeHtml(opts: {
   balance: number;
   recharged: number;
   message?: { kind: 'ok' | 'err'; text: string };
+  /** 有待确认的交易哈希时，页面加载即开始后台轮询（来自补单表单的重试） */
+  pendingHash?: string;
 }): string {
   const { base, cfg, rows } = opts;
   const isToken = Boolean(cfg.tokenAddress);
@@ -85,6 +88,12 @@ function rechargeHtml(opts: {
     body: `
 <h1>💰 充值点数</h1>
 ${opts.message ? notice(esc(opts.message.text)) : ''}
+
+<div id="pending-box" style="display:none;border:1px solid var(--line);border-radius:10px;padding:14px;margin:12px 0">
+<b>⏳ 正在等待链上确认</b>
+<p id="pending-msg" class="muted" style="margin:6px 0 0"></p>
+<p class="muted" style="margin:6px 0 0">后台自动重试，<b>不阻塞你的操作</b>——可以照常浏览本页或离开，确认成功后会自动到账。</p>
+</div>
 
 ${card(`
 <div class="grid">
@@ -162,6 +171,10 @@ ${rows.length === 0
 (function(){
   var cfg=${JSON.stringify(meta)};
   var rate=${JSON.stringify(cfg.rate)};
+  var claimUrl=${JSON.stringify(`${base}/recharge/claim`)};
+  var token=${JSON.stringify(opts.token)};
+  var pendingHash=${JSON.stringify(opts.pendingHash ?? '')};
+  var maxTries=30, intervalMs=6000;
   var amountEl=document.getElementById('amount');
   var estEl=document.getElementById('estimate');
   var btn=document.getElementById('send');
@@ -186,6 +199,53 @@ ${rows.length === 0
   function padHex(hex,len){ while(hex.length<len) hex='0'+hex; return hex; }
   function padWord(hex){ return padHex(hex,64); }
 
+  var box=document.getElementById('pending-box');
+  var pmsg=document.getElementById('pending-msg');
+  function showPending(t){box.style.display='block';pmsg.textContent=t;}
+
+  /**
+   * 后台轮询补单：不弹窗、不禁用任何控件，只在页面顶部显示一条进度，
+   * 用户可以照常浏览/离开；确认成功后自动刷新页面。
+   */
+  function poll(hash){
+    var tries=0,timer=null;
+    function step(){
+      fetch(claimUrl,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({txHash:hash,token:token})})
+      .then(function(r){return r.json().catch(function(){return {};});})
+      .then(function(d){
+        if(d.ok){
+          showPending('✅ 已到账 '+d.points+' 点，正在刷新…');
+          var u=new URL(window.location.href);
+          u.searchParams.delete('pending');u.searchParams.delete('err');
+          u.searchParams.set('ok','1');
+          u.searchParams.set('msg', d.duplicated
+            ? ('该交易此前已入账（'+d.points+' 点），未重复加分。')
+            : ('充值成功，到账 '+d.points+' 点。'));
+          setTimeout(function(){window.location.href=u.toString();},900);
+          return;
+        }
+        if(d.code==='pending'){
+          tries++;
+          if(tries>=maxTries){
+            showPending('⚠️ 已等待约 '+Math.round(maxTries*intervalMs/1000)+' 秒仍未确认；可稍后用下方表单手动补单。');
+            return;
+          }
+          showPending('⏳ 等待链上确认…（第 '+tries+' 次，每 '+(intervalMs/1000)+' 秒一次）');
+          timer=setTimeout(step,intervalMs);
+          return;
+        }
+        showPending('❌ '+(d.error||'补单失败'));
+      })
+      .catch(function(e){
+        showPending('网络异常，正在重试…（'+(e&&e.message?e.message:String(e))+'）');
+        timer=setTimeout(step,intervalMs);
+      });
+    }
+    showPending('⏳ 已提交，正在等待链上确认…');
+    step();
+  }
+  if(pendingHash) poll(pendingHash);
+
   if(amountEl){
     amountEl.addEventListener('input',function(){
       var raw=toRaw(amountEl.value);
@@ -194,8 +254,8 @@ ${rows.length === 0
   }
   if(!window.ethereum){
     setStatus('未检测到钱包（MetaMask 等）。请安装钱包，或用下方手动补单。');
-    btn.disabled=true; return;
-  }
+    btn.disabled=true;
+  }else{
   btn.addEventListener('click',async function(){
     var raw=toRaw(amountEl.value);
     if(raw===null||raw<=0n){setStatus('请输入正确的转账数量。');return;}
@@ -212,14 +272,16 @@ ${rows.length === 0
         params={from:from,to:cfg.recipient,value:'0x'+raw.toString(16)};
       }
       var hash=await window.ethereum.request({method:'eth_sendTransaction',params:[params]});
-      setStatus('交易已提交：'+hash+'，正在补单…');
+      setStatus('交易已提交：'+hash+'（可照常操作，到账后本页会自动刷新）');
       hashEl.value=hash;
-      form.submit();
+      btn.disabled=false;
+      poll(hash);
     }catch(e){
       setStatus('失败：'+(e&&e.message?e.message:String(e)));
       btn.disabled=false;
     }
   });
+  }
 })();
 </script>
 `,
@@ -265,6 +327,7 @@ export function createRechargeRouter(): Router {
           balance: bill?.balance ?? 0,
           recharged: bill?.recharged ?? 0,
           message,
+          pendingHash: typeof q.pending === 'string' && q.pending ? q.pending : undefined,
         }),
       );
     }),
@@ -301,9 +364,52 @@ export function createRechargeRouter(): Router {
             : `充值成功，到账 ${record.points} 点。`,
         );
       } catch (err) {
-        back.searchParams.set('err', err instanceof Error ? err.message : '补单失败');
+        if (err instanceof RechargePendingError) {
+          // 尚未确认：回到页面并让前端后台轮询，而不是把重试甩给用户
+          back.searchParams.set('pending', txHash);
+        } else {
+          back.searchParams.set('err', err instanceof Error ? err.message : '补单失败');
+        }
       }
       res.redirect(302, back.toString());
+    }),
+  );
+
+  /**
+   * 补单查询接口（前端轮询用）。
+   * 202 + code=pending = 交易还没确认，前端应继续等；200 = 已入账。
+   */
+  router.post(
+    '/recharge/claim',
+    requireSameOrigin,
+    wrap(async (req: Request, res: Response) => {
+      const user = authenticateUserRequest(req);
+      if (!user) {
+        res.status(401).json({ ok: false, code: 'error', error: '未登录或令牌无效。' });
+        return;
+      }
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const txHash = String(body.txHash ?? '').trim();
+      try {
+        const { record, duplicated } = await submitRechargeTx({
+          userId: user.id,
+          username: user.username,
+          txHash,
+        });
+        res.json({
+          ok: true,
+          status: record.status,
+          points: record.points,
+          duplicated,
+        });
+      } catch (err) {
+        const pending = err instanceof RechargePendingError;
+        res.status(pending ? 202 : 400).json({
+          ok: false,
+          code: pending ? 'pending' : 'error',
+          error: err instanceof Error ? err.message : '补单失败',
+        });
+      }
     }),
   );
 

@@ -26,6 +26,17 @@ import {
 
 // ---------------------------------------------------------------- 类型
 
+/**
+ * 「交易还没被节点看到 / 还没打包」——这类错误是**可重试**的：
+ * 前端应当留在页面上后台轮询，而不是把错误甩给用户让他手动重试。
+ */
+export class RechargePendingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RechargePendingError';
+  }
+}
+
 export interface EvmProvider {
   /** eth_call，用于读 ERC20 的 name/symbol/decimals */
   call(tx: { to: string; data: string }): Promise<string>;
@@ -321,12 +332,15 @@ export async function verifyRechargeTx(
   }
 
   const tx = await provider.getTransaction(hash);
-  if (!tx) throw new Error('链上查不到这笔交易，请确认哈希与所在网络是否正确。');
+  if (!tx) {
+    // 刚发出的交易可能还没被节点同步到，属于可重试
+    throw new RechargePendingError('交易暂未同步到节点，正在等待确认…');
+  }
 
   if (cfg.tokenAddress) {
     const receipt = await provider.getTransactionReceipt(hash);
     if (!receipt) {
-      throw new Error('该 ERC20 转账尚未打包，请稍后重试补单。');
+      throw new RechargePendingError('该 ERC20 转账尚未打包，正在等待链上确认…');
     }
     if (receipt.status === 0) {
       throw new Error('这笔交易在链上失败了（status=0），无法入账。');

@@ -176,6 +176,24 @@ describe('verifyRechargeTx', () => {
     const provider = makeProvider({ to: TOKEN, receipt: null });
     await expect(recharge.verifyRechargeTx(provider, cfg, TX)).rejects.toThrow(/尚未打包/);
   });
+
+  it('未确认类错误抛 RechargePendingError（前端据此后台轮询等待）', async () => {
+    const cfg = { ...BASE_CONFIG, tokenAddress: TOKEN };
+    // ERC20 还没打包
+    await expect(
+      recharge.verifyRechargeTx(makeProvider({ to: TOKEN, receipt: null }), cfg, TX),
+    ).rejects.toBeInstanceOf(recharge.RechargePendingError);
+    // 交易还没被节点看到
+    await expect(
+      recharge.verifyRechargeTx(makeProvider({ tx: false }), cfg, TX),
+    ).rejects.toBeInstanceOf(recharge.RechargePendingError);
+  });
+
+  it('其它错误不是待确认（前端立即报错，不空等轮询）', async () => {
+    await expect(
+      recharge.verifyRechargeTx(makeProvider({ to: PAYER, value: 10n ** 18n }), BASE_CONFIG, TX),
+    ).rejects.not.toBeInstanceOf(recharge.RechargePendingError);
+  });
 });
 
 describe('submitRechargeTx', () => {
