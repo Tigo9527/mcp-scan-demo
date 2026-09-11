@@ -316,7 +316,13 @@ export function createRechargeRouter(): Router {
           ? { kind: 'ok' as const, text: String(q.msg ?? '充值已到账。') }
           : q.err
             ? { kind: 'err' as const, text: String(q.err) }
-            : undefined;
+            : // decimals 缺失时入账必然被拒，直接把话说在前面，别让用户白转一笔
+              cfg.tokenAddress && cfg.tokenDecimals === undefined
+              ? {
+                  kind: 'err' as const,
+                  text: '充值暂不可用：收款代币的配置还不完整（缺少 decimals），请稍后再来或联系管理员。',
+                }
+              : undefined;
 
       const bill = billing.getUserBilling(user.id);
       res.type('html').send(

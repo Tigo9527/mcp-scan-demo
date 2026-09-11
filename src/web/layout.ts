@@ -50,6 +50,8 @@ nav a.active{opacity:1;font-weight:600;color:var(--acc)}
 .badge.warn{color:var(--warn);border-color:#f0d9a8;background:#fdf6e3}
 .badge.err{color:var(--err);border-color:#f3c3c6;background:#fdecec}
 .notice{border-left:4px solid var(--warn);background:#fdf6e3;padding:10px 14px;border-radius:0 8px 8px 0;margin:14px 0;font-size:.92em}
+.notice.ok{border-left-color:var(--ok);background:#eaf6ee}
+.notice.err{border-left-color:var(--err);background:#fdecec}
 .empty{color:var(--muted);padding:16px 0}
 .version-footer{margin-top:32px;padding-top:12px;border-top:1px solid var(--line);
   color:var(--muted);font-size:.85em}
@@ -202,8 +204,10 @@ export function badge(text: string, kind: 'ok' | 'warn' | 'err' | '' = ''): stri
   return `<span class="badge${kind ? ` ${kind}` : ''}">${esc(text)}</span>`;
 }
 
-export function notice(inner: string): string {
-  return `<div class="notice">${inner}</div>`;
+/** 提示条。`kind` 缺省为「提醒（黄）」，`ok` 绿、`err` 红。 */
+export function notice(inner: string, kind?: 'ok' | 'err'): string {
+  const cls = kind ? `notice ${kind}` : 'notice';
+  return `<div class="${cls}">${inner}</div>`;
 }
 
 /**

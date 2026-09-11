@@ -78,9 +78,23 @@ export interface RechargeConfig {
   tokenName?: string;
   tokenSymbol?: string;
   tokenDecimals?: number;
+  /**
+   * 最近一次**自动**读取 ERC20 元数据失败的原因（已转成人话）。
+   * 有值只代表「元数据没读到」——配置**照常保存**，页面会给出告警；
+   * 但 `tokenDecimals` 缺失时入账会被拒绝（否则金额算不对，等于给用户乱加钱）。
+   */
+  tokenMetaError?: string;
   updatedAt?: string;
   updatedBy?: string;
 }
+
+/**
+ * 配置表单的输入类型。`tokenDecimals` 来自 `<input>`，天然是字符串，
+ * 所以这里显式放宽成 `number | string`（内部再转数字并校验范围）。
+ */
+export type RechargeConfigInput = Partial<Omit<RechargeConfig, 'tokenDecimals'>> & {
+  tokenDecimals?: number | string;
+};
 
 export type RechargeKind = 'native' | 'erc20';
 export type RechargeStatus = 'credited' | 'pending';
@@ -184,7 +198,7 @@ const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
 /**
  * 校验配置字段。返回 `{ ok: false, error }` 而不是抛异常，便于表单回显。
  */
-export function validateRechargeConfig(input: Partial<RechargeConfig>):
+export function validateRechargeConfig(input: RechargeConfigInput):
   | { ok: true; value: RechargeConfig }
   | { ok: false; error: string } {
   const recipient = String(input.recipient ?? '').trim();
@@ -224,34 +238,107 @@ export function validateRechargeConfig(input: Partial<RechargeConfig>):
 }
 
 /**
- * 保存配置。配置了 ERC20 时会**先读链上元数据**：
- * 读不到（合约不存在 / RPC 不通 / 不是 ERC20）就**不落盘**并返回错误，便于直接修正重填。
+ * 把 ethers / 网络层的一长串原始错误翻成人话。
+ *
+ * 背景：曾经直接把 `server response 525 <none> (request={...})` 甩到页面上，
+ * 管理员根本看不出是「RPC 不可用」还是「合约填错了」——而这两者的处置完全不同。
+ */
+export function humanizeRpcError(err: unknown, rpcUrl: string): string {
+  const raw = err instanceof Error ? err.message : String(err ?? '');
+  if (/合约未返回|无法解码|decimals 取值异常/.test(raw)) return raw; // 已是人话
+
+  const status = raw.match(/responseStatus"?\s*[:=]\s*"?(\d{3})/)?.[1];
+  if (status) {
+    return `RPC 返回 HTTP ${status}（${rpcUrl}）——该节点不可用、拒绝本机访问或需要鉴权，请换一个 RPC 地址。`;
+  }
+  if (/TIMEOUT|ETIMEDOUT/i.test(raw)) {
+    return `读取超时（${rpcUrl}）——节点没有在预期时间内响应，请稍后重试或换一个 RPC。`;
+  }
+  if (/NETWORK_ERROR|fetch failed|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|getaddrinfo/i.test(raw)) {
+    return `连不上 RPC（${rpcUrl}）——网络不可达或被防火墙拦截，请换一个 RPC 地址。`;
+  }
+  if (/CALL_EXCEPTION|missing revert data/i.test(raw)) {
+    return '合约调用失败：这个地址在当前链上可能不是 ERC20（或链选错了）。';
+  }
+  return `读取失败：${raw.replace(/\s+/g, ' ').slice(0, 180)}`;
+}
+
+/**
+ * 保存配置。
+ *
+ * 配置了 ERC20 时会尝试读取链上 name / symbol / decimals，但**读不到也要保存**：
+ * RPC 抽风属于运营事件，不该把管理员锁在门外。读失败时把原因记进 `tokenMetaError`
+ * 由页面告警，并提供「重新读取 / 手工填写」两条补救路径；只有 decimals 彻底缺失时
+ * 才在**入账**环节拒绝（verifyRechargeTx），避免金额算错。
+ *
+ * 元数据取值优先级：手工填写 > 本次链上读取 > 上一次成功读到的（合约地址未变时）。
  */
 export async function setRechargeConfig(
-  input: Partial<RechargeConfig>,
+  input: RechargeConfigInput,
   opts: { provider?: EvmProvider } = {},
-): Promise<{ ok: true; config: RechargeConfig } | { ok: false; error: string }> {
+): Promise<
+  { ok: true; config: RechargeConfig; warning?: string } | { ok: false; error: string }
+> {
   const checked = validateRechargeConfig(input);
   if (!checked.ok) return checked;
 
+  const prev = ensureSettings();
   const next: RechargeConfig = { ...checked.value };
+  let warning: string | undefined;
+
   if (next.tokenAddress) {
-    const provider = opts.provider ?? createJsonRpcProvider(next.rpcUrl);
-    try {
-      const meta = await readTokenMeta(provider, next.tokenAddress);
-      next.tokenName = meta.name;
-      next.tokenSymbol = meta.symbol;
-      next.tokenDecimals = meta.decimals;
-    } catch (err) {
-      return {
-        ok: false,
-        error: `读取 ERC20 元数据失败，配置未保存：${err instanceof Error ? err.message : String(err)}`,
-      };
+    // ---- 手工填写（自动读取失败时的兜底）----
+    const manualName = String(input.tokenName ?? '').trim();
+    const manualSymbol = String(input.tokenSymbol ?? '').trim();
+    const manualRaw = String(input.tokenDecimals ?? '').trim();
+    const manualDecimals = manualRaw === '' ? undefined : Number(manualRaw);
+    if (
+      manualDecimals !== undefined &&
+      (!Number.isInteger(manualDecimals) || manualDecimals < 0 || manualDecimals > 36)
+    ) {
+      return { ok: false, error: '手工填写的 decimals 必须是 0~36 的整数。' };
+    }
+
+    // ---- 链上自动读取（缺什么补什么）----
+    let auto: TokenMeta | null = null;
+    let autoError = '';
+    if (!manualName || !manualSymbol || manualDecimals === undefined) {
+      const provider = opts.provider ?? createJsonRpcProvider(next.rpcUrl);
+      try {
+        auto = await readTokenMeta(provider, next.tokenAddress);
+      } catch (err) {
+        autoError = humanizeRpcError(err, next.rpcUrl);
+      }
+    }
+
+    // 换了合约就不能再沿用旧元数据（否则 decimals 会张冠李戴）
+    const sameToken = sameAddress(prev?.tokenAddress, next.tokenAddress);
+    const name = manualName || auto?.name || (sameToken ? prev?.tokenName ?? '' : '');
+    const symbol = manualSymbol || auto?.symbol || (sameToken ? prev?.tokenSymbol ?? '' : '');
+    const decimals =
+      manualDecimals ?? auto?.decimals ?? (sameToken ? prev?.tokenDecimals : undefined);
+
+    next.tokenName = name;
+    next.tokenSymbol = symbol;
+    if (decimals === undefined) {
+      delete next.tokenDecimals;
+      next.tokenMetaError =
+        autoError || '缺少 decimals：请手工填写，或换一个可用 RPC 后点「重新读取元数据」。';
+      warning = `已保存，但 ERC20 元数据不完整（${next.tokenMetaError}）decimals 补全前无法入账。`;
+    } else {
+      next.tokenDecimals = decimals;
+      if (autoError) {
+        next.tokenMetaError = autoError;
+        warning = `已保存，但本次没能从链上读到元数据（${autoError}）当前沿用已保存的值，入账不受影响。`;
+      } else {
+        delete next.tokenMetaError;
+      }
     }
   } else {
     delete next.tokenName;
     delete next.tokenSymbol;
     delete next.tokenDecimals;
+    delete next.tokenMetaError;
   }
 
   next.updatedAt = new Date().toISOString();
@@ -259,7 +346,21 @@ export async function setRechargeConfig(
   settings = next;
   settingsLoaded = true;
   scheduleSave(SETTINGS_FILE, () => ({ ...next }));
-  return { ok: true, config: { ...next } };
+  return warning ? { ok: true, config: { ...next }, warning } : { ok: true, config: { ...next } };
+}
+
+/**
+ * 用当前已保存的配置重读一次 ERC20 元数据（页面上的「重新读取元数据」按钮）。
+ * RPC 恢复后点一下即可补齐 name / symbol / decimals，不用重填整张表单。
+ */
+export async function refreshTokenMeta(
+  opts: { provider?: EvmProvider } = {},
+): Promise<{ ok: true; config: RechargeConfig; warning?: string } | { ok: false; error: string }> {
+  const cur = ensureSettings();
+  if (!cur) return { ok: false, error: '还没保存过充值配置，请先填写并保存。' };
+  if (!cur.tokenAddress) return { ok: false, error: '当前收的是原生币，不需要读 ERC20 元数据。' };
+  // 清空手工值，强制走链上读取；读失败时会回退到上一次的 decimals（合约地址没变）
+  return setRechargeConfig({ ...cur, tokenName: '', tokenSymbol: '', tokenDecimals: undefined }, opts);
 }
 
 // ---------------------------------------------------------------- ERC20 元数据
@@ -345,7 +446,11 @@ export async function verifyRechargeTx(
     if (receipt.status === 0) {
       throw new Error('这笔交易在链上失败了（status=0），无法入账。');
     }
-    const decimals = cfg.tokenDecimals ?? 18;
+    // decimals 缺失时绝不猜（默认 18 会让 6 位代币的金额差 10^12 倍）——直接拒绝入账
+    if (cfg.tokenDecimals === undefined) {
+      throw new Error('ERC20 元数据不完整（缺少 decimals），暂不能入账，请联系管理员在充值设置里补全。');
+    }
+    const decimals = cfg.tokenDecimals;
     let matched: bigint | null = null;
     for (const log of receipt.logs ?? []) {
       if (!sameAddress(log.address, cfg.tokenAddress)) continue;

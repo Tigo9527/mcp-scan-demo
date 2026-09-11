@@ -7,7 +7,7 @@
  *  - 链上校验：原生币（含 pending）、ERC20（Transfer 事件 / 未打包报错）
  *  - 提交入账与幂等（同一 txHash 只加一次点数）
  *  - 记录筛选
- *  - 保存配置时读 meta，读不到不落盘
+ *  - 保存配置时读 meta：读不到也落盘（只告警），decimals 缺失时入账被拒
  */
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { Interface } from 'ethers';
@@ -262,23 +262,148 @@ describe('listRecharges 筛选', () => {
 });
 
 describe('setRechargeConfig', () => {
-  it('保存 ERC20 配置时读 meta，读不到则不落盘', async () => {
+  it('保存 ERC20 配置时读 meta 并回显', async () => {
     recharge.__resetForTest();
     const ok = await recharge.setRechargeConfig(
       { ...BASE_CONFIG, tokenAddress: TOKEN },
       { provider: tokenProvider({ name: 'Demo Token', symbol: 'DEMO', decimals: 6 }) },
     );
     expect(ok.ok).toBe(true);
+    if (ok.ok) expect(ok.warning).toBeUndefined();
     expect(recharge.getRechargeConfig()?.tokenSymbol).toBe('DEMO');
     expect(recharge.getRechargeConfig()?.tokenDecimals).toBe(6);
+    expect(recharge.getRechargeConfig()?.tokenMetaError).toBeUndefined();
+  });
 
-    // 读不到元数据：不落盘，配置保持原样
+  it('元数据读不到也要保存（只告警，不把管理员锁在门外）', async () => {
+    recharge.__resetForTest();
     const bad = await recharge.setRechargeConfig(
-      { ...BASE_CONFIG, tokenAddress: '0x4444444444444444444444444444444444444444' },
+      { ...BASE_CONFIG, tokenAddress: TOKEN },
       { provider: tokenProvider() },
     );
-    expect(bad.ok).toBe(false);
-    if (!bad.ok) expect(bad.error).toMatch(/未保存/);
-    expect(recharge.getRechargeConfig()?.tokenSymbol).toBe('DEMO');
+    expect(bad.ok).toBe(true);
+    if (bad.ok) expect(bad.warning).toMatch(/decimals/);
+    const cfg = recharge.getRechargeConfig();
+    expect(cfg?.recipient).toBe(RECIPIENT); // 收款地址 / 汇率照样存下来了
+    expect(cfg?.rate).toBe(100);
+    expect(cfg?.tokenDecimals).toBeUndefined();
+    expect(cfg?.tokenMetaError).toBeTruthy();
+  });
+
+  it('合约地址不变时读取失败沿用上次 decimals，入账不受影响', async () => {
+    recharge.__resetForTest();
+    await recharge.setRechargeConfig(
+      { ...BASE_CONFIG, tokenAddress: TOKEN },
+      { provider: tokenProvider({ name: 'Demo Token', symbol: 'DEMO', decimals: 6 }) },
+    );
+    // RPC 抽风：同一个合约再保存一次
+    const again = await recharge.setRechargeConfig(
+      { ...BASE_CONFIG, tokenAddress: TOKEN.toLowerCase() },
+      { provider: tokenProvider() },
+    );
+    expect(again.ok).toBe(true);
+    if (again.ok) expect(again.warning).toMatch(/沿用/);
+    const cfg = recharge.getRechargeConfig();
+    expect(cfg?.tokenDecimals).toBe(6);
+    expect(cfg?.tokenMetaError).toBeTruthy();
+  });
+
+  it('换了合约就不能沿用旧 decimals（避免张冠李戴）', async () => {
+    recharge.__resetForTest();
+    await recharge.setRechargeConfig(
+      { ...BASE_CONFIG, tokenAddress: TOKEN },
+      { provider: tokenProvider({ name: 'Demo Token', symbol: 'DEMO', decimals: 6 }) },
+    );
+    const other = '0x4444444444444444444444444444444444444444';
+    await recharge.setRechargeConfig(
+      { ...BASE_CONFIG, tokenAddress: other },
+      { provider: tokenProvider() },
+    );
+    expect(recharge.getRechargeConfig()?.tokenDecimals).toBeUndefined();
+  });
+
+  it('手工填写元数据时不依赖链上读取', async () => {
+    recharge.__resetForTest();
+    const r = await recharge.setRechargeConfig(
+      {
+        ...BASE_CONFIG,
+        tokenAddress: TOKEN,
+        tokenName: 'Demo Token',
+        tokenSymbol: 'DEMO',
+        tokenDecimals: 6,
+      },
+      { provider: tokenProvider() }, // 链上读不到
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.warning).toBeUndefined();
+    const cfg = recharge.getRechargeConfig();
+    expect(cfg?.tokenDecimals).toBe(6);
+    expect(cfg?.tokenSymbol).toBe('DEMO');
+    expect(cfg?.tokenMetaError).toBeUndefined();
+  });
+
+  it('手工 decimals 越界时拒绝保存', async () => {
+    const r = await recharge.setRechargeConfig(
+      { ...BASE_CONFIG, tokenAddress: TOKEN, tokenName: 'x', tokenSymbol: 'X', tokenDecimals: 99 },
+      { provider: tokenProvider({ name: 'x', symbol: 'X', decimals: 18 }) },
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/0~36/);
+  });
+});
+
+describe('refreshTokenMeta', () => {
+  it('RPC 恢复后重读成功，告警被清除', async () => {
+    recharge.__resetForTest();
+    await recharge.setRechargeConfig(
+      { ...BASE_CONFIG, tokenAddress: TOKEN },
+      { provider: tokenProvider() },
+    );
+    expect(recharge.getRechargeConfig()?.tokenMetaError).toBeTruthy();
+
+    const r = await recharge.refreshTokenMeta({
+      provider: tokenProvider({ name: 'Demo Token', symbol: 'DEMO', decimals: 6 }),
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.warning).toBeUndefined();
+    const cfg = recharge.getRechargeConfig();
+    expect(cfg?.tokenDecimals).toBe(6);
+    expect(cfg?.tokenMetaError).toBeUndefined();
+  });
+
+  it('未保存过配置 / 收原生币时给出明确提示', async () => {
+    recharge.__resetForTest();
+    expect((await recharge.refreshTokenMeta()).ok).toBe(false);
+    await recharge.setRechargeConfig(BASE_CONFIG);
+    expect((await recharge.refreshTokenMeta()).ok).toBe(false);
+  });
+});
+
+describe('humanizeRpcError', () => {
+  it('把 525 / 超时 / 连不上翻成人话，而不是甩一长串 ethers 报错', () => {
+    const url = 'https://bad-rpc.example';
+    expect(recharge.humanizeRpcError(new Error('server response 525 <none> (request={  }, response={  }, info={ "responseStatus": "525 <none>" }, code=SERVER_ERROR)'), url)).toMatch(/HTTP 525/);
+    expect(recharge.humanizeRpcError(new Error('timeout ... TIMEOUT'), url)).toMatch(/超时/);
+    expect(recharge.humanizeRpcError(new Error('fetch failed ECONNREFUSED'), url)).toMatch(/连不上 RPC/);
+    // 已经是中文的业务错误原样返回
+    expect(recharge.humanizeRpcError(new Error('合约未返回 name()（地址可能不是 ERC20）'), url)).toMatch(/合约未返回/);
+  });
+});
+
+describe('decimals 缺失时的入账防线', () => {
+  it('ERC20 元数据不完整时拒绝入账（绝不默认 18 猜）', async () => {
+    recharge.__resetForTest();
+    await recharge.setRechargeConfig(
+      { ...BASE_CONFIG, tokenAddress: TOKEN },
+      { provider: tokenProvider() }, // 读不到 → decimals 缺失
+    );
+    const provider = makeProvider({
+      to: TOKEN,
+      receipt: { status: 1, logs: [transferLog(RECIPIENT, 1_000_000n)] },
+    });
+    await expect(
+      recharge.submitRechargeTx({ userId: 'u9', txHash: TX }, { provider }),
+    ).rejects.toThrow(/decimals/);
+    expect(billing.getBalance('u9')).toBe(config.billingFreeCredits); // 一分没加
   });
 });

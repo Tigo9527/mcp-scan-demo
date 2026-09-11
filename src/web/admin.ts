@@ -485,12 +485,18 @@ ${card(`
 function rechargeSettingsHtml(
   base: string,
   adminToken: string,
-  saved?: boolean,
-  error?: string,
+  opts: { saved?: boolean; error?: string; warning?: string; message?: string } = {},
 ): string {
   const cfg = recharge.getRechargeConfig();
   const c = cfg ?? { recipient: '', rpcUrl: '', rate: 0, tokenAddress: '', chainId: '' };
   const isToken = Boolean(c.tokenAddress);
+  /** decimals 缺失 = 入账会被拒绝，必须让管理员一眼看见 */
+  const metaMissing = isToken && c.tokenDecimals === undefined;
+  const metaCell = !isToken
+    ? '<span class="muted">—</span>'
+    : metaMissing
+      ? '<b style="color:var(--err)">未获取（缺少 decimals，入账会被拒绝）</b>'
+      : `${esc(c.tokenName || '—')}（${esc(c.tokenSymbol || '—')}）· decimals ${esc(String(c.tokenDecimals))}`;
 
   return page({
     title: 'Admin · 充值设置',
@@ -499,8 +505,10 @@ function rechargeSettingsHtml(
     adminToken,
     body: `
 <h1>充值设置（Crypto → 点数）</h1>
-${saved ? notice('已保存，立即生效（无需重启）。') : ''}
-${error ? notice(esc(error)) : ''}
+${opts.error ? notice(esc(opts.error), 'err') : ''}
+${opts.warning ? notice(esc(opts.warning)) : ''}
+${opts.message ? notice(esc(opts.message), 'ok') : ''}
+${opts.saved ? notice('已保存，立即生效（无需重启）。', 'ok') : ''}
 
 ${card(`
 <h3>当前生效配置</h3>
@@ -510,17 +518,18 @@ ${table(
     ['收款地址', c.recipient ? `<code>${esc(c.recipient)}</code>` : '<span class="muted">未配置</span>'],
     ['RPC', c.rpcUrl ? `<code>${esc(c.rpcUrl)}</code>` : '<span class="muted">未配置</span>'],
     ['收取资产', isToken ? `ERC20 <code>${esc(c.tokenAddress)}</code>` : badge('原生币', '')],
-    [
-      '代币元数据',
-      isToken
-        ? `${esc(c.tokenName || '—')}（${esc(c.tokenSymbol || '—')}）· decimals ${esc(String(c.tokenDecimals ?? 18))}`
-        : '<span class="muted">—</span>',
-    ],
+    ['代币元数据', metaCell],
     ['汇率', c.rate ? `1 ${esc(isToken ? (c.tokenSymbol || '代币') : 'ETH')} = ${esc(String(c.rate))} 点` : '<span class="muted">未配置</span>'],
     ['链 ID', c.chainId ? `<code>${esc(c.chainId)}</code>` : '<span class="muted">未指定</span>'],
   ],
 )}
 <p class="muted">最近更新：${esc(fmtTime(c.updatedAt))}${c.updatedBy ? ` 由 ${esc(c.updatedBy)}` : ''}</p>
+${isToken ? `
+<form method="post" action="${esc(adminHref('/admin/recharge-settings/refresh-meta', adminToken))}" style="margin-top:10px">
+<button class="btn small alt" type="submit">重新读取元数据</button>
+<span class="muted">RPC 恢复 / 换过 RPC 后点这里重读 name / symbol / decimals，不用重填表单。</span>
+</form>` : ''}
+${isToken && c.tokenMetaError ? `<p class="muted">上次自动读取失败原因：<b>${esc(c.tokenMetaError)}</b></p>` : ''}
 `)}
 
 <h2>修改</h2>
@@ -530,11 +539,22 @@ ${card(`
 <input id="recipient" name="recipient" value="${esc(c.recipient)}" placeholder="0x 开头 40 位十六进制">
 
 <label for="rpcUrl">RPC 地址</label>
-<input id="rpcUrl" name="rpcUrl" value="${esc(c.rpcUrl)}" placeholder="https://eth.llamarpc.com">
+<input id="rpcUrl" name="rpcUrl" value="${esc(c.rpcUrl)}" placeholder="https://ethereum-rpc.publicnode.com">
+<p class="muted">保存时会用它读 ERC20 元数据、校验转账。节点不通也能保存（只是会告警），换一个可用的再点「重新读取元数据」即可。</p>
 
 <label for="tokenAddress">ERC20 合约地址（留空则收原生币）</label>
 <input id="tokenAddress" name="tokenAddress" value="${esc(c.tokenAddress)}" placeholder="留空 = 收取原生币">
-<p class="muted">填写后保存时会**自动读取**链上的 name / symbol / decimals 并回显；读不到则<b>不保存</b>，方便直接修正。</p>
+<p class="muted">填写后保存时会自动读取链上的 name / symbol / decimals 并回显；读不到<b>也会保存</b>，只是会告警，并在 decimals 补全前拒绝入账。</p>
+
+<label for="tokenName">代币名称（可选，留空自动读）</label>
+<input id="tokenName" name="tokenName" value="${esc(c.tokenName ?? '')}" placeholder="如 Tether USD">
+
+<label for="tokenSymbol">代币符号（可选，留空自动读）</label>
+<input id="tokenSymbol" name="tokenSymbol" value="${esc(c.tokenSymbol ?? '')}" placeholder="如 USDT">
+
+<label for="tokenDecimals">decimals（可选；自动读不到时必填）</label>
+<input id="tokenDecimals" name="tokenDecimals" type="number" min="0" max="36" step="1" value="${c.tokenDecimals === undefined ? '' : esc(String(c.tokenDecimals))}" placeholder="如 6 / 18">
+<p class="muted">RPC 不通或合约非标准时可手工填这三项。<b>decimals 填错会算错金额</b>（USDT 是 6，多数代币是 18），不确定就换个可用 RPC 再点「重新读取元数据」。</p>
 
 <label for="rate">汇率（1 个代币兑换多少点数）</label>
 <input id="rate" name="rate" type="number" step="any" min="0" value="${c.rate ? esc(String(c.rate)) : ''}" placeholder="如 1000">
@@ -797,8 +817,16 @@ export function createAdminRouter(): Router {
 
   router.get('/admin/recharge-settings', requireAdmin, (req: Request, res: Response) => {
     const token = resolveAdminToken(req) ?? '';
-    const saved = (req.query as Record<string, unknown>).saved === '1';
-    res.type('html').send(rechargeSettingsHtml(deriveBase(req), token, saved));
+    const q = req.query as Record<string, unknown>;
+    const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+    res.type('html').send(
+      rechargeSettingsHtml(deriveBase(req), token, {
+        saved: str(q.saved) === '1',
+        error: str(q.err),
+        warning: str(q.warn),
+        message: str(q.msg),
+      }),
+    );
   });
 
   router.post(
@@ -815,13 +843,39 @@ export function createAdminRouter(): Router {
         recipient: str(body.recipient),
         rpcUrl: str(body.rpcUrl),
         tokenAddress: str(body.tokenAddress),
+        tokenName: str(body.tokenName),
+        tokenSymbol: str(body.tokenSymbol),
+        tokenDecimals: str(body.tokenDecimals),
         rate: Number(str(body.rate)),
         chainId: str(body.chainId),
       });
 
       const target = new URL(adminHref('/admin/recharge-settings', token), base);
-      if (result.ok) target.searchParams.set('saved', '1');
-      else target.searchParams.set('err', result.error);
+      if (result.ok) {
+        target.searchParams.set('saved', '1');
+        if (result.warning) target.searchParams.set('warn', result.warning);
+      } else {
+        target.searchParams.set('err', result.error);
+      }
+      res.redirect(302, target.toString());
+    }),
+  );
+
+  // 「重新读取元数据」：RPC 恢复后不用重填整张表单
+  router.post(
+    '/admin/recharge-settings/refresh-meta',
+    requireAdmin,
+    requireSameOrigin,
+    wrap(async (req: Request, res: Response) => {
+      const token = resolveAdminToken(req) ?? '';
+      const result = await recharge.refreshTokenMeta();
+      const target = new URL(adminHref('/admin/recharge-settings', token), deriveBase(req));
+      if (result.ok) {
+        if (result.warning) target.searchParams.set('warn', result.warning);
+        else target.searchParams.set('msg', '元数据已重新读取成功。');
+      } else {
+        target.searchParams.set('err', result.error);
+      }
       res.redirect(302, target.toString());
     }),
   );
