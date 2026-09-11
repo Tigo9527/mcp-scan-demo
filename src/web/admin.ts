@@ -277,16 +277,8 @@ ${recent.length === 0 ? '<div class="empty">暂无记录。</div>' : table(['时
     c.tool ? `<code>${esc(c.tool)}</code>` : '—',
     c.userId ? esc(c.username) : '<span class="muted">匿名</span>',
   ]))}
-
-<div class="row" style="margin-top:20px">
-<a class="btn alt" href="${esc(adminHref('/admin/users', adminToken))}">用户管理</a>
-<a class="btn alt" href="${esc(adminHref('/admin/settings', adminToken))}">GitHub 设置</a>
-<a class="btn alt" href="${esc(adminHref('/admin/recharge', adminToken))}">充值记录</a>
-<a class="btn alt" href="${esc(adminHref('/admin/recharge-settings', adminToken))}">充值设置</a>
-<a class="btn small" href="${esc(adminHref('/admin/api/stats', adminToken))}">统计 JSON</a>
-<a class="btn small" href="${esc(adminHref('/admin/logout', adminToken))}">退出</a>
-</div>
 `,
+    adminTab: 'dashboard',
   });
 }
 
@@ -329,11 +321,8 @@ function usersHtml(base: string, adminToken: string, query: string): string {
 
 <p class="muted">共 ${total} 个用户${shown < total ? `（显示前 ${shown} 条）` : ''} ·「请求数 / 工具调用」列为该用户的累计统计</p>
 ${table(['用户名', '邮箱', '来源', 'GitHub', '注册时间', '最近活跃', '请求/工具', '操作'], rows)}
-
-<div class="row" style="margin-top:20px">
-<a class="btn alt" href="${esc(adminHref('/admin', adminToken))}">← 返回仪表盘</a>
-</div>
 `,
+    adminTab: 'users',
   });
 }
 
@@ -410,10 +399,8 @@ ${card(`
 </form>
 `)}
 
-<div class="row" style="margin-top:20px">
-<a class="btn alt" href="${esc(adminHref('/admin/users', adminToken))}">← 返回用户列表</a>
-</div>
 `,
+    adminTab: 'users',
   });
 }
 
@@ -475,10 +462,8 @@ ${card(`
 </form>
 `)}
 
-<div class="row" style="margin-top:20px">
-<a class="btn alt" href="${esc(adminHref('/admin', adminToken))}">← 返回仪表盘</a>
-</div>
 `,
+    adminTab: 'github',
   });
 }
 
@@ -566,11 +551,8 @@ ${card(`
 </form>
 `)}
 
-<div class="row" style="margin-top:20px">
-<a class="btn alt" href="${esc(adminHref('/admin', adminToken))}">← 返回仪表盘</a>
-<a class="btn alt" href="${esc(adminHref('/admin/recharge', adminToken))}">充值记录</a>
-</div>
 `,
+    adminTab: 'recharge-settings',
   });
 }
 
@@ -640,11 +622,8 @@ ${rows.length === 0
       ]),
     )}
 
-<div class="row" style="margin-top:20px">
-<a class="btn alt" href="${esc(adminHref('/admin', adminToken))}">← 返回仪表盘</a>
-<a class="btn alt" href="${esc(adminHref('/admin/recharge-settings', adminToken))}">充值设置</a>
-</div>
 `,
+    adminTab: 'recharge',
   });
 }
 
@@ -743,8 +722,8 @@ export function createAdminRouter(): Router {
             base,
             active: 'admin',
             adminToken: token,
-            body: `<h1>用户不存在</h1><p class="muted">该用户不在用户存储中（可能已被删除，或数据目录被重置）。</p>
-<div class="row"><a class="btn alt" href="${esc(adminHref('/admin/users', token))}">← 返回用户列表</a></div>`,
+            adminTab: 'users',
+            body: `<h1>用户不存在</h1><p class="muted">该用户不在用户存储中（可能已被删除，或数据目录被重置）。</p>`,
           }),
         );
         return;

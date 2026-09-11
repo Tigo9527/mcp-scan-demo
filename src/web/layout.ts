@@ -44,6 +44,17 @@ nav{display:flex;gap:16px;align-items:center;border-bottom:1px solid var(--line)
 nav .brand{font-weight:700;margin-right:auto}
 nav a{color:var(--fg);opacity:.75}
 nav a.active{opacity:1;font-weight:600;color:var(--acc)}
+/* Admin 二级导航：常驻在页面顶部（吸顶），别让入口埋在页面最底下 */
+.subnav{display:flex;gap:6px;align-items:center;flex-wrap:wrap;background:var(--soft);
+  border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin:0 0 18px;
+  position:sticky;top:8px;z-index:5}
+.subnav a{color:var(--fg);opacity:.75;padding:6px 12px;border-radius:8px;font-size:.92em;
+  text-decoration:none;white-space:nowrap}
+.subnav a:hover{text-decoration:none;opacity:1;background:#eaeef2}
+.subnav a.active{opacity:1;font-weight:600;color:var(--acc);background:var(--bg);
+  border:1px solid var(--line);box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.subnav .spacer{margin-left:auto}
+.subnav a.mini{opacity:.6;font-size:.85em;padding:6px 8px}
 .badge{display:inline-block;padding:1px 8px;border-radius:999px;font-size:.8em;
   border:1px solid var(--line);background:var(--soft);color:var(--muted)}
 .badge.ok{color:var(--ok);border-color:#b7e3c6;background:#eaf6ee}
@@ -120,6 +131,17 @@ document.addEventListener('click',function(e){
 });
 </script>`;
 
+/** Admin 的二级页签。给了 `adminTab` 才会在页面顶部渲染 Admin 子导航。 */
+export type AdminTab = 'dashboard' | 'users' | 'github' | 'recharge-settings' | 'recharge';
+
+const ADMIN_TABS: Array<{ key: AdminTab; path: string; label: string }> = [
+  { key: 'dashboard', path: '/admin', label: '仪表盘' },
+  { key: 'users', path: '/admin/users', label: '用户管理' },
+  { key: 'github', path: '/admin/settings', label: 'GitHub 设置' },
+  { key: 'recharge-settings', path: '/admin/recharge-settings', label: '充值设置' },
+  { key: 'recharge', path: '/admin/recharge', label: '充值记录' },
+];
+
 export interface PageOptions {
   title: string;
   /** 页面主体 HTML（调用方负责对所有动态值做 esc） */
@@ -130,6 +152,8 @@ export interface PageOptions {
   base?: string;
   /** admin 令牌：有值时 admin 内部链接会带上，保证网关不透传 Cookie 时也能正常跳转 */
   adminToken?: string;
+  /** Admin 子导航高亮项（仅 admin 页面传） */
+  adminTab?: AdminTab;
 }
 
 /** admin 内部链接（自动带上 admin_token，防止平台网关丢弃 Cookie 导致刷新即掉线） */
@@ -157,10 +181,24 @@ export function page(opts: PageOptions): string {
     )
     .join('')}</nav>`;
 
+  // Admin 子导航：入口统一放这里，不再散落在每个页面底部（底部按钮很容易被当成页脚忽略）
+  const subnav = opts.adminTab
+    ? `<nav class="subnav">${ADMIN_TABS.map(
+        (t) =>
+          `<a href="${esc(adminHref(t.path, opts.adminToken))}"${
+            opts.adminTab === t.key ? ' class="active"' : ''
+          }>${esc(t.label)}</a>`,
+      ).join('')}<span class="spacer"></span><a class="mini" href="${esc(
+        adminHref('/admin/api/stats', opts.adminToken),
+      )}">统计 JSON</a><a class="mini" href="${esc(
+        adminHref('/admin/logout', opts.adminToken),
+      )}">退出</a></nav>`
+    : '';
+
   return `<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(opts.title)}</title><style>${CSS}</style></head>
-<body>${nav}${opts.body}${versionFooter()}${COPY_SCRIPT}</body></html>`;
+<body>${nav}${subnav}${opts.body}${versionFooter()}${COPY_SCRIPT}</body></html>`;
 }
 
 /**

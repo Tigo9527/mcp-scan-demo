@@ -81,6 +81,23 @@ describe('admin 鉴权', () => {
     expect(html).toContain('工具调用 Top 10');
   });
 
+  it('每个 Admin 页面顶部都有常驻子导航（入口不再埋在页面底部）', async () => {
+    const pages = ['/admin', '/admin/users', '/admin/settings', '/admin/recharge-settings', '/admin/recharge'];
+    for (const p of pages) {
+      const res = await fetch(`${base}${p}?admin_token=${ADMIN_TOKEN}`, { redirect: 'manual' });
+      expect(res.status, p).toBe(200);
+      const html = await res.text();
+      expect(html, p).toContain('class="subnav"');
+      // 关键：子导航必须排在正文之前，否则又变成「要滚到底才看得见」
+      expect(html.indexOf('class="subnav"'), p).toBeLessThan(html.indexOf('<h1>'));
+      for (const label of ['仪表盘', '用户管理', 'GitHub 设置', '充值设置', '充值记录']) {
+        expect(html, `${p} 缺少 ${label}`).toContain(`>${label}</a>`);
+      }
+      // 当前页签要高亮
+      expect(html, p).toContain('class="active"');
+    }
+  });
+
   it('X-Admin-Token 请求头可用', async () => {
     const res = await fetch(`${base}/admin`, {
       headers: { 'X-Admin-Token': ADMIN_TOKEN },
