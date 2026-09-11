@@ -17,6 +17,8 @@ import type { Server } from 'node:http';
 import { createApp } from '../src/web/app.js';
 import { config } from '../src/config.js';
 import { configure } from '../src/persist.js';
+import * as store from '../src/auth/store.js';
+import * as billing from '../src/billing.js';
 
 let server: Server;
 let base: string;
@@ -150,6 +152,68 @@ describe('MCP demo server', () => {
     const whoamiJson = JSON.parse(whoami.result?.content?.[0]?.text ?? '{}');
     expect(whoamiJson.clientInfo?.name).toBe('vitest-client');
     expect(whoamiJson.clientInfo?.version).toBe('1.0.0');
+  });
+
+  it('带令牌调用收费工具会累计计费（余额扣减、总额增长）', async () => {
+    const token = await registerAndGetToken('payer');
+    const userId = store.getUserByUsername('payer')!.id;
+    const before = billing.getTotalBilling().used;
+
+    const { sessionId } = await mcpInitialize(token);
+    const r = await mcpCall(token, sessionId, 'tools/call', {
+      name: 'search_repos',
+      arguments: { query: 'conflux' },
+    });
+    // 不论工具内部是否成功（本测试未配置 GitHub），计费都按请求累计
+    expect(r.result ?? r.error).toBeTruthy();
+
+    const after = billing.getTotalBilling().used;
+    expect(after).toBeGreaterThan(before);
+    const bill = billing.getUserBilling(userId)!;
+    expect(bill.used).toBeGreaterThanOrEqual(5); // search_repos 单价 5
+    expect(bill.balance).toBe(config.billingFreeCredits - bill.used);
+  });
+
+  it('余额耗尽时收费工具被拦截（402），免费工具仍可用', async () => {
+    const token = await registerAndGetToken('poor_guy');
+    const userId = store.getUserByUsername('poor_guy')!.id;
+    // 把余额耗到 0：免费额度 1000；list_cfx_transfers 单价 10 ×99 = 990，search_repos 单价 5 ×2 = 10
+    for (let i = 0; i < 99; i += 1) billing.recordCall(userId, 'list_cfx_transfers');
+    billing.recordCall(userId, 'search_repos');
+    billing.recordCall(userId, 'search_repos');
+    expect(billing.getBalance(userId)).toBe(0);
+
+    const { sessionId } = await mcpInitialize(token);
+
+    // 收费工具 search_repos（单价 5）应被 402 拦截，且不扣费
+    const blocked = await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': JSON_RPC,
+        Accept: 'application/json, text/event-stream',
+        Authorization: `Bearer ${token}`,
+        'mcp-session-id': sessionId,
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: { name: 'search_repos', arguments: { query: 'x' } },
+      }),
+    });
+    expect(blocked.status).toBe(402);
+    const blockedBody = (await blocked.json()) as { error?: { code: number; data?: { tool: string } } };
+    expect(blockedBody.error?.code).toBe(-32000);
+    expect(blockedBody.error?.data?.tool).toBe('search_repos');
+    // 拦截不扣费
+    expect(billing.getBalance(userId)).toBe(0);
+
+    // 免费工具 whoami 仍可用
+    const ok = await mcpCall(token, sessionId, 'tools/call', {
+      name: 'whoami',
+      arguments: {},
+    });
+    expect(ok.result?.content?.[0]?.text).toContain('poor_guy');
   });
 
   it('register_user tool returns a fresh token', async () => {

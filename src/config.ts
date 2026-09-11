@@ -36,6 +36,12 @@ export const config = {
   dataDir: process.env.DATA_DIR ?? './data',
 
   /**
+   * 新用户赠送的免费计费点数（余额初始值）。硬计费开启时，余额耗尽则拦截收费工具。
+   * 通过 env BILLING_FREE_CREDITS 覆盖。
+   */
+  billingFreeCredits: Math.max(0, Number(process.env.BILLING_FREE_CREDITS ?? '1000') || 0),
+
+  /**
    * 本实例标识，用作落盘文件名（users-<instanceId>.json）。
    * 默认 'default'：单机/重启场景下稳定复用同一文件，避免早期「每次启动随机生成」
    * 导致用户散落多个分片、互相看不见、登录时查不到而反复回登录页。
@@ -84,4 +90,14 @@ export function isLocalBaseUrl(): boolean {
 export function requireAuthForMcp(): boolean {
   const v = (process.env.MCP_DEMO_REQUIRE_AUTH ?? 'on').trim().toLowerCase();
   return v !== 'off' && v !== '0' && v !== 'false';
+}
+
+/**
+ * 是否启用**硬计费**：余额不足时拦截收费工具的调用（返回 402）。
+ * 默认开启。设为 off / 0 / false 则退化为纯统计展示（余额可为负仍放行）。
+ * 惰性读取 env，便于测试覆盖。
+ */
+export function isBillingEnforced(): boolean {
+  const v = (process.env.BILLING_ENFORCE ?? 'on').trim().toLowerCase();
+  return v === 'on' || v === '1' || v === 'true';
 }

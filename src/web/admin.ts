@@ -21,6 +21,7 @@ import * as store from '../auth/store.js';
 import * as authManager from '../auth/manager.js';
 import { getGithub, getRaw, resetGithub, setGithub } from '../settings.js';
 import { getStatsSnapshot } from '../stats.js';
+import * as billing from '../billing.js';
 import { persistStatus } from '../persist.js';
 import { deriveBase, originOk, readCookie, requestOrigin, requireSameOrigin, wrap } from './http.js';
 import {
@@ -190,6 +191,7 @@ function dashboardHtml(base: string, adminToken: string): string {
   const users = store.listUsers();
   const gh = getGithub();
   const ps = persistStatus();
+  const b = billing.getTotalBilling();
 
   const topTools = Object.entries(s.byTool)
     .sort((a, b) => b[1] - a[1])
@@ -230,6 +232,7 @@ ${statCard(s.counters.toolCalls, '工具调用次数', '仅 tools/call')}
 ${statCard(s.counters.errors, '错误响应数')}
 ${statCard(users.total, '用户数')}
 ${statCard(Object.keys(s.byUser).length, '活跃调用方', '含匿名桶')}
+${statCard(b.used, '总计费点数', `所有用户累计消耗；匿名 ${b.anonymousUsed}`)}
 </div>
 <p class="muted">统计起点 ${esc(fmtTime(s.since))} · 落盘 ${ps.enabled ? `已启用（${esc(ps.dir)}）` : '已关闭'}${ps.lastError ? ` · <span style="color:var(--err)">最近错误：${esc(ps.lastError)}</span>` : ''}</p>
 
@@ -258,6 +261,16 @@ ${topUsers.length === 0 ? '<div class="empty">暂无记录。</div>' : table(['�
       : `<span class="muted">${esc(v.username)}（匿名）</span>`;
     return [label, String(v.calls), String(toolSum), bar(v.calls, maxUser)];
   }))}
+
+<h2>计费明细（本实例）</h2>
+${b.byUser.length === 0 ? '<div class="empty">暂无计费记录。</div>' : table(['用户', '已消耗', '余额', ''], b.byUser.slice(0, 15).map((r) => {
+    const bar2 = bar(r.used, Math.max(1, ...b.byUser.map((x) => x.used)));
+    const label = r.userId
+      ? `<a href="${esc(adminHref(`/admin/users/${encodeURIComponent(r.userId)}`, adminToken))}">${esc(r.username)}</a>`
+      : `<span class="muted">${esc(r.username)}</span>`;
+    return [label, String(r.used), r.userId ? String(r.balance) : '<span class="muted">—</span>', bar2];
+  }))}
+<p class="muted">余额 = 赠送额度（${esc(String(config.billingFreeCredits))}）- 已消耗；硬计费开启时余额耗尽将拒绝执行收费工具。匿名用户无余额概念（按调用计费须先登录），其消耗计入总计但不计入用户余额。</p>
 
 <h2>最近 14 天趋势</h2>
 ${dayRows.length === 0 ? '<div class="empty">暂无记录。</div>' : table(['日期', '请求数', '工具调用', '匿名', ''], dayRows)}
@@ -335,6 +348,7 @@ function userDetailHtml(
   issued?: { token: string; note?: string },
 ): string {
   const s = getStatsSnapshot();
+  const bill = billing.getUserBilling(user.id);
   const stat = s.byUser[user.id];
   const tools = stat?.tools ?? {};
   const toolSum = Object.values(tools).reduce((a: number, b: number) => a + b, 0);
@@ -370,6 +384,13 @@ ${statCard(Object.keys(tools).length, '使用过的工具数')}
 </div>
 ${Object.keys(tools).length > 0 ? table(['工具', '次数', ''], Object.entries(tools).sort((a, b) => b[1] - a[1]).map(([n, c]) => [esc(n), String(c), bar(c, maxTool)])) : '<div class="empty">该用户在本实例暂无调用记录。</div>'}
 <p class="muted">首次记录 ${esc(fmtTime(stat?.firstSeenAt))} · 最近记录 ${esc(fmtTime(stat?.lastSeenAt))}</p>
+
+<h2>计费（本实例）</h2>
+<div class="grid">
+${statCard(bill?.balance ?? config.billingFreeCredits, '剩余额度')}
+${statCard(bill?.used ?? 0, '已消耗点数')}
+</div>
+<p class="muted">余额 = 赠送额度（${esc(String(config.billingFreeCredits))}）- 已消耗。硬计费开启时余额耗尽将拒绝执行收费工具。</p>
 
 <h2>签发新令牌</h2>
 ${card(`

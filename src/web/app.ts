@@ -45,7 +45,8 @@ import {
   WELL_KNOWN,
   wwwAuthenticate,
 } from '../oauth/metadata.js';
-import { requireAuthForMcp } from '../config.js';
+import { requireAuthForMcp, isBillingEnforced } from '../config.js';
+import * as billing from '../billing.js';
 import { createAdminRouter } from './admin.js';
 import { createProfileRouter } from './profile.js';
 import { createAuthorizeRouter, completeAuthorize, type AuthorizeParams, type AuthorizeTicket } from '../oauth/authorize.js';
@@ -981,6 +982,12 @@ export function createApp() {
         const prevOnMessage = transport.onmessage;
         transport.onmessage = (message, extra) => {
           stats.record(message, user);
+          // 计费埋点：每条 tools/call 扣减对应点数（内部绝不抛异常）。
+          // 与 stats.record 同源提取：method === 'tools/call' 且 params.name 为工具名。
+          const m = message as { method?: string; params?: { name?: string } } | undefined;
+          if (m && m.method === 'tools/call' && typeof m.params?.name === 'string') {
+            billing.recordCall(user?.id, m.params.name);
+          }
           prevOnMessage?.(message, extra);
         };
 
@@ -1002,6 +1009,46 @@ export function createApp() {
         const initMsg = Array.isArray(rb) ? rb.find((m) => m.method === 'initialize') : rb;
         if (initMsg?.method === 'initialize' && initMsg.params?.clientInfo) {
           captureClientInfo(user, initMsg.params.clientInfo);
+        }
+
+        // 硬计费拦截：余额不足时拒绝收费工具的执行（在 SDK 处理之前，避免空跑仍扣费）。
+        // 仅对 tools/call 生效；initialize / tools/list 等免费动作不受影响。
+        if (isBillingEnforced()) {
+          const body = req.body as
+            | Array<{ method?: string; id?: string | number; params?: { name?: string } }>
+            | { method?: string; id?: string | number; params?: { name?: string } }
+            | undefined;
+          const msgs = Array.isArray(body) ? body : body ? [body] : [];
+          const calls = msgs
+            .filter((m) => m && m.method === 'tools/call' && typeof m.params?.name === 'string')
+            .map((m) => ({ id: m.id, name: m.params!.name! }));
+          if (calls.length > 0) {
+            const disallowed = calls
+              .map((c) => ({ ...c, allow: billing.checkAllowed(user?.id, c.name) }))
+              .filter((c) => !c.allow.allowed);
+            if (disallowed.length > 0) {
+              const errors = disallowed.map((c) => {
+                const login = c.allow.reason === 'login_required';
+                return {
+                  jsonrpc: '2.0',
+                  id: c.id ?? null,
+                  error: {
+                    code: login ? -32001 : -32000,
+                    message: login
+                      ? '该工具按调用计费，请先登录后再使用'
+                      : '调用余额不足，无法执行该工具（请登录获取更多额度）',
+                    data: { tool: c.name, cost: c.allow.cost, balance: c.allow.balance },
+                  },
+                };
+              });
+              const status = disallowed.some((c) => c.allow.reason === 'login_required') ? 401 : 402;
+              res
+                .status(status)
+                .type('application/json')
+                .end(JSON.stringify(Array.isArray(body) ? errors : errors[0]));
+              return;
+            }
+          }
         }
 
         const server = createMcpServer();
