@@ -20,7 +20,11 @@ import {
   wrap,
 } from './http.js';
 import { badge, card, copyBlock, esc, fmtTime, notice, page, table } from './layout.js';
+import { ENSURE_CHAIN_JS, type ChainView } from './chain.js';
 import {
+  buildChainAddParams,
+  chainIdToDecimal,
+  chainName,
   getRechargeConfig,
   listRecharges,
   submitRechargeTx,
@@ -83,6 +87,17 @@ function rechargeHtml(opts: {
     selector: TRANSFER_SELECTOR,
   };
 
+  // 目标链：前端据此在转账前比对钱包网络，不一致就唤起切换 / 添加
+  const chain: ChainView = {
+    chainId: cfg.chainId || '',
+    chainIdDec: cfg.chainId ? chainIdToDecimal(cfg.chainId) : '',
+    name: (cfg.chainId && chainName(cfg.chainId)) || '',
+    addParams: buildChainAddParams(cfg),
+  };
+  const chainLabel = chain.chainId
+    ? `${chain.name || 'Chain ' + chain.chainIdDec}（链 ID ${chain.chainIdDec}）`
+    : '';
+
   return page({
     title: '充值',
     base,
@@ -122,7 +137,12 @@ ${table(
         ? `${esc(cfg.tokenName || '—')}（${esc(cfg.tokenSymbol || '—')}）· decimals ${esc(String(decimals))}`
         : '<span class="muted">—</span>',
     ],
-    ['链 ID', cfg.chainId ? `<code>${esc(cfg.chainId)}</code>` : '<span class="muted">未指定</span>'],
+    [
+      '链 / 网络',
+      cfg.chainId
+        ? `${esc(chainLabel)} <code>${esc(cfg.chainId)}</code>`
+        : '<span class="muted">未指定（转账前不会强制切换网络）</span>',
+    ],
   ],
 )}
 ${copyBlock(cfg.recipient, { title: '收款地址（复制）' })}
@@ -130,6 +150,8 @@ ${copyBlock(cfg.recipient, { title: '收款地址（复制）' })}
 
 <h2>方式一：用 MetaMask 转账</h2>
 ${card(`
+<div id="net-box" class="muted" style="margin:0 0 10px"></div>
+<button id="switch-net" class="btn alt" type="button" style="display:none;margin-bottom:10px">切换网络</button>
 <label for="amount">转账数量（${esc(isToken ? (cfg.tokenSymbol || '代币') : 'ETH')}）</label>
 <input id="amount" type="text" inputmode="decimal" placeholder="0.01" style="max-width:240px">
 <p class="muted">按当前汇率 1 ≈ ${esc(String(cfg.rate))} 点，预计到账 <b id="estimate">0</b> 点。</p>
@@ -173,6 +195,7 @@ ${rows.length === 0
 (function(){
   var cfg=${JSON.stringify(meta)};
   var rate=${JSON.stringify(cfg.rate)};
+  var chain=${JSON.stringify(chain)};
   var claimUrl=${JSON.stringify(`${base}/recharge/claim`)};
   var token=${JSON.stringify(opts.token)};
   var pendingHash=${JSON.stringify(opts.pendingHash ?? '')};
@@ -183,7 +206,42 @@ ${rows.length === 0
   var status=document.getElementById('status');
   var hashEl=document.getElementById('txHash');
   var form=document.getElementById('recharge-form');
+  var netBox=document.getElementById('net-box');
+  var netBtn=document.getElementById('switch-net');
   var setStatus=function(s){status.textContent=s;};
+
+  ${ENSURE_CHAIN_JS}
+
+  /** 刷新「钱包当前网络 vs 目标链」的提示，并决定要不要显示切换按钮 */
+  async function refreshNet(){
+    if(!window.ethereum){netBox.textContent='未检测到钱包（MetaMask 等），可用下方手动补单。';return;}
+    var cur;
+    try{cur=await window.ethereum.request({method:'eth_chainId'});}catch(e){netBox.textContent='读取钱包网络失败。';return;}
+    if(!chain.chainId){
+      netBox.textContent='当前网络：链 ID '+hexToDec(cur)+'。本服务未指定链，请自行确认与收款设置一致。';
+      netBtn.style.display='none';return;
+    }
+    if(sameChain(cur,chain.chainId)){
+      netBox.textContent='✅ 钱包网络已就绪：'+chainLabel(chain,cur)+'（链 ID '+hexToDec(cur)+'）';
+      netBtn.style.display='none';return;
+    }
+    netBox.textContent='⚠️ 钱包当前在链 ID '+hexToDec(cur)+'，收款网络是 '+chainLabel(chain,chain.chainId)+'——转错链将收不到账。';
+    netBtn.style.display='inline-block';
+    netBtn.textContent='切换到 '+chainLabel(chain,chain.chainId);
+  }
+  if(window.ethereum){
+    refreshNet();
+    // 用户在钱包里手动换网时同步提示，避免「刚切过去又切回来」没人提醒
+    if(window.ethereum.on) window.ethereum.on('chainChanged',function(){refreshNet();});
+    netBtn.addEventListener('click',async function(){
+      netBtn.disabled=true;
+      try{await ensureChain(window.ethereum,chain,setStatus);await refreshNet();}
+      catch(e){setStatus('切换网络失败：'+(e&&e.message?e.message:String(e)));}
+      netBtn.disabled=false;
+    });
+  }else{
+    netBox.textContent='未检测到钱包（MetaMask 等），可用下方手动补单。';
+  }
 
   function toRaw(v){
     // 用字符串解析避免浮点误差：'0.1' * 10^18
@@ -267,6 +325,8 @@ ${rows.length === 0
       var accts=await window.ethereum.request({method:'eth_requestAccounts'});
       var from=accts&&accts[0];
       if(!from){setStatus('未能获取钱包地址。');btn.disabled=false;return;}
+      // 转账前必须确认网络：转错链 = 钱出去了但服务端按配置的链查不到，等于白转
+      await ensureChain(window.ethereum,chain,setStatus);
       var params;
       if(cfg.tokenAddress){
         var data=cfg.selector+padWord(cfg.recipient.toLowerCase().replace(/^0x/,''))+padWord(raw.toString(16));

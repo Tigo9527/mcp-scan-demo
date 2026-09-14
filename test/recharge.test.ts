@@ -36,8 +36,16 @@ const TOKEN = '0x2222222222222222222222222222222222222222';
 const PAYER = '0x3333333333333333333333333333333333333333';
 const TX = '0x' + 'ab'.repeat(32);
 
-function tokenProvider(meta?: { name: string; symbol: string; decimals: number }) {
+/**
+ * 假 provider。`chainId` 传了就实现 getChainId（模拟 RPC 能返回链 ID），
+ * 不传则没有这个方法——用来覆盖「RPC 读不到链 ID」这条分支。
+ */
+function tokenProvider(
+  meta?: { name: string; symbol: string; decimals: number },
+  chainId?: string,
+) {
   return {
+    ...(chainId === undefined ? {} : { async getChainId() { return chainId; } }),
     async call({ data }: { to: string; data: string }) {
       const sel = data.slice(0, 10);
       if (!meta) return '0x'; // 模拟「地址不是合约」
@@ -387,6 +395,139 @@ describe('humanizeRpcError', () => {
     expect(recharge.humanizeRpcError(new Error('fetch failed ECONNREFUSED'), url)).toMatch(/连不上 RPC/);
     // 已经是中文的业务错误原样返回
     expect(recharge.humanizeRpcError(new Error('合约未返回 name()（地址可能不是 ERC20）'), url)).toMatch(/合约未返回/);
+  });
+});
+
+describe('链 ID 与钱包网络切换', () => {
+  it('normalizeChainId 把十进制 / 十六进制 / 带空格统一成小写 hex', () => {
+    expect(recharge.normalizeChainId('1')).toBe('0x1');
+    expect(recharge.normalizeChainId('56')).toBe('0x38');
+    expect(recharge.normalizeChainId('0x38')).toBe('0x38');
+    expect(recharge.normalizeChainId(' 0X2105 ')).toBe('0x2105'); // Arbitrum One
+    expect(recharge.normalizeChainId(56)).toBe('0x38');
+    // 非法输入一律空串，交给上层决定是否告警
+    expect(recharge.normalizeChainId('')).toBe('');
+    expect(recharge.normalizeChainId('abc')).toBe('');
+    expect(recharge.normalizeChainId('0')).toBe('');
+    expect(recharge.normalizeChainId('-1')).toBe('');
+    expect(recharge.normalizeChainId(undefined)).toBe('');
+  });
+
+  it('chainIdToDecimal / chainName 用于展示', () => {
+    expect(recharge.chainIdToDecimal('0x38')).toBe('56');
+    expect(recharge.chainName('0x38')).toMatch(/BNB/);
+    expect(recharge.chainName('0x1')).toMatch(/Ethereum/);
+    expect(recharge.chainName('0xdeadbeef')).toBeNull(); // 未知链
+  });
+
+  it('buildChainAddParams 生成钱包加链参数（链名 + RPC + 原生币）', () => {
+    const p = recharge.buildChainAddParams({
+      recipient: RECIPIENT,
+      rpcUrl: 'https://bsc-rpc.example',
+      rate: 100,
+      tokenAddress: '',
+      chainId: '0x38',
+    });
+    expect(p).toBeTruthy();
+    expect(p!.chainId).toBe('0x38');
+    expect(p!.chainName).toMatch(/BNB/);
+    expect(p!.rpcUrls).toEqual(['https://bsc-rpc.example']);
+    expect(p!.nativeCurrency.symbol).toBe('BNB');
+    expect(p!.nativeCurrency.decimals).toBe(18);
+  });
+
+  it('未知链退化成 Chain <id>，仍能加链（用户可在钱包里核对 RPC 后确认）', () => {
+    const p = recharge.buildChainAddParams({
+      recipient: RECIPIENT,
+      rpcUrl: 'https://some-rpc.example',
+      rate: 100,
+      tokenAddress: '',
+      chainId: '0x3039',
+    });
+    expect(p!.chainName).toBe('Chain 12345');
+    expect(p!.nativeCurrency.symbol).toBe('ETH');
+  });
+
+  it('没有 chainId 或 RPC 时不生成加链参数（此时前端只能提示手动切换）', () => {
+    const base = { recipient: RECIPIENT, rate: 100, tokenAddress: '' };
+    expect(recharge.buildChainAddParams({ ...base, rpcUrl: 'https://x', chainId: '' })).toBeNull();
+    expect(recharge.buildChainAddParams({ ...base, rpcUrl: '', chainId: '0x1' })).toBeNull();
+    expect(recharge.buildChainAddParams(null)).toBeNull();
+  });
+
+  it('保存时自动从 RPC 回填链 ID（手填留空也能识别出是 BSC）', async () => {
+    recharge.__resetForTest();
+    const r = await recharge.setRechargeConfig(
+      { ...BASE_CONFIG, chainId: '' },
+      { provider: tokenProvider(undefined, '0x38') },
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.info).toMatch(/56/); // 十进制更好认
+      expect(r.info).toMatch(/BNB/);
+      expect(r.warning).toBeUndefined();
+    }
+    expect(recharge.getRechargeConfig()?.chainId).toBe('0x38');
+  });
+
+  it('手填与 RPC 不一致时以 RPC 为准并告警（填错链 = 用户把钱转到别的链）', async () => {
+    recharge.__resetForTest();
+    const r = await recharge.setRechargeConfig(
+      { ...BASE_CONFIG, chainId: '1' },
+      { provider: tokenProvider(undefined, '0x38') },
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.warning).toMatch(/以 RPC 实际返回为准/);
+    expect(recharge.getRechargeConfig()?.chainId).toBe('0x38');
+  });
+
+  it('RPC 读不到链 ID 时不阻塞保存：已有值就留着', async () => {
+    recharge.__resetForTest();
+    const r = await recharge.setRechargeConfig(
+      { ...BASE_CONFIG, chainId: '56' },
+      { provider: tokenProvider() }, // 没有 getChainId
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.warning).toBeUndefined();
+    expect(recharge.getRechargeConfig()?.chainId).toBe('0x38');
+  });
+
+  it('RPC 读不到且没手填：告警说明前端不会强制切换网络', async () => {
+    recharge.__resetForTest();
+    const r = await recharge.setRechargeConfig(
+      { ...BASE_CONFIG, chainId: '' },
+      { provider: tokenProvider() },
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.warning).toMatch(/不强制切换网络/);
+    expect(recharge.getRechargeConfig()?.chainId).toBe('');
+  });
+
+  it('RPC 抛错时同样只告警（不把管理员锁在门外）', async () => {
+    recharge.__resetForTest();
+    const boom = {
+      async getChainId() {
+        throw new Error('server response 525 <none> (info={ "responseStatus": "525 <none>" })');
+      },
+      async call() {
+        return '0x';
+      },
+      async getTransaction() {
+        return null;
+      },
+      async getTransactionReceipt() {
+        return null;
+      },
+    } as unknown as recharge.EvmProvider;
+    const r = await recharge.setRechargeConfig({ ...BASE_CONFIG, chainId: '' }, { provider: boom });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.warning).toMatch(/HTTP 525/);
+  });
+
+  it('链 ID 非法时直接拒绝保存（而不是静默清空）', async () => {
+    const r = await recharge.setRechargeConfig({ ...BASE_CONFIG, chainId: '不是链' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/链 ID/);
   });
 });
 

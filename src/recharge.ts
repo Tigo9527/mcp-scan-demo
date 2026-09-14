@@ -42,6 +42,11 @@ export interface EvmProvider {
   call(tx: { to: string; data: string }): Promise<string>;
   getTransaction(hash: string): Promise<EvmTransaction | null>;
   getTransactionReceipt(hash: string): Promise<EvmReceipt | null>;
+  /**
+   * eth_chainId（可选）。用于保存配置时自动回填链 ID。
+   * 可选是为了不破坏测试里的假 provider（没实现时当作「读不到」，跳过回填）。
+   */
+  getChainId?(): Promise<string>;
 }
 
 export interface EvmTransaction {
@@ -72,7 +77,13 @@ export interface RechargeConfig {
   rate: number;
   /** ERC20 合约地址；空字符串表示收原生币 */
   tokenAddress: string;
-  /** 链 ID（可选，仅展示） */
+  /**
+   * 链 ID（十六进制，如 `0x1`）。
+   *
+   * 它不再只是展示用：前端会在转账前比对钱包的 `eth_chainId`，
+   * 不一致就唤起 `wallet_switchEthereumChain`。填错等于让用户把钱转到别的链上。
+   * 保存时一定以 RPC 实际返回的为准（见 setRechargeConfig）。
+   */
   chainId: string;
   /** 保存配置时自动读取并回显的代币元数据 */
   tokenName?: string;
@@ -164,6 +175,92 @@ let settings: RechargeConfig | null = null;
 let recordsLoaded = false;
 let records: RechargeRecord[] = [];
 
+// ---------------------------------------------------------------- 链 / 网络
+
+/**
+ * 常见链的**钱包侧**元信息。
+ *
+ * `wallet_addEthereumChain` 必须提供 chainName 与 nativeCurrency，而这两个字段
+ * 链上读不到（不在 JSON-RPC 标准方法里），只能靠内置表；未知链退化为 `Chain <id>`，
+ * 用户仍可在钱包的确认弹窗里核对 RPC 地址后自行决定是否添加。
+ */
+const KNOWN_CHAINS: Record<
+  string,
+  { name: string; symbol: string; decimals: number; explorer?: string }
+> = {
+  '1': { name: 'Ethereum 主网', symbol: 'ETH', decimals: 18, explorer: 'https://etherscan.io' },
+  '56': { name: 'BNB Smart Chain 主网', symbol: 'BNB', decimals: 18, explorer: 'https://bscscan.com' },
+  '137': { name: 'Polygon 主网', symbol: 'POL', decimals: 18, explorer: 'https://polygonscan.com' },
+  '8453': { name: 'Base 主网', symbol: 'ETH', decimals: 18, explorer: 'https://basescan.org' },
+  '42161': { name: 'Arbitrum One', symbol: 'ETH', decimals: 18, explorer: 'https://arbiscan.io' },
+  '10': { name: 'OP 主网', symbol: 'ETH', decimals: 18, explorer: 'https://optimistic.etherscan.io' },
+  '1030': { name: 'Conflux eSpace', symbol: 'CFX', decimals: 18, explorer: 'https://evm.confluxscan.net' },
+  '71': { name: 'Conflux eSpace 测试网', symbol: 'CFX', decimals: 18, explorer: 'https://evmtestnet.confluxscan.net' },
+  '11155111': { name: 'Sepolia 测试网', symbol: 'ETH', decimals: 18, explorer: 'https://sepolia.etherscan.io' },
+  '97': { name: 'BSC 测试网', symbol: 'BNB', decimals: 18, explorer: 'https://testnet.bscscan.com' },
+};
+
+/** 把各种写法（十进制 / 0x 十六进制 / 带空格）统一成小写十六进制，如 `0x1`。非法返回 ''。 */
+export function normalizeChainId(input: unknown): string {
+  if (typeof input === 'number') {
+    return Number.isInteger(input) && input > 0 ? `0x${input.toString(16)}` : '';
+  }
+  const s = String(input ?? '').trim();
+  if (!s) return '';
+  try {
+    const n = /^0x/i.test(s) ? BigInt(s) : BigInt(s);
+    if (n <= 0n) return '';
+    return `0x${n.toString(16)}`;
+  } catch {
+    return '';
+  }
+}
+
+/** 十六进制链 ID → 十进制字符串（给人和给钱包报错用）。 */
+export function chainIdToDecimal(chainId: string): string {
+  const hex = normalizeChainId(chainId);
+  return hex ? BigInt(hex).toString(10) : '';
+}
+
+/** 已知链的显示名；未知返回 null。 */
+export function chainName(chainId: string): string | null {
+  return KNOWN_CHAINS[chainIdToDecimal(chainId)]?.name ?? null;
+}
+
+/** 十进制链 ID → 中文名，给前端展示「当前网络」用（不强制切换的页面只靠它认名字）。 */
+export function knownChainNames(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [id, meta] of Object.entries(KNOWN_CHAINS)) out[id] = meta.name;
+  return out;
+}
+
+export interface ChainAddParams {
+  chainId: string;
+  chainName: string;
+  rpcUrls: string[];
+  nativeCurrency: { name: string; symbol: string; decimals: number };
+  blockExplorerUrls?: string[];
+}
+
+/**
+ * 生成 `wallet_addEthereumChain` 的参数（钱包里没有目标链时用）。
+ * 没有 chainId 或 RPC 时返回 null —— 缺任何一样都加不了链，此时前端应退回「请手动切换」。
+ */
+export function buildChainAddParams(cfg: RechargeConfig | null): ChainAddParams | null {
+  if (!cfg) return null;
+  const chainId = normalizeChainId(cfg.chainId);
+  if (!chainId || !cfg.rpcUrl) return null;
+  const known = KNOWN_CHAINS[chainIdToDecimal(chainId)];
+  const symbol = known?.symbol ?? 'ETH';
+  return {
+    chainId,
+    chainName: known?.name ?? `Chain ${chainIdToDecimal(chainId)}`,
+    rpcUrls: [cfg.rpcUrl],
+    nativeCurrency: { name: symbol, symbol, decimals: known?.decimals ?? 18 },
+    ...(known?.explorer ? { blockExplorerUrls: [known.explorer] } : {}),
+  };
+}
+
 // ---------------------------------------------------------------- provider
 
 /** 生产 provider：按配置的 RPC 地址构造。测试用注入的假 provider，不会走到这里。 */
@@ -174,10 +271,31 @@ export function createJsonRpcProvider(rpcUrl: string): EvmProvider {
     getTransaction: (hash) => rpc.getTransaction(hash) as Promise<EvmTransaction | null>,
     getTransactionReceipt: (hash) =>
       rpc.getTransactionReceipt(hash) as Promise<EvmReceipt | null>,
+    getChainId: () => rpc.send('eth_chainId', []) as Promise<string>,
   };
 }
 
 // ---------------------------------------------------------------- 配置读写
+
+/**
+ * 读链 ID 的超时上限。
+ *
+ * 保存配置时一定会问一次 `eth_chainId`，而 RPC 可能是个不可达的地址——
+ * 不加闸就会把 Admin 的保存请求拖到 ethers 自己超时（实测能到几十秒），
+ * 表现为「点保存按钮一直转圈」。超时只影响这条自动识别，配置照常保存。
+ */
+const CHAIN_ID_TIMEOUT_MS = 8_000;
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) => {
+      const t = setTimeout(() => reject(new Error(`读取超时（超过 ${ms}ms 未响应）`)), ms);
+      // 别让这个定时器把进程按住不放
+      (t as unknown as { unref?: () => void }).unref?.();
+    }),
+  ]);
+}
 
 function ensureSettings(): RechargeConfig | null {
   if (!settingsLoaded) {
@@ -225,6 +343,16 @@ export function validateRechargeConfig(input: RechargeConfigInput):
     return { ok: false, error: 'ERC20 合约地址必须是 0x 开头的 40 位十六进制地址。' };
   }
 
+  // 链 ID 统一存成小写十六进制，方便前端直接和钱包的 eth_chainId 比对
+  const chainIdRaw = String(input.chainId ?? '').trim();
+  let chainId = '';
+  if (chainIdRaw) {
+    chainId = normalizeChainId(chainIdRaw);
+    if (!chainId) {
+      return { ok: false, error: '链 ID 必须是正整数或 0x 开头的十六进制（如 56 或 0x38）。' };
+    }
+  }
+
   return {
     ok: true,
     value: {
@@ -232,7 +360,7 @@ export function validateRechargeConfig(input: RechargeConfigInput):
       rpcUrl,
       rate,
       tokenAddress: tokenAddress ? getAddress(tokenAddress) : '',
-      chainId: String(input.chainId ?? '').trim(),
+      chainId,
     },
   };
 }
@@ -277,14 +405,48 @@ export async function setRechargeConfig(
   input: RechargeConfigInput,
   opts: { provider?: EvmProvider } = {},
 ): Promise<
-  { ok: true; config: RechargeConfig; warning?: string } | { ok: false; error: string }
+  | { ok: true; config: RechargeConfig; warning?: string; info?: string }
+  | { ok: false; error: string }
 > {
   const checked = validateRechargeConfig(input);
   if (!checked.ok) return checked;
 
   const prev = ensureSettings();
   const next: RechargeConfig = { ...checked.value };
-  let warning: string | undefined;
+  const warnings: string[] = [];
+  const infos: string[] = [];
+
+  // ---- 链 ID：一律以 RPC 实际返回的为准 ----
+  // 手填的和 RPC 不一致时以 RPC 为准：填错链 = 用户把钱转到另一条链上，收不到也退不回。
+  // 读不到就保留现状（不阻塞保存），前端此时不强制切换网络。
+  {
+    const provider = opts.provider ?? createJsonRpcProvider(next.rpcUrl);
+    try {
+      const fromRpc = normalizeChainId(
+        await withTimeout(provider.getChainId?.() ?? Promise.resolve(undefined), CHAIN_ID_TIMEOUT_MS),
+      );
+      if (fromRpc) {
+        if (next.chainId && next.chainId !== fromRpc) {
+          warnings.push(
+            `链 ID 以 RPC 实际返回为准：已由 ${chainIdToDecimal(next.chainId)} 更正为 ${chainIdToDecimal(fromRpc)}${chainName(fromRpc) ? `（${chainName(fromRpc)}）` : ''}。`,
+          );
+        } else if (!next.chainId) {
+          infos.push(
+            `已自动识别链 ID：${chainIdToDecimal(fromRpc)}${chainName(fromRpc) ? `（${chainName(fromRpc)}）` : ''}。`,
+          );
+        }
+        next.chainId = fromRpc;
+      } else if (!next.chainId) {
+        warnings.push('RPC 未返回链 ID，暂未设置；用户转账前将不强制切换网络。');
+      }
+    } catch (err) {
+      if (!next.chainId) {
+        warnings.push(
+          `没读到链 ID（${humanizeRpcError(err, next.rpcUrl)}），暂未设置；用户转账前将不强制切换网络。`,
+        );
+      }
+    }
+  }
 
   if (next.tokenAddress) {
     // ---- 手工填写（自动读取失败时的兜底）----
@@ -324,12 +486,16 @@ export async function setRechargeConfig(
       delete next.tokenDecimals;
       next.tokenMetaError =
         autoError || '缺少 decimals：请手工填写，或换一个可用 RPC 后点「重新读取元数据」。';
-      warning = `已保存，但 ERC20 元数据不完整（${next.tokenMetaError}）decimals 补全前无法入账。`;
+      warnings.push(
+        `已保存，但 ERC20 元数据不完整（${next.tokenMetaError}）decimals 补全前无法入账。`,
+      );
     } else {
       next.tokenDecimals = decimals;
       if (autoError) {
         next.tokenMetaError = autoError;
-        warning = `已保存，但本次没能从链上读到元数据（${autoError}）当前沿用已保存的值，入账不受影响。`;
+        warnings.push(
+          `已保存，但本次没能从链上读到元数据（${autoError}）当前沿用已保存的值，入账不受影响。`,
+        );
       } else {
         delete next.tokenMetaError;
       }
@@ -346,7 +512,14 @@ export async function setRechargeConfig(
   settings = next;
   settingsLoaded = true;
   scheduleSave(SETTINGS_FILE, () => ({ ...next }));
-  return warning ? { ok: true, config: { ...next }, warning } : { ok: true, config: { ...next } };
+  const warning = warnings.length ? warnings.join(' ') : undefined;
+  const info = infos.length ? infos.join(' ') : undefined;
+  return {
+    ok: true,
+    config: { ...next },
+    ...(warning ? { warning } : {}),
+    ...(info ? { info } : {}),
+  };
 }
 
 /**
@@ -355,7 +528,9 @@ export async function setRechargeConfig(
  */
 export async function refreshTokenMeta(
   opts: { provider?: EvmProvider } = {},
-): Promise<{ ok: true; config: RechargeConfig; warning?: string } | { ok: false; error: string }> {
+): Promise<
+  { ok: true; config: RechargeConfig; warning?: string; info?: string } | { ok: false; error: string }
+> {
   const cur = ensureSettings();
   if (!cur) return { ok: false, error: '还没保存过充值配置，请先填写并保存。' };
   if (!cur.tokenAddress) return { ok: false, error: '当前收的是原生币，不需要读 ERC20 元数据。' };

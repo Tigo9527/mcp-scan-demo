@@ -45,6 +45,16 @@
   于是跨站请求也会带上会话 Cookie，**不能指望 SameSite 做 CSRF 防护**。
   真正的防线是：① `/mcp` 不读 Cookie；② 所有写路由必须挂 `requireSameOrigin`（Origin 校验）。
   **新增任何会改状态的 POST/DELETE 路由时，先问一句有没有挂 `requireSameOrigin`。**
+- **涉及链上转账的页面，转账前必须校验钱包的 `eth_chainId`**：
+  收款地址在不同链上是不同账本，用户在 BSC 往「以太坊地址」转 USDT，钱照样转出去但服务端
+  永远查不到——对用户就是钱没了。充值页因此会在 `eth_sendTransaction` 之前
+  `ensureChain()`：`wallet_switchEthereumChain`，钱包里没有这条链（错误码 4902）再
+  `wallet_addEthereumChain`（参数由 `buildChainAddParams()` 生成，RPC 用配置里那个）。
+  链名 / 原生币这些链上读不到的信息只能靠 `KNOWN_CHAINS` 内置表，加新链记得往里补。
+  链 ID **保存时一律以 RPC 实际返回的为准**（手填不一致会被更正并告警），读不到就留空，
+  此时前端不强制切换——宁可明说没保护，也不要假装保护过。
+  注意 `setRechargeConfig()` 会真的去连 RPC，有 `CHAIN_ID_TIMEOUT_MS` 超时兜底；
+  **测试里必须注入假 provider**，否则单测会联网。
 - **`/mcp` 默认要求登录：未携带有效令牌返回 401 + `WWW-Authenticate`**（`MCP_DEMO_REQUIRE_AUTH`
   默认 `on`，设成 `off` 才恢复旧的匿名握手）。**不要改回永远 200** —— 那正是「客户端识别不了
   登录方式」的根因：客户端只有收到 401 才会去读 `resource_metadata` 并启动标准 OAuth 发现。

@@ -469,6 +469,11 @@ ${card(`
   });
 }
 
+/** 链 ID 的展示文本：已知链给中文名，未知链退化成 `Chain <十进制>`。 */
+function chainDisplayName(chainId: string): string {
+  return recharge.chainName(chainId) ?? `Chain ${recharge.chainIdToDecimal(chainId)}`;
+}
+
 function rechargeSettingsHtml(
   base: string,
   adminToken: string,
@@ -507,7 +512,12 @@ ${table(
     ['收取资产', isToken ? `ERC20 <code>${esc(c.tokenAddress)}</code>` : badge('原生币', '')],
     ['代币元数据', metaCell],
     ['汇率', c.rate ? `1 ${esc(isToken ? (c.tokenSymbol || '代币') : 'ETH')} = ${esc(String(c.rate))} 点` : '<span class="muted">未配置</span>'],
-    ['链 ID', c.chainId ? `<code>${esc(c.chainId)}</code>` : '<span class="muted">未指定</span>'],
+    [
+      '链 / 网络',
+      c.chainId
+        ? `${esc(chainDisplayName(c.chainId))} · <code>${esc(c.chainId)}</code>（${esc(recharge.chainIdToDecimal(c.chainId))}）`
+        : '<span class="muted">未指定（用户转账前不会强制切换网络）</span>',
+    ],
   ],
 )}
 <p class="muted">最近更新：${esc(fmtTime(c.updatedAt))}${c.updatedBy ? ` 由 ${esc(c.updatedBy)}` : ''}</p>
@@ -546,8 +556,9 @@ ${card(`
 <label for="rate">汇率（1 个代币兑换多少点数）</label>
 <input id="rate" name="rate" type="number" step="any" min="0" value="${c.rate ? esc(String(c.rate)) : ''}" placeholder="如 1000">
 
-<label for="chainId">链 ID（可选，仅展示）</label>
-<input id="chainId" name="chainId" value="${esc(c.chainId)}" placeholder="如 1 / 56 / 1030">
+<label for="chainId">链 ID（选填，建议留空让它自动识别）</label>
+<input id="chainId" name="chainId" value="${esc(c.chainId)}" placeholder="如 56 或 0x38，留空则按 RPC 返回值填充">
+<p class="muted">用户在充值页转账前，前端会比对钱包的 <code>eth_chainId</code>，不一致就自动唤起切换网络（钱包里没这条链会请求添加，RPC 用上面填的地址）。<b>填错等于让用户把钱转到别的链上</b>，所以保存时一律以 RPC 实际返回的链 ID 为准，手填的不一致会被更正并提示。</p>
 
 <button class="btn" type="submit">保存</button>
 </form>
@@ -835,6 +846,7 @@ export function createAdminRouter(): Router {
       if (result.ok) {
         target.searchParams.set('saved', '1');
         if (result.warning) target.searchParams.set('warn', result.warning);
+        if (result.info) target.searchParams.set('msg', result.info);
       } else {
         target.searchParams.set('err', result.error);
       }
@@ -853,7 +865,7 @@ export function createAdminRouter(): Router {
       const target = new URL(adminHref('/admin/recharge-settings', token), deriveBase(req));
       if (result.ok) {
         if (result.warning) target.searchParams.set('warn', result.warning);
-        else target.searchParams.set('msg', '元数据已重新读取成功。');
+        else target.searchParams.set('msg', result.info || '元数据已重新读取成功。');
       } else {
         target.searchParams.set('err', result.error);
       }

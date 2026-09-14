@@ -1,0 +1,16 @@
+import { createApp } from './src/web/app.js';
+import { configure } from './src/persist.js';
+import * as recharge from './src/recharge.js';
+configure({ enabled: false });
+recharge.__resetForTest();
+await recharge.setRechargeConfig({ recipient:'0x1111111111111111111111111111111111111111', rpcUrl:'https://some-rpc.example', rate:100, tokenAddress:'', chainId:'' });
+console.log('cfg:', JSON.stringify(recharge.getRechargeConfig()));
+const server = createApp().listen(0,'127.0.0.1');
+await new Promise(r=>server.once('listening',r));
+const base='http://127.0.0.1:'+server.address().port;
+const reg = await fetch(base+'/register?username=dbgchain');
+const cookie=(reg.headers.get('set-cookie')||'').match(/mcp_demo_user=([^;]+)/)[1];
+const res = await fetch(base+'/recharge',{headers:{Cookie:'mcp_demo_user='+cookie}});
+const html=await res.text();
+for (const line of html.split('\n')) if (line.includes('未指定')||line.includes('链 /')||line.includes('chainId')) console.log('>>', line.trim().slice(0,160));
+server.close();

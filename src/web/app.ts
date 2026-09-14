@@ -49,6 +49,7 @@ import {
 } from '../oauth/metadata.js';
 import { requireAuthForMcp, isBillingEnforced } from '../config.js';
 import * as billing from '../billing.js';
+import { knownChainNames } from '../recharge.js';
 import { createAdminRouter } from './admin.js';
 import { createProfileRouter } from './profile.js';
 import { createRechargeRouter } from './recharge.js';
@@ -474,6 +475,7 @@ ${error ? notice(esc(error)) : ''}
 ${card(`
 <p>用 MetaMask（或其它注入 <code>window.ethereum</code> 的钱包）签名一段挑战文案完成登录，无需密码。首次签名即注册。</p>
 <input type="hidden" id="web3-authorize" value="${esc(authorize ?? '')}">
+<p id="web3-net" class="muted"></p>
 <button id="web3-connect" class="btn" type="button">连接钱包并登录</button>
 <p id="web3-status" class="muted" style="margin-top:10px"></p>
 `)}
@@ -485,12 +487,28 @@ ${card(`
 (function(){
   var btn=document.getElementById('web3-connect');
   var status=document.getElementById('web3-status');
+  var netEl=document.getElementById('web3-net');
   var authorize=document.getElementById('web3-authorize').value||'';
+  var chainNames=${JSON.stringify(knownChainNames())};
   var setStatus=function(s){status.textContent=s;};
+  /**
+   * 登录只认签名，不依赖某条链，所以**不强制切换**——免得登录被收款配置卡住。
+   * 这里只是把当前网络摆出来，让用户心里有数。
+   */
+  async function showNet(){
+    if(!window.ethereum) return;
+    try{
+      var cur=await window.ethereum.request({method:'eth_chainId'});
+      var dec;try{dec=BigInt(cur).toString(10);}catch(e){dec=String(cur);}
+      netEl.textContent='当前网络：'+(chainNames[dec]?chainNames[dec]+'（链 ID '+dec+'）':'链 ID '+dec);
+    }catch(e){netEl.textContent='';}
+  }
   if(!window.ethereum){
     setStatus('未检测到钱包（MetaMask 等）。请先安装并解锁钱包。');
     btn.disabled=true;return;
   }
+  showNet();
+  if(window.ethereum.on) window.ethereum.on('chainChanged',function(){showNet();});
   btn.addEventListener('click',async function(){
     btn.disabled=true;setStatus('请在钱包中确认连接…');
     try{
