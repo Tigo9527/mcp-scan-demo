@@ -306,8 +306,10 @@ npm test
 ## 安全说明
 
 - 所有页面输出经过 **HTML 转义**，用户名等用户输入不会造成 XSS。
-- Admin 鉴权三通道（`Cookie` / `?admin_token=` / `X-Admin-Token`），令牌比较用 `timingSafeEqual`；
-  所有副作用操作均为 POST，并有登录失败限流与 `SameSite=Lax` + Origin 校验防 CSRF。
+- Admin 鉴权两通道（`Cookie` `mcp_admin` / `X-Admin-Token` 请求头），令牌比较用 `timingSafeEqual`；
+  UI 任何链接都**不**把令牌拼进 URL（避免泄漏到地址栏 / 历史 / 截图 / Referer / 平台日志），
+  登录态靠 `mcp_admin` Cookie 保持。所有副作用操作均为 POST，并有登录失败限流与
+  `SameSite=Lax` + Origin 校验防 CSRF。
 - 公网环境下使用默认 admin 令牌会被直接禁用（503），强制要求注入真实 `ADMIN_TOKEN`。
 - 部署平台网关会改写 `Authorization` 头，因此本服务**永不**信任传入的 `Authorization` 头传令牌。
 
@@ -323,4 +325,6 @@ npm test
   「60 秒有效期 + PKCE」——攻击者必须同时截获授权码与 `code_verifier`。
 - **refresh_token 不轮换**：同理，无状态方案检测不到旧令牌是否被重放，轮换不会更安全。
 - **磁盘**：平台磁盘可能不持久化，重启/重新部署后数据可能丢失（退出前会尽量 flush）。
-- `?admin_token=` / `?token=` 会进入浏览器历史与平台访问日志，已用 `Referrer-Policy: no-referrer` 缓解。
+- `?token=`（user 端访问令牌）会进入浏览器历史与平台访问日志，已用 `Referrer-Policy: no-referrer`
+  缓解；登录后该令牌会被落到 `mcp_demo_user` Cookie，后续免挂参数。admin 端已改用 `mcp_admin`
+  Cookie，URL 中不再出现令牌。

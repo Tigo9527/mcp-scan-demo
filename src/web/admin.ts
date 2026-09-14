@@ -1,18 +1,18 @@
 /**
  * Admin 管理端。
  *
- * 鉴权：独立 admin 令牌（env `ADMIN_TOKEN`）。三通道接受，任意一条命中即可：
- *   1. Cookie `mcp_admin`（登录页下发）
- *   2. `?admin_token=` 查询参数
- *   3. `X-Admin-Token` 请求头
- * 之所以要留 2/3：部署平台网关可能不透传 Cookie，那样登录后会立刻掉线；
- * 而且 `Authorization` 头会被网关改写，**绝不能**用它传 admin 令牌。
+ * 鉴权：独立 admin 令牌（env `ADMIN_TOKEN`）。两通道接受，任意一条命中即可：
+ *   1. Cookie `mcp_admin`（登录页下发，HttpOnly + SameSite=Lax，UI 主用）
+ *   2. `X-Admin-Token` 请求头（脚本 / 自动化，不进 URL 无泄漏）
+ * 登录态一律靠 Cookie 保持，UI 任何链接都不再把令牌拼进 URL（否则会漏进地址栏 / 历史 /
+ * 截图 / Referer / 平台日志）。`Authorization` 头会被网关改写，**绝不能**用它传 admin 令牌。
+ * admin 与 user 用不同 Cookie 名（`mcp_admin` vs `mcp_demo_user`），单浏览器可同时登录两者。
  *
  * 安全：
  * - 使用默认令牌且非本地环境 → 503（防止忘记注入 ADMIN_TOKEN 就把管理端裸奔在公网）
  * - 登录失败限流（同 IP 10 次 / 10 分钟）
  * - 所有副作用操作一律 POST（`SameSite=Lax` 会放行顶层 GET 导航，写成链接等于裸奔）
- * - 响应统一带 `Referrer-Policy: no-referrer`，避免 admin_token 随 Referer 泄露
+ * - 响应统一带 `Referrer-Policy: no-referrer`（防御纵深；admin 令牌已不进 URL，主要是护住表单里的其它查询参数）
  */
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { timingSafeEqual } from 'node:crypto';
@@ -52,11 +52,10 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(ba, bb);
 }
 
-/** 请求里携带的 admin 令牌（三通道），未携带返回 undefined */
+/** 请求里携带的 admin 令牌（两通道：Cookie / X-Admin-Token 头），未携带返回 undefined */
 export function resolveAdminToken(req: Request): string | undefined {
   const candidates: unknown[] = [
     readCookie(req, COOKIE_NAME),
-    (req.query as Record<string, unknown> | undefined)?.admin_token,
     req.headers['x-admin-token'],
   ];
   for (const c of candidates) {
@@ -174,7 +173,7 @@ ${card(`
 <button class="btn" type="submit">登录</button>
 </form>
 `)}
-<p class="muted">也可以用请求头 <code>X-Admin-Token</code> 或查询参数 <code>?admin_token=</code> 直接访问管理端接口。</p>
+<p class="muted">也可以用请求头 <code>X-Admin-Token</code> 直接访问管理端接口（脚本 / 自动化常用）。</p>
 <p><a href="${esc(base)}/">← 返回首页</a></p>
 `,
   });
@@ -645,7 +644,7 @@ ${rows.length === 0
 export function createAdminRouter(): Router {
   const router = Router();
 
-  // 令牌可能出现在 URL 里，统一禁止 Referer 外泄
+  // 防御纵深：admin 令牌已不进 URL，这里主要是护住表单里的其它查询参数不外泄到 Referer
   router.use((_req, res, next) => {
     res.setHeader('Referrer-Policy', 'no-referrer');
     next();
@@ -690,8 +689,8 @@ export function createAdminRouter(): Router {
     if (submitted && safeEqual(submitted, getAdminToken())) {
       failures.delete(key);
       setAdminCookie(req, res, submitted);
-      // 同时把令牌放进 URL：万一平台网关不透传 Cookie，也能正常进入
-      res.redirect(302, `${base}/admin?admin_token=${encodeURIComponent(submitted)}`);
+      // 登录态靠 Cookie 保持，跳转不再把令牌拼进 URL（避免泄漏到地址栏 / 历史 / 日志）
+      res.redirect(302, `${base}/admin`);
       return;
     }
 

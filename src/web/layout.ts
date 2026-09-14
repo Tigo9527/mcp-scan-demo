@@ -150,17 +150,22 @@ export interface PageOptions {
   active?: 'home' | 'admin' | 'profile' | 'setup' | 'web3' | 'recharge';
   /** 对外基础地址，用于拼导航链接 */
   base?: string;
-  /** admin 令牌：有值时 admin 内部链接会带上，保证网关不透传 Cookie 时也能正常跳转 */
+  /** admin 令牌占位字段（保留兼容）。admin 登录态已改由 Cookie 保持，内部链接不再注入 token。 */
   adminToken?: string;
   /** Admin 子导航高亮项（仅 admin 页面传） */
   adminTab?: AdminTab;
 }
 
-/** admin 内部链接（自动带上 admin_token，防止平台网关丢弃 Cookie 导致刷新即掉线） */
-export function adminHref(path: string, adminToken?: string): string {
-  const clean = path.startsWith('/') ? path : `/${path}`;
-  if (!adminToken) return clean;
-  return `${clean}${clean.includes('?') ? '&' : '?'}admin_token=${encodeURIComponent(adminToken)}`;
+/**
+ * admin 内部链接。
+ *
+ * **不再拼接 token**：admin 登录态由 `mcp_admin` Cookie 保持，UI 任何链接都不该把令牌
+ * 带进 URL（否则会漏进地址栏、浏览器历史、截图、Referer、平台访问日志）。`adminToken`
+ * 形参保留仅为兼容旧调用方，本函数直接忽略它。服务端仍接受 `X-Admin-Token` 请求头供
+ * 脚本/自动化使用，但不走 URL。
+ */
+export function adminHref(path: string, _adminToken?: string): string {
+  return path.startsWith('/') ? path : `/${path}`;
 }
 
 export function page(opts: PageOptions): string {

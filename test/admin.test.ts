@@ -1,6 +1,9 @@
 /**
  * Admin 管理端测试：登录鉴权、用户列表/详情、GitHub 设置在线修改、统计接口。
  *
+ * 鉴权改为 Cookie 后，本文件所有受保护请求都先 `POST /admin/login` 拿 `mcp_admin` Cookie，
+ * 再以 `Cookie` 头携带（模拟网关透传 Cookie 的真实浏览器流）。不再有任何 `?admin_token=` 拼接。
+ *
  * 注意 vitest 按测试文件隔离模块注册表，所以本文件里的 store / settings / stats
  * 全局状态与其它测试文件互不干扰。
  */
@@ -37,6 +40,31 @@ function form(data: Record<string, string>) {
   };
 }
 
+/** 登录 admin 并提取 `mcp_admin=...` Cookie 串（模拟浏览器保存会话）。 */
+async function loginAsAdmin(): Promise<string> {
+  const res = await fetch(`${base}/admin/login`, form({ token: ADMIN_TOKEN }));
+  expect(res.status, '登录应 302').toBe(302);
+  const setCookie = res.headers.get('set-cookie') ?? '';
+  const m = setCookie.match(/mcp_admin=[^;]+/);
+  if (!m) throw new Error('登录未下发 mcp_admin Cookie');
+  return m[0];
+}
+
+/** 带 admin Cookie 的 GET。 */
+function adminGet(path: string, cookie: string) {
+  return fetch(`${base}${path}`, { headers: { Cookie: cookie }, redirect: 'manual' as const });
+}
+
+/** 带 admin Cookie 的 POST（表单）。 */
+function adminForm(path: string, cookie: string, data: Record<string, string> = {}) {
+  return fetch(`${base}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: cookie },
+    body: new URLSearchParams(data).toString(),
+    redirect: 'manual' as const,
+  });
+}
+
 beforeAll(async () => {
   // 关闭落盘，避免写入 data/ 目录
   configure({ enabled: false });
@@ -68,23 +96,36 @@ describe('admin 鉴权', () => {
     expect(html).toContain('Admin 管理端登录');
   });
 
-  it('错误的 admin 令牌返回 401', async () => {
-    const res = await fetch(`${base}/admin?admin_token=wrong-token`, { redirect: 'manual' });
+  it('错误的 admin 令牌（Cookie）返回 401', async () => {
+    const res = await fetch(`${base}/admin`, {
+      headers: { Cookie: 'mcp_admin=wrong-token' },
+      redirect: 'manual',
+    });
     expect(res.status).toBe(401);
   });
 
-  it('查询参数携带正确令牌可进入仪表盘', async () => {
+  it('查询通道 ?admin_token= 已移除，带它也返回 401', async () => {
+    // 安全加固：admin 令牌不再走 URL，避免泄漏到地址栏 / 历史 / 日志
     const res = await fetch(`${base}/admin?admin_token=${ADMIN_TOKEN}`, { redirect: 'manual' });
+    expect(res.status).toBe(401);
+  });
+
+  it('Cookie 登录后可进入仪表盘，且地址栏不含令牌', async () => {
+    const cookie = await loginAsAdmin();
+    const res = await adminGet('/admin', cookie);
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('仪表盘');
     expect(html).toContain('工具调用 Top 10');
+    // 关键：内部跳转 / 链接都不该再出现 admin_token 这个键
+    expect(html).not.toContain('admin_token=');
   });
 
   it('每个 Admin 页面顶部都有常驻子导航（入口不再埋在页面底部）', async () => {
+    const cookie = await loginAsAdmin();
     const pages = ['/admin', '/admin/users', '/admin/settings', '/admin/recharge-settings', '/admin/recharge'];
     for (const p of pages) {
-      const res = await fetch(`${base}${p}?admin_token=${ADMIN_TOKEN}`, { redirect: 'manual' });
+      const res = await adminGet(p, cookie);
       expect(res.status, p).toBe(200);
       const html = await res.text();
       expect(html, p).toContain('class="subnav"');
@@ -95,6 +136,8 @@ describe('admin 鉴权', () => {
       }
       // 当前页签要高亮
       expect(html, p).toContain('class="active"');
+      // 内部链接不携带 admin_token
+      expect(html, p).not.toContain('admin_token=');
     }
   });
 
@@ -113,7 +156,10 @@ describe('admin 鉴权', () => {
     expect(setCookie).toContain('mcp_admin=');
     expect(setCookie).toContain('HttpOnly');
     expect(setCookie).toContain('SameSite=Lax');
-    expect(res.headers.get('location') ?? '').toContain('/admin');
+    // 跳转目标不再带 admin_token
+    const loc = res.headers.get('location') ?? '';
+    expect(loc).toContain('/admin');
+    expect(loc).not.toContain('admin_token=');
   });
 
   it('登录页 POST 错误令牌返回 401', async () => {
@@ -133,9 +179,8 @@ describe('admin 鉴权', () => {
 describe('admin 用户管理', () => {
   it('用户列表能看到新注册的用户', async () => {
     await registerAndGetToken('admin_list_user');
-    const res = await fetch(`${base}/admin/users?admin_token=${ADMIN_TOKEN}`, {
-      redirect: 'manual',
-    });
+    const cookie = await loginAsAdmin();
+    const res = await adminGet('/admin/users', cookie);
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('admin_list_user');
@@ -143,10 +188,8 @@ describe('admin 用户管理', () => {
 
   it('搜索能过滤用户', async () => {
     await registerAndGetToken('searchable_user');
-    const res = await fetch(
-      `${base}/admin/users?admin_token=${ADMIN_TOKEN}&q=searchable_user`,
-      { redirect: 'manual' },
-    );
+    const cookie = await loginAsAdmin();
+    const res = await adminGet('/admin/users?q=searchable_user', cookie);
     const html = await res.text();
     expect(html).toContain('searchable_user');
     expect(html).not.toContain('admin_list_user');
@@ -156,10 +199,8 @@ describe('admin 用户管理', () => {
     await registerAndGetToken('detail_user');
     const user = await findUser('detail_user');
     expect(user).toBeTruthy();
-    const res = await fetch(
-      `${base}/admin/users/${user!.id}?admin_token=${ADMIN_TOKEN}`,
-      { redirect: 'manual' },
-    );
+    const cookie = await loginAsAdmin();
+    const res = await adminGet(`/admin/users/${user!.id}`, cookie);
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('detail_user');
@@ -167,20 +208,16 @@ describe('admin 用户管理', () => {
   });
 
   it('不存在的用户返回 404', async () => {
-    const res = await fetch(
-      `${base}/admin/users/does-not-exist?admin_token=${ADMIN_TOKEN}`,
-      { redirect: 'manual' },
-    );
+    const cookie = await loginAsAdmin();
+    const res = await adminGet('/admin/users/does-not-exist', cookie);
     expect(res.status).toBe(404);
   });
 
   it('可以为用户签发新令牌', async () => {
     await registerAndGetToken('issue_user');
     const user = await findUser('issue_user');
-    const res = await fetch(
-      `${base}/admin/users/${user!.id}/token?admin_token=${ADMIN_TOKEN}`,
-      form({}),
-    );
+    const cookie = await loginAsAdmin();
+    const res = await adminForm(`/admin/users/${user!.id}/token`, cookie);
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('mcp_demo_');
@@ -190,10 +227,8 @@ describe('admin 用户管理', () => {
     await registerAndGetToken('doomed_user');
     const user = await findUser('doomed_user');
     expect(user).toBeTruthy();
-    const res = await fetch(
-      `${base}/admin/users/${user!.id}/delete?admin_token=${ADMIN_TOKEN}`,
-      form({}),
-    );
+    const cookie = await loginAsAdmin();
+    const res = await adminForm(`/admin/users/${user!.id}/delete`, cookie);
     expect(res.status).toBe(302);
     expect(await findUser('doomed_user')).toBeUndefined();
   });
@@ -202,15 +237,12 @@ describe('admin 用户管理', () => {
 describe('admin GitHub 设置', () => {
   it('保存后 isGitHubConfigured 立即为真（无需重启）', async () => {
     expect(getGithub().configured).toBe(false);
-
-    await fetch(`${base}/admin/settings?admin_token=${ADMIN_TOKEN}`, {
-      ...form({
-        clientId: 'Iv1.testclientid',
-        clientSecret: 'test-secret-value',
-        redirectUri: 'http://localhost:3000/auth/github/callback',
-        scope: 'read:user',
-      }),
-      redirect: 'manual',
+    const cookie = await loginAsAdmin();
+    await adminForm('/admin/settings', cookie, {
+      clientId: 'Iv1.testclientid',
+      clientSecret: 'test-secret-value',
+      redirectUri: 'http://localhost:3000/auth/github/callback',
+      scope: 'read:user',
     });
 
     const gh = getGithub();
@@ -222,52 +254,39 @@ describe('admin GitHub 设置', () => {
   });
 
   it('Secret 留空且未勾选清空时保持不变', async () => {
-    await fetch(`${base}/admin/settings?admin_token=${ADMIN_TOKEN}`, {
-      ...form({ clientId: 'id-1', clientSecret: 'secret-1' }),
-      redirect: 'manual',
-    });
+    const cookie = await loginAsAdmin();
+    await adminForm('/admin/settings', cookie, { clientId: 'id-1', clientSecret: 'secret-1' });
     expect(getGithub().clientSecret).toBe('secret-1');
 
-    await fetch(`${base}/admin/settings?admin_token=${ADMIN_TOKEN}`, {
-      ...form({ clientId: 'id-2', clientSecret: '' }),
-      redirect: 'manual',
-    });
+    await adminForm('/admin/settings', cookie, { clientId: 'id-2', clientSecret: '' });
     expect(getGithub().clientId).toBe('id-2');
     expect(getGithub().clientSecret).toBe('secret-1');
   });
 
   it('勾选 clearSecret 会清空 Secret', async () => {
-    await fetch(`${base}/admin/settings?admin_token=${ADMIN_TOKEN}`, {
-      ...form({ clientId: 'id-3', clientSecret: 'secret-3' }),
-      redirect: 'manual',
-    });
+    const cookie = await loginAsAdmin();
+    await adminForm('/admin/settings', cookie, { clientId: 'id-3', clientSecret: 'secret-3' });
     expect(getGithub().configured).toBe(true);
 
-    await fetch(`${base}/admin/settings?admin_token=${ADMIN_TOKEN}`, {
-      ...form({ clientId: 'id-3', clientSecret: '', clearSecret: '1' }),
-      redirect: 'manual',
-    });
+    await adminForm('/admin/settings', cookie, { clientId: 'id-3', clientSecret: '', clearSecret: '1' });
     expect(getGithub().clientSecret).toBe('');
     expect(getGithub().configured).toBe(false);
   });
 
   it('恢复默认值会丢弃 admin 覆盖', async () => {
-    await fetch(`${base}/admin/settings?admin_token=${ADMIN_TOKEN}`, {
-      ...form({ clientId: 'to-be-reset', clientSecret: 's' }),
-      redirect: 'manual',
-    });
+    const cookie = await loginAsAdmin();
+    await adminForm('/admin/settings', cookie, { clientId: 'to-be-reset', clientSecret: 's' });
     expect(getGithub().clientId).toBe('to-be-reset');
 
-    await fetch(`${base}/admin/settings/reset?admin_token=${ADMIN_TOKEN}`, form({}));
+    await adminForm('/admin/settings/reset', cookie);
     expect(getGithub().source).toBe('env');
   });
 });
 
 describe('admin 统计接口', () => {
   it('/admin/api/stats 返回结构化统计', async () => {
-    const res = await fetch(`${base}/admin/api/stats?admin_token=${ADMIN_TOKEN}`, {
-      redirect: 'manual',
-    });
+    const cookie = await loginAsAdmin();
+    const res = await adminGet('/admin/api/stats', cookie);
     expect(res.status).toBe(200);
     const json = (await res.json()) as any;
     expect(json.counters).toBeDefined();
