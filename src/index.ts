@@ -7,7 +7,12 @@
 import 'dotenv/config';
 import { createApp } from './web/app.js';
 import { config, getAdminToken, isUsingDefaultAdminToken } from './config.js';
-import { flush, registerShutdownFlush } from './persist.js';
+import { initDb, flushDb, closeDb, registerShutdownFlush } from './db.js';
+import { reloadUsersFromDb } from './auth/store.js';
+import { reloadBillingFromDb } from './billing.js';
+import { reloadStatsFromDb } from './stats.js';
+import { reloadRechargeSettingsFromDb, reloadRechargeRecordsFromDb } from './recharge.js';
+import { reloadGithubFromDb } from './settings.js';
 import type { Server } from 'node:http';
 
 // 兜底：Express 4 不捕获 async handler 的 rejection，一旦逃逸出来 Node 20 默认直接终止进程。
@@ -19,7 +24,21 @@ process.on('uncaughtException', (err) => {
   console.error('[mcp-demo] 未捕获异常：', err);
 });
 
-export function startServer(port: number = config.port): Server {
+/** 启动期把各模块内存态从 SQLite 预热（在 listen 之前完成，避免首请求读到空数据）。 */
+async function loadAllStores(): Promise<void> {
+  await Promise.all([
+    reloadUsersFromDb(),
+    reloadBillingFromDb(),
+    reloadStatsFromDb(),
+    reloadRechargeSettingsFromDb(),
+    reloadRechargeRecordsFromDb(),
+    reloadGithubFromDb(),
+  ]);
+}
+
+export async function startServer(port: number = config.port): Promise<Server> {
+  await initDb();
+  await loadAllStores();
   registerShutdownFlush();
   const app = createApp();
   const server = app.listen(port, config.host, () => {
@@ -115,7 +134,8 @@ export function printBanner(): void {
 
 // 退出前把待写入的数据刷盘（平台重启频繁，不 flush 的话统计基本等于内存态）
 export async function shutdown(): Promise<void> {
-  await flush().catch(() => undefined);
+  await flushDb().catch(() => undefined);
+  await closeDb().catch(() => undefined);
 }
 
 // 仅当作为入口直接执行时才自动启动（测试 import 时不会触发）
@@ -126,5 +146,5 @@ const invokedDirectly =
     process.argv[1].replace(/\\/g, '/').endsWith('src/index.ts'));
 
 if (invokedDirectly && process.env.MCP_DEMO_NO_BOOT !== '1') {
-  startServer();
+  void startServer();
 }

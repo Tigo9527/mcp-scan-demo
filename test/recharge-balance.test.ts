@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import type { Server } from 'node:http';
 import { createApp } from '../src/web/app.js';
-import { configure } from '../src/persist.js';
+import { configure } from '../src/db.js';
 import * as recharge from '../src/recharge.js';
 import * as billing from '../src/billing.js';
 

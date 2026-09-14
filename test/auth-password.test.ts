@@ -14,7 +14,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { Server } from 'node:http';
 import { createApp } from '../src/web/app.js';
 import { config } from '../src/config.js';
-import { configure } from '../src/persist.js';
+import { configure } from '../src/db.js';
 import * as auth from '../src/auth/manager.js';
 import * as store from '../src/auth/store.js';
 import { hashPassword, validatePassword, validateUsername, verifyPassword } from '../src/auth/password.js';

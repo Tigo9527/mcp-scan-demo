@@ -23,7 +23,7 @@ import { getGithub, getRaw, resetGithub, setGithub } from '../settings.js';
 import { getStatsSnapshot } from '../stats.js';
 import * as billing from '../billing.js';
 import * as recharge from '../recharge.js';
-import { persistStatus } from '../persist.js';
+import { persistStatus } from '../db.js';
 import { deriveBase, originOk, readCookie, requestOrigin, requireSameOrigin, wrap } from './http.js';
 import {
   adminHref,
@@ -229,7 +229,7 @@ ${statCard(Object.keys(s.byUser).length, '活跃调用方', '含匿名桶')}
 ${statCard(b.used, '总计费点数', `所有用户累计消耗；匿名 ${b.anonymousUsed}`)}
 ${statCard(b.rechargedTotal, '总充值点数', `累计充值入账；共 ${rc.count} 笔`)}
 </div>
-<p class="muted">统计起点 ${esc(fmtTime(s.since))} · 落盘 ${ps.enabled ? `已启用（${esc(ps.dir)}）` : '已关闭'}${ps.lastError ? ` · <span style="color:var(--err)">最近错误：${esc(ps.lastError)}</span>` : ''}</p>
+<p class="muted">统计起点 ${esc(fmtTime(s.since))} · 落盘 ${ps.enabled ? `已启用（${esc(ps.db)} · ${esc(ps.storage)}）` : '已关闭'}${ps.lastError ? ` · <span style="color:var(--err)">最近错误：${esc(ps.lastError)}</span>` : ''}</p>
 
 <h2>系统信息</h2>
 ${table(

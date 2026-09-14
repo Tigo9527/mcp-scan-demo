@@ -26,7 +26,7 @@ import {
 import type { AuthResult } from '../auth/manager.js';
 import type { User } from '../auth/store.js';
 import * as stats from '../stats.js';
-import { persistStatus } from '../persist.js';
+import { persistStatus } from '../db.js';
 import {
   authenticateUserRequest,
   allowPublicCors,

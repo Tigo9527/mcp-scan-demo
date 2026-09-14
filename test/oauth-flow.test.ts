@@ -12,7 +12,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { Server } from 'node:http';
 import { createApp } from '../src/web/app.js';
-import { configure } from '../src/persist.js';
+import { configure } from '../src/db.js';
 import * as auth from '../src/auth/manager.js';
 import * as store from '../src/auth/store.js';
 import { canonicalResourceUri, MCP_PATH } from '../src/oauth/metadata.js';

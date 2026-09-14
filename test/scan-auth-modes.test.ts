@@ -15,7 +15,7 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import type { Server } from 'node:http';
 import { createApp } from '../src/web/app.js';
-import { configure } from '../src/persist.js';
+import { configure } from '../src/db.js';
 
 /** 埋进 mock 上游响应里的数据特征：一旦出现在匿名响应中，说明鉴权被绕过 */
 const SCAN_MARKER = 'MOCK-SCAN-DATA-SHOULD-NOT-LEAK';

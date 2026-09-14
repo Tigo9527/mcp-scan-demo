@@ -32,7 +32,7 @@ export const config = {
     scope: process.env.GITHUB_SCOPE ?? 'read:user user:email',
   },
 
-  /** 数据落盘目录（惰性读取，见 src/persist.ts） */
+  /** 数据落盘目录（SQLite 文件所在目录，惰性读取，见 src/db.ts） */
   dataDir: process.env.DATA_DIR ?? './data',
 
   /**
@@ -43,7 +43,7 @@ export const config = {
 
   /**
    * 进程标识，仅用于日志与健康检查展示（**不参与落盘文件名**：数据文件是固定名字，
-   * 见 src/persist.ts）。通过 env INSTANCE_ID 覆盖。
+   * 见 src/db.ts）。通过 env INSTANCE_ID 覆盖。
    */
   instanceId: process.env.INSTANCE_ID ?? 'default',
   /** 进程启动时间 */

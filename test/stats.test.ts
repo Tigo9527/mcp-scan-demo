@@ -8,7 +8,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vites
 import type { Server } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { createApp } from '../src/web/app.js';
-import { configure } from '../src/persist.js';
+import { configure } from '../src/db.js';
 import { diffStats, getStatsSnapshot, resetStats } from '../src/stats.js';
 import * as store from '../src/auth/store.js';
 import { issueTokenForId } from '../src/auth/manager.js';

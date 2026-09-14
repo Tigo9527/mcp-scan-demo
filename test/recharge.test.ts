@@ -13,7 +13,7 @@ import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { Interface } from 'ethers';
 import * as recharge from '../src/recharge.js';
 import * as billing from '../src/billing.js';
-import { configure } from '../src/persist.js';
+import { configure } from '../src/db.js';
 import { config } from '../src/config.js';
 
 const ERC20 = new Interface([

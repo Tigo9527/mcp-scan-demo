@@ -14,7 +14,14 @@
  * 避免 JS number 在 18 位精度下失真。
  */
 import { config } from './config.js';
-import { loadJsonSync, scheduleSave } from './persist.js';
+import {
+  dbEnabled,
+  loadRechargeRecords,
+  loadRechargeSettings,
+  saveRechargeRecords,
+  saveRechargeSettings,
+  scheduleDbWrite,
+} from './db.js';
 import { creditBalance } from './billing.js';
 import {
   Interface,
@@ -313,9 +320,15 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 function ensureSettings(): RechargeConfig | null {
   if (!settingsLoaded) {
     settingsLoaded = true;
-    settings = loadJsonSync<RechargeConfig | null>(SETTINGS_FILE, null);
+    // 启用 DB 时，内存数据由 reloadRechargeSettingsFromDb() 在启动期预热；此处不读库。
   }
   return settings;
+}
+
+/** 从 SQLite 重新加载充值配置到内存（启动预热 + 测试里重启模拟用）。 */
+export async function reloadRechargeSettingsFromDb(): Promise<void> {
+  settings = dbEnabled() ? await loadRechargeSettings() : null;
+  settingsLoaded = true;
 }
 
 /** 当前充值配置；未配置返回 null。 */
@@ -524,7 +537,7 @@ export async function setRechargeConfig(
   next.updatedBy = 'admin';
   settings = next;
   settingsLoaded = true;
-  scheduleSave(SETTINGS_FILE, () => ({ ...next }));
+  scheduleDbWrite(SETTINGS_FILE, () => saveRechargeSettings({ ...next }));
   const warning = warnings.length ? warnings.join(' ') : undefined;
   const info = infos.length ? infos.join(' ') : undefined;
   return {
@@ -751,14 +764,21 @@ export async function verifyRechargeTx(
 function ensureRecords(): RechargeRecord[] {
   if (!recordsLoaded) {
     recordsLoaded = true;
-    const saved = loadJsonSync<RechargeRecord[] | null>(RECORD_FILE, null);
-    records = Array.isArray(saved) ? saved.filter((r) => r && typeof r === 'object') : [];
+    // 启用 DB 时，内存数据由 reloadRechargeRecordsFromDb() 在启动期预热；此处不读库。
   }
   return records;
 }
 
+/** 从 SQLite 重新加载充值记录到内存（启动预热 + 测试里重启模拟用）。 */
+export async function reloadRechargeRecordsFromDb(): Promise<void> {
+  records = dbEnabled()
+    ? (await loadRechargeRecords()).filter((r) => r && typeof r === 'object')
+    : [];
+  recordsLoaded = true;
+}
+
 function markRecordsDirty(): void {
-  scheduleSave(RECORD_FILE, () => structuredClone(records));
+  scheduleDbWrite(RECORD_FILE, () => saveRechargeRecords(records));
 }
 
 function calcPoints(amount: string, rate: number): number {

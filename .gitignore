@@ -5,3 +5,6 @@ dist/
 .DS_Store
 # 运行时数据（用户 / 统计 / 设置落盘）
 data/
+
+# 迁移前的 data/ 临时备份
+data_backup_*/

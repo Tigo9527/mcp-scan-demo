@@ -6,13 +6,13 @@
  * - 默认**硬计费**：余额不足时拒绝执行（由 web 层返回 402，见 src/web/app.ts）。
  * - 匿名请求归到 `anonymous` 单桶，仅记消耗、无余额概念（匿名无法计费，收费工具会被要求登录）。
  *
- * 落盘：复用 persist 模块的 scheduleSave，单一文件 `billing.json`，
- * 与 stats.ts / store.ts 同一模式（防抖 + 原子写 + 读降级）。
+ * 落盘：通过 src/db.ts（SQLite + Sequelize）持久化，单一表 `billing`，
+ * 与 stats.ts / store.ts 同一模式（内存态 + 防抖写库 + 启动期预热）。
  *
  * 内部逻辑**绝不抛异常**：埋点在 SDK 的请求处理链路上，任何抛出都会被吞掉并转成 400。
  */
 import { config } from './config.js';
-import { loadJsonSync, scheduleSave } from './persist.js';
+import { dbEnabled, loadBilling, saveBilling, scheduleDbWrite } from './db.js';
 
 const ANONYMOUS = 'anonymous';
 
@@ -94,9 +94,14 @@ function emptyEntry(userId: string | null, iso: string): UserBilling {
 function ensureLoaded(): void {
   if (loaded) return;
   loaded = true;
-  const saved = loadJsonSync<Record<string, UserBilling> | null>(FILE, null);
-  if (saved && typeof saved === 'object') {
-    state = {};
+  // 启用 DB 时，内存数据由 reloadBillingFromDb() 在启动期预热；这里保持同步、不读库。
+}
+
+/** 从 SQLite 重新加载计费账本到内存（启动预热 + 测试里重启模拟用）。 */
+export async function reloadBillingFromDb(): Promise<void> {
+  state = {};
+  if (dbEnabled()) {
+    const saved = await loadBilling();
     for (const [k, v] of Object.entries(saved)) {
       if (!v || typeof v !== 'object') continue;
       state[k] = {
@@ -109,10 +114,11 @@ function ensureLoaded(): void {
       };
     }
   }
+  loaded = true;
 }
 
 function markDirty(): void {
-  scheduleSave(FILE, () => structuredClone(state));
+  scheduleDbWrite(FILE, () => saveBilling(state));
 }
 
 /**

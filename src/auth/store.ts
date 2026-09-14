@@ -1,5 +1,5 @@
 /**
- * 用户存储（demo 用，内存为主 + JSON 落盘尽力持久化）。
+ * 用户存储（demo 用，内存为主 + SQLite（Sequelize）持久化）。
  *
  * 相比初版的变化：
  * - 支持落盘（`data/users.json`，单一文件，重启后仍在）
@@ -10,7 +10,7 @@
  * 生产环境请替换为数据库实现，并保持相同接口。
  */
 import { randomUUID } from 'node:crypto';
-import { loadJsonSync, scheduleSave } from '../persist.js';
+import { dbEnabled, loadUsers, saveUsers, scheduleDbWrite } from '../db.js';
 
 export type AuthProvider = 'local' | 'github' | 'web3';
 
@@ -52,7 +52,6 @@ const byUsername = new Map<string, string>();
 const byGithubLogin = new Map<string, string>();
 const byWallet = new Map<string, string>();
 
-const FILE = 'users';
 let loaded = false;
 
 function indexBestEffort(user: User): void {
@@ -67,19 +66,31 @@ function indexBestEffort(user: User): void {
 function ensureLoaded(): void {
   if (loaded) return;
   loaded = true;
-  const data = loadJsonSync<{ users?: User[] }>(FILE, {});
-  const merged: User[] = data.users ?? [];
-  for (const u of merged) {
-    if (!u?.id || !u?.username) continue;
-    if (!byId.has(u.id)) {
-      byId.set(u.id, u);
-      indexBestEffort(u);
+  // 启用 DB 时，内存数据由 loadUsersFromDb() 在启动期（app.listen 之前）预热；
+  // 这里不读库，保持同步。DB 关闭（测试 / MCP_DEMO_PERSIST=0）时即空内存态。
+}
+
+/** 从 SQLite 重新加载全部用户到内存（启动预热 + 测试里重启模拟用）。 */
+export async function reloadUsersFromDb(): Promise<void> {
+  byId.clear();
+  byUsername.clear();
+  byGithubLogin.clear();
+  byWallet.clear();
+  if (dbEnabled()) {
+    const users = await loadUsers();
+    for (const u of users) {
+      if (!u?.id || !u?.username) continue;
+      if (!byId.has(u.id)) {
+        byId.set(u.id, u);
+        indexBestEffort(u);
+      }
     }
   }
+  loaded = true;
 }
 
 function markDirty(): void {
-  scheduleSave(FILE, () => ({ users: [...byId.values()] }));
+  scheduleDbWrite('users', () => saveUsers([...byId.values()]));
 }
 
 export function createUser(input: {

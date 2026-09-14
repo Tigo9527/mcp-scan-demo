@@ -18,7 +18,7 @@
 ```
 src/
   config.ts           运行时配置（端口 / JWT 密钥 / 实例 ID / admin 令牌）
-  persist.ts          极简 JSON 落盘（原子写 + 防抖 + 固定文件名 + 读降级）
+  db.ts               SQLite 存储层（Sequelize ORM：自动建表 + 防抖写库 + 旧 JSON 自动导入）
   settings.ts         GitHub OAuth 运行时可变设置（落盘）
   stats.ts            MCP 调用统计（计数器 + 环形缓冲 + 落盘）
   auth/
@@ -41,7 +41,7 @@ src/
     layout.ts         共享页面布局 + HTML 转义 esc()
     admin.ts          Admin 管理端（路由 + 页面）
     profile.ts        用户 Profile 页面
-  index.ts            启动入口（顶部加载 .env）+ 打印访问 URL 横幅 + 退出前落盘
+  index.ts            启动入口（顶部加载 .env）+ 连库预热 + 打印访问 URL 横幅 + 退出前刷库
 test/
   integration.test.ts 集成测试：健康检查 / 注册 / 握手 / 登录引导 / 405 / XSS / my_stats
   admin.test.ts       Admin：登录鉴权 / 用户管理 / GitHub 设置 / 统计接口
@@ -226,8 +226,8 @@ https://a8b79d8a477856f1e.app.workbuddy.link
 >    （必须带本服务前缀 `mcp_demo_`），网关注入的 `Authorization` 一律忽略。
 > 4. **支持匿名握手 + 登录引导**：未携带令牌时不会拒绝连接，而是暴露 `login` 工具、
 >    受保护工具返回中文登录引导（含可点击的登录 URL）。
-> 5. **落盘文件名固定**：用户 / 统计 / 计费 / 充值各自只写 `data/` 下的一个 JSON 文件
->    （原子写 + .bak 留档 + 坏文件改名留证），不存在按进程 / 实例拆分。
+> 5. **单一 SQLite 文件**：所有数据集落在 `data/mcp-demo.sqlite`（users / billing / recharge_records /
+>    recharge_settings / github_settings / stats 六张表），启动自动建表、旧 JSON 自动导入，不存在按进程 / 实例拆分。
 
 ### 钉钉 MCP 配置（不含 token，靠登录引导）
 

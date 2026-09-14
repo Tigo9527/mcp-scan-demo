@@ -98,10 +98,15 @@
 - **`/setup` 是免登录的接入说明页，页面里绝不能出现任何令牌**（它是直接转发给新用户的）。
   同理首页 `/` 的配置块也只能用不含令牌的 `publicMcpConfigJson()`。
   `test/setup-page.test.ts` 用 `mcp_demo_` 正则锁住了这一点，改这两处后必须跑。
-- **落盘不要引入「多副本 / 分片」设计**：`src/persist.ts` 只认调用方给的固定 name，
-  数据集与文件一一对应（`users.json` / `stats.json` / `billing.json` / `recharge.json`）。
+- **存储层用 SQLite + Sequelize（`src/db.ts`），不要回到「多副本 / 分片」设计**。
+  所有数据集落在 `data/mcp-demo.sqlite` 单一文件（users / billing / recharge_records /
+  recharge_settings / github_settings / stats 六张表），启动期 `initDb()` 自动建表、`loadAllStores()`
+  预热内存态，旧 JSON 数据在首次启动自动导入并归档到 `data/_migrated_json/`。
   不要再搞 `instanceId` 后缀、按进程拆分文件名、启动合并分片这类东西；页面与接口文案里
   也不要再写「本实例视角 / 数据不跨副本共享」之类的说明。
+- **sqlite3 是原生模块，部署机器若 `npm install` 编译失败**（常见于 node-gyp 拉不到 node 头文件，
+  如 nodejs.org 被墙）：用 `npm_config_nodedir=<本机 node 头文件目录> npm install sqlite3 --build-from-source`
+  指向本地头文件即可，无需联网编译。
 - **保存配置时不要因为外部依赖不可用就整单拒绝**。曾经 ERC20 元数据读不到就拒绝落盘，
   结果 RPC 一抽风（如 `eth.llamarpc.com` 返回 525）管理员连收款地址都存不进去。
   正确做法：**照常保存 + 页面告警 + 提供「重新读取」与手工填写兜底**，
