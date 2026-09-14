@@ -122,7 +122,7 @@ ${card(`
 <div class="grid">
 <div class="stat"><div class="v">${esc(String(opts.balance))}</div><div class="l">当前余额（点）</div></div>
 <div class="stat"><div class="v">${esc(String(opts.recharged))}</div><div class="l">累计充值（点）</div></div>
-<div class="stat"><div class="v">${esc(String(cfg.rate))}</div><div class="l">汇率（1 ${esc(isToken ? (cfg.tokenSymbol || '代币') : 'ETH')} = ? 点）</div></div>
+<div class="stat"><div class="v">${esc(String(cfg.rate))}</div><div class="l">汇率（1 ${esc(isToken ? (cfg.tokenSymbol || '代币') : 'ETH')} = ${esc(String(cfg.rate))} 点）</div></div>
 </div>
 `)}
 

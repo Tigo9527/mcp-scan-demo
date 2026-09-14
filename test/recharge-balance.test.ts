@@ -132,6 +132,24 @@ describe('充值页的余额展示', () => {
     expect(html).not.toContain('id="max-btn"');
   });
 
+  it('手续费率/汇率卡片显示实际数字，不留占位符问号', async () => {
+    await recharge.setRechargeConfig({
+      recipient: RECIPIENT,
+      rpcUrl: 'http://127.0.0.1:1',
+      rate: 1000,
+      tokenAddress: TOKEN,
+      tokenSymbol: 'USDT',
+      tokenDecimals: 6,
+    });
+    const cookie = await login('bal_user_6');
+    const html = await (
+      await fetch(`${base}/recharge`, { headers: { Cookie: `mcp_demo_user=${cookie}` } })
+    ).text();
+    expect(html).toContain('1 USDT = 1000 点');
+    // 写死的「= ? 点」占位符曾经漏到线上：这里把它钉死
+    expect(html).not.toContain('= ? 点');
+  });
+
   it('余额不足的拦截发生在发交易之前，且只在读得到余额时才拦', async () => {
     await recharge.setRechargeConfig({
       recipient: RECIPIENT,
