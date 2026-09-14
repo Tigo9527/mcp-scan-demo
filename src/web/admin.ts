@@ -515,7 +515,7 @@ ${table(
     [
       '链 / 网络',
       c.chainId
-        ? `${esc(chainDisplayName(c.chainId))} · <code>${esc(c.chainId)}</code>（${esc(recharge.chainIdToDecimal(c.chainId))}）`
+        ? `${esc(chainDisplayName(c.chainId))} · <code>${esc(recharge.normalizeChainId(c.chainId))}</code>（${esc(recharge.chainIdToDecimal(c.chainId))}）`
         : '<span class="muted">未指定（用户转账前不会强制切换网络）</span>',
     ],
   ],

@@ -25,6 +25,7 @@ import {
   buildChainAddParams,
   chainIdToDecimal,
   chainName,
+  normalizeChainId,
   getRechargeConfig,
   listRecharges,
   submitRechargeTx,
@@ -87,11 +88,14 @@ function rechargeHtml(opts: {
     selector: TRANSFER_SELECTOR,
   };
 
-  // 目标链：前端据此在转账前比对钱包网络，不一致就唤起切换 / 添加
+  // 目标链：前端据此在转账前比对钱包网络，不一致就唤起切换 / 添加。
+  // 必须归一化成 hex：存量配置里可能是十进制（"71"），而钱包的 eth_chainId 恒为
+  // 十六进制（"0x47"），直接比字符串会永远不相等，表现为「明明是对的链却一直让切」。
+  const targetChainId = cfg.chainId ? normalizeChainId(cfg.chainId) : '';
   const chain: ChainView = {
-    chainId: cfg.chainId || '',
-    chainIdDec: cfg.chainId ? chainIdToDecimal(cfg.chainId) : '',
-    name: (cfg.chainId && chainName(cfg.chainId)) || '',
+    chainId: targetChainId,
+    chainIdDec: targetChainId ? chainIdToDecimal(targetChainId) : '',
+    name: (targetChainId && chainName(targetChainId)) || '',
     addParams: buildChainAddParams(cfg),
   };
   const chainLabel = chain.chainId
@@ -139,8 +143,8 @@ ${table(
     ],
     [
       '链 / 网络',
-      cfg.chainId
-        ? `${esc(chainLabel)} <code>${esc(cfg.chainId)}</code>`
+      targetChainId
+        ? `${esc(chainLabel)} <code>${esc(targetChainId)}</code>`
         : '<span class="muted">未指定（转账前不会强制切换网络）</span>',
     ],
   ],

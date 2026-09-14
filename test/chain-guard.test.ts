@@ -127,6 +127,20 @@ describe('充值页的钱包网络校验', () => {
     expect(html).toContain('不会强制切换网络');
   });
 
+  it('存量配置里的十进制链 ID 也会被归一化（否则和钱包的 0x… 永远比不上）', async () => {
+    // 历史数据 / 手填可能存成十进制 "71"（Conflux eSpace 测试网），
+    // 钱包的 eth_chainId 恒为 "0x47"——前端拿到的一定要是 hex。
+    recharge.__resetForTest();
+    await saveConfig('71', 'https://evmtestnet.confluxrpc.com');
+    const cookie = await login('chain_guard_decimal');
+    const res = await fetch(`${base}/recharge`, { headers: { Cookie: `mcp_demo_user=${cookie}` } });
+    const html = await res.text();
+    expect(html).toContain('0x47');
+    expect(html).toContain('Conflux eSpace 测试网');
+    // 加链参数同样必须是 hex
+    expect(html).toContain('"chainId":"0x47"');
+  });
+
   it('收款信息里展示的是链名 + 链 ID，不是裸的十六进制', async () => {
     await saveConfig('1', 'https://eth-rpc.example');
     const cookie = await login('chain_guard_user4');
