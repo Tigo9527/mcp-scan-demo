@@ -418,15 +418,19 @@ ${hidden}
 </form>
 `)}
 <div class="row" style="margin-top:12px">
-<p class="muted">已有账号？<a href="${esc(base)}/login">去登录</a> · 或 <a href="${esc(base)}/auth/github">用 GitHub 注册 / 登录</a></p>
+<p class="muted">已有账号？<a href="${esc(base)}/login${authorizeTicket ? `?authorize=${esc(authorizeTicket)}` : ''}">去登录</a> · 或 <a href="${esc(base)}/auth/github${authorizeTicket ? `?authorize=${esc(authorizeTicket)}` : ''}">用 GitHub 注册 / 登录</a></p>
 </div>
 <p><a href="${esc(base)}/">← 返回首页</a></p>
 `,
   });
 }
 
-/** 账号密码登录页 */
-function loginHtml(base: string, error?: string): string {
+/** 账号密码登录页。authorize 非空表示来自 OAuth 授权流程，需原样带回 POST 并在成功后回跳客户端。 */
+function loginHtml(base: string, error?: string, authorize?: string): string {
+  const hidden = authorize
+    ? `<input type="hidden" name="authorize" value="${esc(authorize)}">`
+    : '';
+  const q = authorize ? `?authorize=${esc(authorize)}` : '';
   return page({
     title: '登录',
     base,
@@ -435,6 +439,7 @@ function loginHtml(base: string, error?: string): string {
 ${error ? notice(esc(error)) : ''}
 ${card(`
 <form method="post" action="/login">
+${hidden}
 <label for="username">用户名</label>
 <input id="username" name="username" type="text" autocomplete="username" required>
 <label for="password">密码</label>
@@ -443,7 +448,7 @@ ${card(`
 </form>
 `)}
 <div class="row" style="margin-top:12px">
-<p class="muted">还没有账号？<a href="${esc(base)}/register">去注册</a> · 或 <a href="${esc(base)}/auth/github">用 GitHub 注册 / 登录</a></p>
+<p class="muted">还没有账号？<a href="${esc(base)}/register${q}">去注册</a> · 或 <a href="${esc(base)}/auth/github${q}">用 GitHub 注册 / 登录</a></p>
 </div>
 <p><a href="${esc(base)}/">← 返回首页</a></p>
 `,
@@ -736,9 +741,11 @@ export function createApp() {
     }),
   );
 
-  // 账号密码登录入口
+  // 账号密码登录入口（可能带着 OAuth 授权票据，登录成功后回跳客户端）
   app.get('/login', (req: Request, res: Response) => {
-    res.type('html').send(loginHtml(deriveBase(req)));
+    const authorize =
+      typeof req.query.authorize === 'string' ? req.query.authorize : undefined;
+    res.type('html').send(loginHtml(deriveBase(req), undefined, authorize));
   });
 
   // web3 钱包登录页（MetaMask 等）。?authorize= 来自 OAuth 授权页，登录完成后回跳发起方。
@@ -750,6 +757,8 @@ export function createApp() {
   });
 
   // 账号密码登录（POST 表单）。跨站表单防护 + async 兜底。
+  // 携带 authorize 票据时，登录成功即完成 OAuth 授权回跳（签发 code + 跳转 redirect_uri）；
+  // 失败重渲染也把票据透传给 loginHtml，保持「去注册 / GitHub」链接的授权上下文。
   app.post(
     '/login',
     express.urlencoded({ extended: false, limit: '16kb' }),
@@ -759,14 +768,17 @@ export function createApp() {
       const body = (req.body ?? {}) as Record<string, unknown>;
       const username = String(body.username ?? '');
       const password = String(body.password ?? '');
+      const authorizeTicket =
+        typeof body.authorize === 'string' ? body.authorize : undefined;
       try {
         const result = auth.loginWithPassword(username, password);
         setUserTokenCookie(req, res, result.token);
-        res.type('html').send(loginSuccessHtml(result, base));
+        const oauth = completeAuthorizeFromTicket(result, base, authorizeTicket);
+        res.type('html').send(oauth ?? loginSuccessHtml(result, base));
       } catch (err) {
         // 统一回显「用户名或密码错误」，避免账号枚举
         const msg = err instanceof auth.AuthError && err.status === 400 ? err.message : '用户名或密码错误';
-        res.status(err instanceof auth.AuthError ? err.status : 401).type('html').send(loginHtml(base, msg));
+        res.status(err instanceof auth.AuthError ? err.status : 401).type('html').send(loginHtml(base, msg, authorizeTicket));
       }
     }),
   );
