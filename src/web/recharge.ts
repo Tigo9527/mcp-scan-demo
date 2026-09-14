@@ -25,7 +25,9 @@ import {
   buildChainAddParams,
   chainIdToDecimal,
   chainName,
+  humanizeRpcError,
   normalizeChainId,
+  readWalletBalance,
   getRechargeConfig,
   listRecharges,
   submitRechargeTx,
@@ -158,6 +160,8 @@ ${card(`
 <button id="switch-net" class="btn alt" type="button" style="display:none;margin-bottom:10px">切换网络</button>
 <label for="amount">转账数量（${esc(isToken ? (cfg.tokenSymbol || '代币') : 'ETH')}）</label>
 <input id="amount" type="text" inputmode="decimal" placeholder="0.01" style="max-width:240px">
+<p id="balance-line" class="muted"></p>
+${isToken ? '<button id="max-btn" class="btn small alt" type="button" style="display:none">用全部余额</button>' : ''}
 <p class="muted">按当前汇率 1 ≈ ${esc(String(cfg.rate))} 点，预计到账 <b id="estimate">0</b> 点。</p>
 <button id="send" class="btn" type="button">用钱包发送</button>
 <p id="status" class="muted" style="margin-top:10px"></p>
@@ -201,6 +205,7 @@ ${rows.length === 0
   var rate=${JSON.stringify(cfg.rate)};
   var chain=${JSON.stringify(chain)};
   var claimUrl=${JSON.stringify(`${base}/recharge/claim`)};
+  var balanceUrl=${JSON.stringify(`${base}/recharge/balance`)};
   var token=${JSON.stringify(opts.token)};
   var pendingHash=${JSON.stringify(opts.pendingHash ?? '')};
   var maxTries=30, intervalMs=6000;
@@ -267,6 +272,53 @@ ${rows.length === 0
   var pmsg=document.getElementById('pending-msg');
   function showPending(t){box.style.display='block';pmsg.textContent=t;}
 
+  // ---- 钱包余额 ----
+  var balEl=document.getElementById('balance-line');
+  var maxBtn=document.getElementById('max-btn');
+  var balanceRaw=null;   // BigInt，null = 没能读到（此时不做「余额不足」拦截）
+  var balanceAmount='';
+  var symbolText=${JSON.stringify(isToken ? cfg.tokenSymbol || '代币' : 'ETH')};
+
+  /**
+   * 读当前钱包地址在收款资产上的余额。
+   * 走服务端配置的 RPC（不是钱包的 provider），避免钱包网络和收款链不一致时读到别的链。
+   * 读失败只显示「未能读取」并放行——RPC 抽风不该让用户充不了值。
+   */
+  async function loadBalance(addr){
+    if(!addr){balEl.textContent='连接钱包后可查看可用余额。';return;}
+    balEl.textContent='正在读取余额…';
+    try{
+      var r=await fetch(balanceUrl+'?address='+encodeURIComponent(addr),{headers:{'Accept':'application/json'}});
+      var d=await r.json().catch(function(){return {};});
+      if(d.ok){
+        balanceRaw=BigInt(d.raw);
+        balanceAmount=d.amount;
+        symbolText=d.symbol||symbolText;
+        balEl.textContent='可用余额：'+d.amount+' '+symbolText;
+        // 原生币不给「全部」按钮：转光了就没 gas 付手续费，交易发不出去
+        if(maxBtn&&${isToken ? 'true' : 'false'}&&balanceRaw>0n){maxBtn.style.display='inline-block';maxBtn.textContent='用全部余额（'+d.amount+' '+symbolText+'）';}
+      }else{
+        balanceRaw=null;
+        balEl.textContent='未能读取钱包余额'+(d.error?'（'+d.error+'）':'')+'，不影响转账。';
+        if(maxBtn)maxBtn.style.display='none';
+      }
+    }catch(e){
+      balanceRaw=null;
+      balEl.textContent='未能读取钱包余额，不影响转账。';
+      if(maxBtn)maxBtn.style.display='none';
+    }
+  }
+  if(maxBtn){
+    maxBtn.addEventListener('click',function(){
+      if(balanceAmount!==''){amountEl.value=balanceAmount;amountEl.dispatchEvent(new Event('input'));}
+    });
+  }
+  // 进来就静默读一次：eth_accounts 不会弹窗，只对**已授权过**的站点有效；
+  // 没授权就保持「连接钱包后可查看」的提示，用户点发送时再补一次。
+  window.ethereum.request({method:'eth_accounts'})
+    .then(function(a){ loadBalance(a&&a[0]?a[0]:''); })
+    .catch(function(){ balEl.textContent='连接钱包后可查看可用余额。'; });
+
   /**
    * 后台轮询补单：不弹窗、不禁用任何控件，只在页面顶部显示一条进度，
    * 用户可以照常浏览/离开；确认成功后自动刷新页面。
@@ -329,8 +381,13 @@ ${rows.length === 0
       var accts=await window.ethereum.request({method:'eth_requestAccounts'});
       var from=accts&&accts[0];
       if(!from){setStatus('未能获取钱包地址。');btn.disabled=false;return;}
-      // 转账前必须确认网络：转错链 = 钱出去了但服务端按配置的链查不到，等于白转
-      await ensureChain(window.ethereum,chain,setStatus);
+      // 首次点发送时还没读过余额（比如刚静默授权失败），这里补一次再判断
+      if(balanceRaw===null) await loadBalance(from);
+      // 余额只在**明确读到**时才拦：读不到是运营事件，不该把充值整体锁死
+      if(balanceRaw!==null&&raw>balanceRaw){
+        setStatus('余额不足：可用 '+balanceAmount+' '+symbolText+'，请调小数额后重试。');
+        btn.disabled=false;return;
+      }
       var params;
       if(cfg.tokenAddress){
         var data=cfg.selector+padWord(cfg.recipient.toLowerCase().replace(/^0x/,''))+padWord(raw.toString(16));
@@ -405,6 +462,43 @@ export function createRechargeRouter(): Router {
           pendingHash: typeof q.pending === 'string' && q.pending ? q.pending : undefined,
         }),
       );
+    }),
+  );
+
+  /**
+   * 查当前钱包地址在收款资产上的余额（充值页用来提示「可用余额 / 余额不足」）。
+   *
+   * 只读.GET，且不改任何状态；addr 由前端传（钱包地址本身是公开信息），
+   * 因此 Origin 校验不是必须的，靠会话 Cookie + SameSite 兜底即可。
+   * **失败一律返回 ok:false + 人话错误**，绝不抛 500 —— 前端据此显示「未能读取」并放行转账。
+   */
+  router.get(
+    '/recharge/balance',
+    wrap(async (req: Request, res: Response) => {
+      const user = authenticateWebUserRequest(req);
+      if (!user) {
+        res.status(401).json({ ok: false, error: '未登录或登录已过期。' });
+        return;
+      }
+      const address = String(req.query.address ?? '').trim();
+      if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
+        res.status(400).json({ ok: false, error: '钱包地址不合法。' });
+        return;
+      }
+      try {
+        res.json({ ok: true, ...(await readWalletBalance(address)) });
+      } catch (err) {
+        const cfg = getRechargeConfig();
+        const msg =
+          err instanceof Error ? err.message : '读取余额失败。';
+        res.json({
+          ok: false,
+          // RPC 类错误翻成人话：管理员和用户都看得懂才知道下一步干什么
+          error: msg.startsWith('已在前文')
+            ? msg
+            : humanizeRpcError(err, cfg?.rpcUrl ?? ''),
+        });
+      }
     }),
   );
 

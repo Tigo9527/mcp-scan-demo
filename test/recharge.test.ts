@@ -21,6 +21,9 @@ const ERC20 = new Interface([
   'function symbol() view returns (string)',
   'function decimals() view returns (uint8)',
 ]);
+const BAL_OF_IFACE = new Interface([
+  'function balanceOf(address owner) view returns (uint256)',
+]);
 const EVENT = new Interface([
   'event Transfer(address indexed from, address indexed to, uint256 value)',
 ]);
@@ -528,6 +531,103 @@ describe('链 ID 与钱包网络切换', () => {
     const r = await recharge.setRechargeConfig({ ...BASE_CONFIG, chainId: '不是链' });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toMatch(/链 ID/);
+  });
+});
+
+describe('钱包余额（ERC20 balanceOf / 原生币）', () => {
+  const WALLET = '0x5555555555555555555555555555555555555555';
+  const BALANCE_OF = new Interface([
+    'function balanceOf(address owner) view returns (uint256)',
+  ]).getFunction('balanceOf')!.selector;
+
+  function balanceProvider(opts: { raw?: string | null; native?: bigint } = {}) {
+    return {
+      async call({ data }: { to: string; data: string }) {
+        if (!data.startsWith(BALANCE_OF)) return '0x';
+        if (opts.raw === null) throw new Error('fetch failed ECONNREFUSED');
+        return BAL_OF_IFACE.encodeFunctionResult('balanceOf', [BigInt(opts.raw ?? '0')]);
+      },
+      async getBalance() {
+        return opts.native ?? 0n;
+      },
+      async getTransaction() {
+        return null;
+      },
+      async getTransactionReceipt() {
+        return null;
+      },
+    } as unknown as recharge.EvmProvider;
+  }
+
+  it('读 ERC20 余额并按 decimals 格式化（6 位代币不能差 10^12 倍）', async () => {
+    recharge.__resetForTest();
+    await recharge.setRechargeConfig(
+      { ...BASE_CONFIG, tokenAddress: TOKEN, tokenSymbol: 'USDT', tokenDecimals: 6 },
+      { provider: tokenProvider({ name: 'Tether', symbol: 'USDT', decimals: 6 }) },
+    );
+    const bal = await recharge.readWalletBalance(WALLET, {
+      provider: balanceProvider({ raw: '12500000' }), // 12.5 USDT（6 位）
+    });
+    expect(bal.amount).toBe('12.5');
+    expect(bal.raw).toBe('12500000');
+    expect(bal.symbol).toBe('USDT');
+  });
+
+  it('18 位代币同样按实际 decimals 格式化', async () => {
+    recharge.__resetForTest();
+    await recharge.setRechargeConfig(
+      { ...BASE_CONFIG, tokenAddress: TOKEN, tokenDecimals: 18 },
+      { provider: tokenProvider({ name: 'D', symbol: 'DEMO', decimals: 18 }) },
+    );
+    const bal = await recharge.readWalletBalance(WALLET, {
+      provider: balanceProvider({ raw: '1000000000000000000' }),
+    });
+    expect(bal.amount).toBe('1.0');
+  });
+
+  it('收原生币时读 eth_getBalance', async () => {
+    recharge.__resetForTest();
+    await recharge.setRechargeConfig(BASE_CONFIG); // tokenAddress 为空 = 原生币
+    const bal = await recharge.readWalletBalance(WALLET, {
+      provider: balanceProvider({ native: 2_500000000000000000n }),
+    });
+    expect(bal.amount).toBe('2.5');
+    expect(bal.symbol).toBe('ETH');
+  });
+
+  it('decimals 缺失时不猜：直接报错，交给前端显示「未能读取」', async () => {
+    recharge.__resetForTest();
+    await recharge.setRechargeConfig(
+      { ...BASE_CONFIG, tokenAddress: TOKEN },
+      { provider: tokenProvider() }, // 元数据读不到 → decimals 缺失
+    );
+    await expect(
+      recharge.readWalletBalance(WALLET, { provider: balanceProvider({ raw: '1' }) }),
+    ).rejects.toThrow(/decimals/);
+  });
+
+  it('RPC 抽风时抛出可在页面上翻译成人话的错误', async () => {
+    recharge.__resetForTest();
+    await recharge.setRechargeConfig(
+      { ...BASE_CONFIG, tokenAddress: TOKEN, tokenDecimals: 6 },
+      { provider: tokenProvider({ name: 'T', symbol: 'USDT', decimals: 6 }) },
+    );
+    await expect(
+      recharge.readWalletBalance(WALLET, { provider: balanceProvider({ raw: null }) }),
+    ).rejects.toThrow(/fetch failed/);
+    // 上层会把它翻成人话
+    const err = await recharge
+      .readWalletBalance(WALLET, { provider: balanceProvider({ raw: null }) })
+      .catch((e) => e);
+    expect(recharge.humanizeRpcError(err, BASE_CONFIG.rpcUrl)).toMatch(/连不上 RPC/);
+  });
+
+  it('地址不合法 / 未配置时报错而不是返回 0（避免误以为余额为 0）', async () => {
+    recharge.__resetForTest();
+    await recharge.setRechargeConfig(BASE_CONFIG);
+    await expect(recharge.readWalletBalance('0x123', { provider: balanceProvider() })).rejects.toThrow(
+      /不合法/,
+    );
   });
 });
 

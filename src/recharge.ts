@@ -47,6 +47,11 @@ export interface EvmProvider {
    * 可选是为了不破坏测试里的假 provider（没实现时当作「读不到」，跳过回填）。
    */
   getChainId?(): Promise<string>;
+  /**
+   * 原生币余额（可选，最小单位）。只有**收原生币**时才需要；
+   * 收 ERC20 走 balanceOf 的 eth_call，用不到它。
+   */
+  getBalance?(address: string): Promise<bigint | string>;
 }
 
 export interface EvmTransaction {
@@ -154,6 +159,7 @@ const ERC20_ABI = [
   'function name() view returns (string)',
   'function symbol() view returns (string)',
   'function decimals() view returns (uint8)',
+  'function balanceOf(address owner) view returns (uint256)',
   'function transfer(address to, uint256 amount) returns (bool)',
 ];
 
@@ -272,6 +278,7 @@ export function createJsonRpcProvider(rpcUrl: string): EvmProvider {
     getTransactionReceipt: (hash) =>
       rpc.getTransactionReceipt(hash) as Promise<EvmReceipt | null>,
     getChainId: () => rpc.send('eth_chainId', []) as Promise<string>,
+    getBalance: (address) => rpc.getBalance(address),
   };
 }
 
@@ -285,6 +292,12 @@ export function createJsonRpcProvider(rpcUrl: string): EvmProvider {
  * 表现为「点保存按钮一直转圈」。超时只影响这条自动识别，配置照常保存。
  */
 const CHAIN_ID_TIMEOUT_MS = 8_000;
+
+/**
+ * 读钱包余额的超时上限。这是**页面请求链路上**的调用（用户正等着看），
+ * 比保存配置更在意延迟，所以卡得更紧；超时后页面显示「未能读取」并放行转账。
+ */
+const BALANCE_TIMEOUT_MS = 6_000;
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return Promise.race([
@@ -536,6 +549,63 @@ export async function refreshTokenMeta(
   if (!cur.tokenAddress) return { ok: false, error: '当前收的是原生币，不需要读 ERC20 元数据。' };
   // 清空手工值，强制走链上读取；读失败时会回退到上一次的 decimals（合约地址没变）
   return setRechargeConfig({ ...cur, tokenName: '', tokenSymbol: '', tokenDecimals: undefined }, opts);
+}
+
+// ---------------------------------------------------------------- 钱包余额
+
+export interface WalletBalance {
+  /** 人类可读金额，如 "12.5" */
+  amount: string;
+  /** 最小单位金额（十进制字符串，与入账口径一致） */
+  raw: string;
+  /** 原生币符号或 ERC20 symbol */
+  symbol: string;
+}
+
+/**
+ * 读某个钱包地址在**收款资产**上的余额：ERC20 走 `balanceOf`，原生币走 `eth_getBalance`。
+ *
+ * 失败一律抛错，由调用方决定怎么降级 —— 充值页的策略是「显示『未能读取』但不拦人」：
+ * RPC 抽风是运营事件，不该让用户充不了值；只有**明确读到且确实不足**时才拦下。
+ *
+ * 一律走**服务端配置的 RPC**（不是用户钱包的 provider）：避免钱包当前网络和收款链
+ * 不一致时读到另一条链的余额，那是更危险的误导。
+ */
+export async function readWalletBalance(
+  address: string,
+  opts: { provider?: EvmProvider } = {},
+): Promise<WalletBalance> {
+  const cfg = ensureSettings();
+  if (!cfg) throw new Error('尚未配置充值收款参数。');
+  const who = String(address ?? '').trim();
+  if (!ADDRESS_RE.test(who)) throw new Error('钱包地址不合法。');
+
+  const provider = opts.provider ?? createJsonRpcProvider(cfg.rpcUrl);
+
+  if (cfg.tokenAddress) {
+    // decimals 缺失时拒绝格式化（猜 18 会让 6 位代币的显示金额差 10^12 倍）
+    if (cfg.tokenDecimals === undefined) {
+      throw new Error('收款代币缺少 decimals，暂无法读取余额。');
+    }
+    const data = ERC20_IFACE.encodeFunctionData('balanceOf', [who]);
+    const raw = await withTimeout(provider.call({ to: cfg.tokenAddress, data }), BALANCE_TIMEOUT_MS);
+    if (!raw || raw === '0x') throw new Error('合约未返回余额（地址可能不是标准 ERC20）。');
+    let value: bigint;
+    try {
+      [value] = ERC20_IFACE.decodeFunctionResult('balanceOf', raw) as unknown as [bigint];
+    } catch {
+      throw new Error('合约返回的余额无法解码（地址可能不是标准 ERC20）。');
+    }
+    return {
+      amount: formatUnits(value, cfg.tokenDecimals),
+      raw: value.toString(),
+      symbol: cfg.tokenSymbol || 'ERC20',
+    };
+  }
+
+  if (!provider.getBalance) throw new Error('当前 provider 不支持读取原生币余额。');
+  const value = BigInt(await withTimeout(provider.getBalance(who), BALANCE_TIMEOUT_MS));
+  return { amount: formatUnits(value, 18), raw: value.toString(), symbol: 'ETH' };
 }
 
 // ---------------------------------------------------------------- ERC20 元数据
