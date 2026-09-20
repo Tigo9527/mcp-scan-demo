@@ -565,6 +565,24 @@ export async function initDb(opts: Overrides = {}): Promise<void> {
   driverKind = resolveDriver();
 
   if (driverKind === 'mysql') {
+    // 现有 SQLite 存储检测：若 DATA_DIR 下已有 mcp-demo.sqlite，说明此前跑在 SQLite 上、旧 JSON
+    // 已被迁走，直接切到 MySQL 会静默以空库启动丢失数据。此处 fail-fast，要求先手动做
+    // SQLite→MySQL 迁移（或确认不再需要旧数据后删除该文件）。
+    const sqliteFile = path.join(resolveDataDir(), 'mcp-demo.sqlite');
+    if (fs.existsSync(sqliteFile)) {
+      throw new Error(
+        '检测到现有 SQLite 存储（mcp-demo.sqlite），STORAGE_DRIVER=mysql 无法自动迁移，启动中止。' +
+          '请先手动完成 SQLite→MySQL 迁移，或在确认不再需要旧数据后删除该文件再启动。',
+      );
+    }
+    // 单实例提示：MySQL 后端沿用「内存态为热点缓存 + 整表替换写库」模型（与 SQLite 一致）。
+    // 多副本共用同一 MySQL 库时，整表替换会覆盖其它实例写入的数据，造成跨实例丢失；
+    // 因此 MySQL 仅作单实例持久化，请勿多副本共享同一数据库。
+    console.warn(
+      '[db] 使用 MySQL 后端：仅作单实例持久化（内存态为唯一权威、写库为整表替换），' +
+        '多副本共用同一 MySQL 库会造成跨实例数据覆盖，请勿多实例共享。',
+    );
+
     const o = resolveMysqlOptions();
     if (o.url) {
       sequelize = new Sequelize(o.url, { dialect: 'mysql', logging: false });

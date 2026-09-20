@@ -5,6 +5,9 @@
  * - 真正落库冒烟（仅当 RUN_MYSQL_TESTS=1 且 MySQL 可达时运行）
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   closeDb,
   configureDb,
@@ -75,6 +78,7 @@ describe('MySQL 存储选项解析（不连库）', () => {
   it('resolveMysqlOptions 优先用 MYSQL_URL', () => {
     process.env.MYSQL_URL = 'mysql://u:p@db:3307/mydb';
     delete process.env.MYSQL_HOST;
+    delete process.env.MYSQL_DATABASE; // CI 可能注入 MYSQL_DATABASE=mcp_demo_test，清掉以验默认值
     const o = resolveMysqlOptions();
     expect(o.url).toBe('mysql://u:p@db:3307/mydb');
     expect(o.host).toBe('127.0.0.1'); // 未设置时取默认
@@ -134,6 +138,17 @@ describe('MySQL 存储选项解析（不连库）', () => {
     process.env.STORAGE_DRIVER = 'postgres';
     process.env.MCP_DEMO_PERSIST = '0';
     await expect(initDb({ enabled: false })).rejects.toThrow(/STORAGE_DRIVER/);
+  });
+
+  it('检测到现有 SQLite 存储时切到 MySQL 启动失败（避免静默丢数据）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcp-sqlite-detect-'));
+    writeFileSync(join(dir, 'mcp-demo.sqlite'), '');
+    process.env.DATA_DIR = dir;
+    process.env.STORAGE_DRIVER = 'mysql';
+    // 在尝试连 MySQL 之前就应抛错（fail-fast），不会静默以空库启动
+    await expect(initDb({ enabled: true })).rejects.toThrow(/mcp-demo\.sqlite/);
+    delete process.env.DATA_DIR;
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 
