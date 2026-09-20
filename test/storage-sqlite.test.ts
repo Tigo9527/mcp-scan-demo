@@ -13,7 +13,7 @@ import * as billing from '../src/billing.js';
 import * as stats from '../src/stats.js';
 import * as recharge from '../src/recharge.js';
 import * as settings from '../src/settings.js';
-import { closeDb, configureDb, flushDb, initDb } from '../src/db.js';
+import { closeDb, configureDb, flushDb, initDb, saveUsers } from '../src/db.js';
 
 async function freshDb(): Promise<string> {
   const dir = mkdtempSync(join(tmpdir(), 'mcp-sqlite-'));
@@ -159,6 +159,30 @@ describe('SQLite 持久化', () => {
     expect(existsSync(join(dir, 'mcp-demo.sqlite'))).toBe(true);
 
     await closeDb();
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('整表替换的事务安全（destroy+bulkCreate 必须原子）', () => {
+  it('bulkCreate 失败时事务回滚，旧数据不丢', async () => {
+    const dir = await freshDb();
+    store.__resetForTest();
+    store.createUser({ username: 'u_a', email: null, provider: 'local' });
+    store.createUser({ username: 'u_b', email: null, provider: 'local' });
+    await flushDb();
+    store.__resetForTest();
+    await store.reloadUsersFromDb();
+    expect(store.countUsers()).toBe(2);
+
+    // username 为 null 违反 NOT NULL，bulkCreate 抛错 → 事务回滚 destroy
+    await expect(
+      saveUsers([{ id: 'bad', username: null as unknown as string, provider: 'local' } as never]),
+    ).rejects.toBeTruthy();
+
+    // 旧数据仍在（destroy 已被回滚）
+    store.__resetForTest();
+    await store.reloadUsersFromDb();
+    expect(store.countUsers()).toBe(2);
     rmSync(dir, { recursive: true, force: true });
   });
 });

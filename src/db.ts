@@ -644,21 +644,29 @@ export async function loadStats(): Promise<{ snapshot: StatsSnapshot; recentIdx:
 
 export async function saveUsers(users: User[]): Promise<void> {
   if (!sequelize) return;
-  await UserModel.destroy({ where: {} });
-  if (users.length) await UserModel.bulkCreate(users.map(toUserRow));
+  // 整表替换放进事务：bulkCreate 失败时回滚 destroy，避免「删完没写入」的中间态丢数据
+  // （MySQL 是网络库，抖动比本地 sqlite 更常见，必须事务保护）。
+  await sequelize.transaction(async (t) => {
+    await UserModel.destroy({ where: {}, transaction: t });
+    if (users.length) await UserModel.bulkCreate(users.map(toUserRow), { transaction: t });
+  });
 }
 
 export async function saveBilling(state: Record<string, UserBilling>): Promise<void> {
   if (!sequelize) return;
-  await BillingModel.destroy({ where: {} });
-  const rows = Object.entries(state).map(([k, v]) => toBillingRow(k, v));
-  if (rows.length) await BillingModel.bulkCreate(rows);
+  await sequelize.transaction(async (t) => {
+    await BillingModel.destroy({ where: {}, transaction: t });
+    const rows = Object.entries(state).map(([k, v]) => toBillingRow(k, v));
+    if (rows.length) await BillingModel.bulkCreate(rows, { transaction: t });
+  });
 }
 
 export async function saveRechargeRecords(records: RechargeRecord[]): Promise<void> {
   if (!sequelize) return;
-  await RechargeRecordModel.destroy({ where: {} });
-  if (records.length) await RechargeRecordModel.bulkCreate(records.map(toRecordRow));
+  await sequelize.transaction(async (t) => {
+    await RechargeRecordModel.destroy({ where: {}, transaction: t });
+    if (records.length) await RechargeRecordModel.bulkCreate(records.map(toRecordRow), { transaction: t });
+  });
 }
 
 export async function saveRechargeSettings(cfg: RechargeConfig | null): Promise<void> {
