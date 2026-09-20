@@ -26,13 +26,15 @@ import {
 import type { AuthResult } from '../auth/manager.js';
 import type { User } from '../auth/store.js';
 import * as stats from '../stats.js';
-import { persistStatus } from '../persist.js';
+import { persistStatus } from '../db.js';
 import {
   authenticateUserRequest,
   allowPublicCors,
+  clearUserTokenCookie,
   deriveBase,
   requireSameOrigin,
   resolveUserToken,
+  setUserTokenCookie,
   wrap,
 } from './http.js';
 import {
@@ -45,9 +47,12 @@ import {
   WELL_KNOWN,
   wwwAuthenticate,
 } from '../oauth/metadata.js';
-import { requireAuthForMcp } from '../config.js';
+import { requireAuthForMcp, isBillingEnforced } from '../config.js';
+import * as billing from '../billing.js';
+import { knownChainNames } from '../recharge.js';
 import { createAdminRouter } from './admin.js';
 import { createProfileRouter } from './profile.js';
+import { createRechargeRouter } from './recharge.js';
 import { createAuthorizeRouter, completeAuthorize, type AuthorizeParams, type AuthorizeTicket } from '../oauth/authorize.js';
 import { completeAuthorizeFromTicket } from '../oauth/complete.js';
 import { createRegisterRouter } from '../oauth/register.js';
@@ -302,7 +307,7 @@ ${card(`
 
 ${card(`
 <h3>⑤ 查看资料与统计</h3>
-<p>用户可在 <code>/profile?token=&lt;你的令牌&gt;</code> 查看个人资料与调用统计；管理员可进入 Admin 管理端查看用户列表与全局统计。</p>
+<p>用户可在 <code>/profile</code> 查看个人资料与调用统计（登录一次即自动保持，不用往链接上拼令牌）；管理员可进入 Admin 管理端查看用户列表与全局统计。</p>
 <div class="row"><a class="btn small alt" href="${esc(base)}/profile">我的 Profile</a>
 <a class="btn small alt" href="${esc(base)}/admin">Admin 管理端</a></div>
 `)}
@@ -318,7 +323,7 @@ function tokenResultHtml(
   base: string,
   opts: { title: string; heading: string; intro: string },
 ): string {
-  const profileUrl = `${base}/profile?token=${result.token}`;
+  const profileUrl = `${base}/profile`;
   const configJson = JSON.stringify(
     {
       mcpServers: {
@@ -375,6 +380,21 @@ function loginSuccessHtml(result: AuthResult, base: string): string {
   });
 }
 
+/** 退出登录后的提示页。 */
+function loggedOutHtml(base: string): string {
+  return page({
+    title: '已退出登录',
+    base,
+    body: `
+<h1>已退出登录</h1>
+${notice('本机的登录会话已清除，页面不会再自动带上你的身份。', 'ok')}
+<p class="muted">已经发出去的访问令牌仍然有效（7 天有效期），只是浏览器不再自动携带；重新登录即可。</p>
+<div class="row"><a class="btn" href="${esc(base)}/login">重新登录</a>
+<a class="btn alt" href="${esc(base)}/">返回首页</a></div>
+`,
+  });
+}
+
 /** 账号密码注册页。authorizeTicket 非空表示本次注册是 OAuth 授权流程的一环，需原样带回 POST。 */
 function registerHtml(base: string, error?: string, authorizeTicket?: string): string {
   const hidden = authorizeTicket
@@ -398,15 +418,19 @@ ${hidden}
 </form>
 `)}
 <div class="row" style="margin-top:12px">
-<p class="muted">已有账号？<a href="${esc(base)}/login">去登录</a> · 或 <a href="${esc(base)}/auth/github">用 GitHub 注册 / 登录</a></p>
+<p class="muted">已有账号？<a href="${esc(base)}/login${authorizeTicket ? `?authorize=${esc(authorizeTicket)}` : ''}">去登录</a> · 或 <a href="${esc(base)}/auth/github${authorizeTicket ? `?authorize=${esc(authorizeTicket)}` : ''}">用 GitHub 注册 / 登录</a></p>
 </div>
 <p><a href="${esc(base)}/">← 返回首页</a></p>
 `,
   });
 }
 
-/** 账号密码登录页 */
-function loginHtml(base: string, error?: string): string {
+/** 账号密码登录页。authorize 非空表示来自 OAuth 授权流程，需原样带回 POST 并在成功后回跳客户端。 */
+function loginHtml(base: string, error?: string, authorize?: string): string {
+  const hidden = authorize
+    ? `<input type="hidden" name="authorize" value="${esc(authorize)}">`
+    : '';
+  const q = authorize ? `?authorize=${esc(authorize)}` : '';
   return page({
     title: '登录',
     base,
@@ -415,6 +439,7 @@ function loginHtml(base: string, error?: string): string {
 ${error ? notice(esc(error)) : ''}
 ${card(`
 <form method="post" action="/login">
+${hidden}
 <label for="username">用户名</label>
 <input id="username" name="username" type="text" autocomplete="username" required>
 <label for="password">密码</label>
@@ -423,7 +448,7 @@ ${card(`
 </form>
 `)}
 <div class="row" style="margin-top:12px">
-<p class="muted">还没有账号？<a href="${esc(base)}/register">去注册</a> · 或 <a href="${esc(base)}/auth/github">用 GitHub 注册 / 登录</a></p>
+<p class="muted">还没有账号？<a href="${esc(base)}/register${q}">去注册</a> · 或 <a href="${esc(base)}/auth/github${q}">用 GitHub 注册 / 登录</a></p>
 </div>
 <p><a href="${esc(base)}/">← 返回首页</a></p>
 `,
@@ -439,9 +464,9 @@ function web3LoginHtml(base: string, error?: string, token?: string, authorize?:
       body: `
 <h1>🦊 web3 登录成功</h1>
 ${card(`<b>钱包：</b> <code>${esc(token)}</code>`)}
-<p>下面这串访问令牌可直接配置到 MCP 客户端调用受保护工具；或用 <code>/profile?token=...</code> 查看资料。</p>
+<p>下面这串访问令牌可直接配置到 MCP 客户端调用受保护工具；浏览器里已自动登录，直接打开 <code>/profile</code> 就能查看资料。</p>
 ${copyBlock(token, { title: '访问令牌（Bearer）' })}
-<div class="row" style="margin:16px 0"><a class="btn" href="${esc(`${base}/profile?token=${token}`)}">查看我的 Profile →</a>
+<div class="row" style="margin:16px 0"><a class="btn" href="${esc(`${base}/profile`)}">查看我的 Profile →</a>
 <a class="btn alt" href="${esc(base)}/">返回首页</a></div>
 `,
     });
@@ -455,6 +480,7 @@ ${error ? notice(esc(error)) : ''}
 ${card(`
 <p>用 MetaMask（或其它注入 <code>window.ethereum</code> 的钱包）签名一段挑战文案完成登录，无需密码。首次签名即注册。</p>
 <input type="hidden" id="web3-authorize" value="${esc(authorize ?? '')}">
+<p id="web3-net" class="muted"></p>
 <button id="web3-connect" class="btn" type="button">连接钱包并登录</button>
 <p id="web3-status" class="muted" style="margin-top:10px"></p>
 `)}
@@ -466,12 +492,28 @@ ${card(`
 (function(){
   var btn=document.getElementById('web3-connect');
   var status=document.getElementById('web3-status');
+  var netEl=document.getElementById('web3-net');
   var authorize=document.getElementById('web3-authorize').value||'';
+  var chainNames=${JSON.stringify(knownChainNames())};
   var setStatus=function(s){status.textContent=s;};
+  /**
+   * 登录只认签名，不依赖某条链，所以**不强制切换**——免得登录被收款配置卡住。
+   * 这里只是把当前网络摆出来，让用户心里有数。
+   */
+  async function showNet(){
+    if(!window.ethereum) return;
+    try{
+      var cur=await window.ethereum.request({method:'eth_chainId'});
+      var dec;try{dec=BigInt(cur).toString(10);}catch(e){dec=String(cur);}
+      netEl.textContent='当前网络：'+(chainNames[dec]?chainNames[dec]+'（链 ID '+dec+'）':'链 ID '+dec);
+    }catch(e){netEl.textContent='';}
+  }
   if(!window.ethereum){
     setStatus('未检测到钱包（MetaMask 等）。请先安装并解锁钱包。');
     btn.disabled=true;return;
   }
+  showNet();
+  if(window.ethereum.on) window.ethereum.on('chainChanged',function(){showNet();});
   btn.addEventListener('click',async function(){
     btn.disabled=true;setStatus('请在钱包中确认连接…');
     try{
@@ -590,7 +632,7 @@ function extractJsonRpcId(body: unknown): number | string | null {
 }
 
 function oauthSuccessHtml(user: User, token: string, base: string): string {
-  const profileUrl = `${base}/profile?token=${token}`;
+  const profileUrl = `${base}/profile`;
   return page({
     title: 'GitHub 登录成功',
     base,
@@ -616,6 +658,8 @@ export function createApp() {
   app.use('/admin', express.urlencoded({ extended: false, limit: '32kb' }));
   // /oauth/authorize 的登录表单是 urlencoded；缺了它 POST 时 req.body 会是 undefined
   app.use('/oauth', express.urlencoded({ extended: false, limit: '32kb' }));
+  // /recharge 的补单表单同样是 urlencoded
+  app.use('/recharge', express.urlencoded({ extended: false, limit: '16kb' }));
 
   app.get('/health', (_req: Request, res: Response) => {
     res.json({
@@ -654,6 +698,8 @@ export function createApp() {
           username,
           email: req.query.email as string | undefined,
         });
+        // 落会话 Cookie：之后进 /profile、/recharge 自动保持登录，不用再往 URL 挂令牌
+        setUserTokenCookie(req, res, result.token);
         const oauth = completeAuthorizeFromTicket(result, base, authorizeTicket);
         res.type('html').send(oauth ?? registeredHtml(result, base));
       } catch (err) {
@@ -682,6 +728,7 @@ export function createApp() {
         typeof body.authorize === 'string' ? body.authorize : undefined;
       try {
         const result = auth.registerWithPassword(username, password);
+        setUserTokenCookie(req, res, result.token);
         const oauth = completeAuthorizeFromTicket(result, base, authorizeTicket);
         res.type('html').send(oauth ?? registeredHtml(result, base));
       } catch (err) {
@@ -694,9 +741,11 @@ export function createApp() {
     }),
   );
 
-  // 账号密码登录入口
+  // 账号密码登录入口（可能带着 OAuth 授权票据，登录成功后回跳客户端）
   app.get('/login', (req: Request, res: Response) => {
-    res.type('html').send(loginHtml(deriveBase(req)));
+    const authorize =
+      typeof req.query.authorize === 'string' ? req.query.authorize : undefined;
+    res.type('html').send(loginHtml(deriveBase(req), undefined, authorize));
   });
 
   // web3 钱包登录页（MetaMask 等）。?authorize= 来自 OAuth 授权页，登录完成后回跳发起方。
@@ -708,6 +757,8 @@ export function createApp() {
   });
 
   // 账号密码登录（POST 表单）。跨站表单防护 + async 兜底。
+  // 携带 authorize 票据时，登录成功即完成 OAuth 授权回跳（签发 code + 跳转 redirect_uri）；
+  // 失败重渲染也把票据透传给 loginHtml，保持「去注册 / GitHub」链接的授权上下文。
   app.post(
     '/login',
     express.urlencoded({ extended: false, limit: '16kb' }),
@@ -717,18 +768,29 @@ export function createApp() {
       const body = (req.body ?? {}) as Record<string, unknown>;
       const username = String(body.username ?? '');
       const password = String(body.password ?? '');
+      const authorizeTicket =
+        typeof body.authorize === 'string' ? body.authorize : undefined;
       try {
         const result = auth.loginWithPassword(username, password);
-        res.type('html').send(loginSuccessHtml(result, base));
+        setUserTokenCookie(req, res, result.token);
+        const oauth = completeAuthorizeFromTicket(result, base, authorizeTicket);
+        res.type('html').send(oauth ?? loginSuccessHtml(result, base));
       } catch (err) {
         // 统一回显「用户名或密码错误」，避免账号枚举
         const msg = err instanceof auth.AuthError && err.status === 400 ? err.message : '用户名或密码错误';
-        res.status(err instanceof auth.AuthError ? err.status : 401).type('html').send(loginHtml(base, msg));
+        res.status(err instanceof auth.AuthError ? err.status : 401).type('html').send(loginHtml(base, msg, authorizeTicket));
       }
     }),
   );
 
-  // GitHub OAuth：跳转授权（state 为自签名 JWT，跨副本可校验）。
+  // 退出登录：清掉会话 Cookie。**故意不校验登录态**——Cookie 已失效时也要幂等成功，
+  // 否则用户在「已过期」状态下点退出会看到一个报错页，很莫名其妙。
+  app.get('/logout', (req: Request, res: Response) => {
+    clearUserTokenCookie(req, res);
+    res.type('html').send(loggedOutHtml(deriveBase(req)));
+  });
+
+  // GitHub OAuth：跳转授权（state 为自签名 JWT，服务端无需保存）。
   // 若带 authorize 票据（来自 /oauth/authorize 的「通过 GitHub 登录」链接），一并塞进 state，
   // 让登录完成后能还原原始授权请求并回跳客户端。
   app.get('/auth/github', (req: Request, res: Response) => {
@@ -792,13 +854,15 @@ export function createApp() {
             scope: t.scope,
             resource: t.resource,
           };
-          const { user } = await exchangeAndLogin(code);
+          const { user, token } = await exchangeAndLogin(code);
+          setUserTokenCookie(req, res, token);
           res.status(200).type('html').send(completeAuthorize(base, p, user));
           return;
         }
 
         // 无票据：保持原有「GitHub 登录成功」页（向后兼容独立 GitHub 登录场景）
         const { user, token } = await exchangeAndLogin(code);
+        setUserTokenCookie(req, res, token);
         res.type('html').send(oauthSuccessHtml(user, token, base));
       } catch (err) {
         // 网络类错误要翻译成「部署环境未放行 github.com」，否则用户会一直去查 Client ID / 回调地址
@@ -810,6 +874,9 @@ export function createApp() {
 
   // 用户 Profile
   app.use(createProfileRouter());
+
+  // 用户充值（Crypto → 点数）
+  app.use(createRechargeRouter());
 
   // Admin 管理端
   app.use(createAdminRouter());
@@ -861,8 +928,8 @@ export function createApp() {
   app.use(createWeb3Router());
 
   // ---- MCP Streamable HTTP 端点（无状态模式）----
-  // 多副本部署下内存会话无法跨副本共享，因此每次请求都新建一个独立的 transport + McpServer
-  // （sessionIdGenerator 留空 = 关闭会话管理）。配合无状态 JWT 鉴权，任意副本都能独立处理。
+  // 不依赖进程内会话状态，因此每次请求都新建一个独立的 transport + McpServer
+  // （sessionIdGenerator 留空 = 关闭会话管理）。配合无状态 JWT 鉴权，重启后也能直接处理。
   // 鉴权：默认要求登录，未携带有效令牌直接 401 + WWW-Authenticate（见下方 requireAuthForMcp 分支）；
   // 设 MCP_DEMO_REQUIRE_AUTH=off 可恢复旧的匿名握手（user 为 null，由工具返回注册引导）。
   const handleMcp = wrap(async (req: Request, res: Response) => {
@@ -885,6 +952,9 @@ export function createApp() {
         });
       return;
     }
+    // 刻意用「不读 Cookie」的版本：MCP 端点一旦认会话 Cookie，
+    // 任意第三方页面都能带着浏览器里的登录态调受保护工具（CSRF）。
+    // MCP 客户端必须显式带令牌（X-Authorization / ?token=）。
     const user = authenticateUserRequest(req);
     const base = deriveBase(req);
 
@@ -953,8 +1023,8 @@ export function createApp() {
       }
     }
 
-    // 跨副本物化：JWT 是无状态的，在别的副本注册的用户本副本内存里没有。
-    // 流量打到哪个副本，就在哪个副本补全一份，让 admin 用户列表逐步完整。
+    // 按需落库：JWT 是无状态的，令牌里还原出的用户可能不在存储里（例如数据目录被重置）。
+    // 这里按 id 补一份，保证 admin 用户列表完整。
     if (user) {
       try {
         store.upsertById(user);
@@ -981,6 +1051,12 @@ export function createApp() {
         const prevOnMessage = transport.onmessage;
         transport.onmessage = (message, extra) => {
           stats.record(message, user);
+          // 计费埋点：每条 tools/call 扣减对应点数（内部绝不抛异常）。
+          // 与 stats.record 同源提取：method === 'tools/call' 且 params.name 为工具名。
+          const m = message as { method?: string; params?: { name?: string } } | undefined;
+          if (m && m.method === 'tools/call' && typeof m.params?.name === 'string') {
+            billing.recordCall(user?.id, m.params.name);
+          }
           prevOnMessage?.(message, extra);
         };
 
@@ -1002,6 +1078,46 @@ export function createApp() {
         const initMsg = Array.isArray(rb) ? rb.find((m) => m.method === 'initialize') : rb;
         if (initMsg?.method === 'initialize' && initMsg.params?.clientInfo) {
           captureClientInfo(user, initMsg.params.clientInfo);
+        }
+
+        // 硬计费拦截：余额不足时拒绝收费工具的执行（在 SDK 处理之前，避免空跑仍扣费）。
+        // 仅对 tools/call 生效；initialize / tools/list 等免费动作不受影响。
+        if (isBillingEnforced()) {
+          const body = req.body as
+            | Array<{ method?: string; id?: string | number; params?: { name?: string } }>
+            | { method?: string; id?: string | number; params?: { name?: string } }
+            | undefined;
+          const msgs = Array.isArray(body) ? body : body ? [body] : [];
+          const calls = msgs
+            .filter((m) => m && m.method === 'tools/call' && typeof m.params?.name === 'string')
+            .map((m) => ({ id: m.id, name: m.params!.name! }));
+          if (calls.length > 0) {
+            const disallowed = calls
+              .map((c) => ({ ...c, allow: billing.checkAllowed(user?.id, c.name) }))
+              .filter((c) => !c.allow.allowed);
+            if (disallowed.length > 0) {
+              const errors = disallowed.map((c) => {
+                const login = c.allow.reason === 'login_required';
+                return {
+                  jsonrpc: '2.0',
+                  id: c.id ?? null,
+                  error: {
+                    code: login ? -32001 : -32000,
+                    message: login
+                      ? '该工具按调用计费，请先登录后再使用'
+                      : '调用余额不足，无法执行该工具（请登录获取更多额度）',
+                    data: { tool: c.name, cost: c.allow.cost, balance: c.allow.balance },
+                  },
+                };
+              });
+              const status = disallowed.some((c) => c.allow.reason === 'login_required') ? 401 : 402;
+              res
+                .status(status)
+                .type('application/json')
+                .end(JSON.stringify(Array.isArray(body) ? errors : errors[0]));
+              return;
+            }
+          }
         }
 
         const server = createMcpServer();

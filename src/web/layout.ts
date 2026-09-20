@@ -44,12 +44,25 @@ nav{display:flex;gap:16px;align-items:center;border-bottom:1px solid var(--line)
 nav .brand{font-weight:700;margin-right:auto}
 nav a{color:var(--fg);opacity:.75}
 nav a.active{opacity:1;font-weight:600;color:var(--acc)}
+/* Admin 二级导航：常驻在页面顶部（吸顶），别让入口埋在页面最底下 */
+.subnav{display:flex;gap:6px;align-items:center;flex-wrap:wrap;background:var(--soft);
+  border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin:0 0 18px;
+  position:sticky;top:8px;z-index:5}
+.subnav a{color:var(--fg);opacity:.75;padding:6px 12px;border-radius:8px;font-size:.92em;
+  text-decoration:none;white-space:nowrap}
+.subnav a:hover{text-decoration:none;opacity:1;background:#eaeef2}
+.subnav a.active{opacity:1;font-weight:600;color:var(--acc);background:var(--bg);
+  border:1px solid var(--line);box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.subnav .spacer{margin-left:auto}
+.subnav a.mini{opacity:.6;font-size:.85em;padding:6px 8px}
 .badge{display:inline-block;padding:1px 8px;border-radius:999px;font-size:.8em;
   border:1px solid var(--line);background:var(--soft);color:var(--muted)}
 .badge.ok{color:var(--ok);border-color:#b7e3c6;background:#eaf6ee}
 .badge.warn{color:var(--warn);border-color:#f0d9a8;background:#fdf6e3}
 .badge.err{color:var(--err);border-color:#f3c3c6;background:#fdecec}
 .notice{border-left:4px solid var(--warn);background:#fdf6e3;padding:10px 14px;border-radius:0 8px 8px 0;margin:14px 0;font-size:.92em}
+.notice.ok{border-left-color:var(--ok);background:#eaf6ee}
+.notice.err{border-left-color:var(--err);background:#fdecec}
 .empty{color:var(--muted);padding:16px 0}
 .version-footer{margin-top:32px;padding-top:12px;border-top:1px solid var(--line);
   color:var(--muted);font-size:.85em}
@@ -118,23 +131,41 @@ document.addEventListener('click',function(e){
 });
 </script>`;
 
+/** Admin 的二级页签。给了 `adminTab` 才会在页面顶部渲染 Admin 子导航。 */
+export type AdminTab = 'dashboard' | 'users' | 'github' | 'recharge-settings' | 'recharge';
+
+const ADMIN_TABS: Array<{ key: AdminTab; path: string; label: string }> = [
+  { key: 'dashboard', path: '/admin', label: '仪表盘' },
+  { key: 'users', path: '/admin/users', label: '用户管理' },
+  { key: 'github', path: '/admin/settings', label: 'GitHub 设置' },
+  { key: 'recharge-settings', path: '/admin/recharge-settings', label: '充值设置' },
+  { key: 'recharge', path: '/admin/recharge', label: '充值记录' },
+];
+
 export interface PageOptions {
   title: string;
   /** 页面主体 HTML（调用方负责对所有动态值做 esc） */
   body: string;
   /** 导航栏高亮项 */
-  active?: 'home' | 'admin' | 'profile' | 'setup' | 'web3';
+  active?: 'home' | 'admin' | 'profile' | 'setup' | 'web3' | 'recharge';
   /** 对外基础地址，用于拼导航链接 */
   base?: string;
-  /** admin 令牌：有值时 admin 内部链接会带上，保证网关不透传 Cookie 时也能正常跳转 */
+  /** admin 令牌占位字段（保留兼容）。admin 登录态已改由 Cookie 保持，内部链接不再注入 token。 */
   adminToken?: string;
+  /** Admin 子导航高亮项（仅 admin 页面传） */
+  adminTab?: AdminTab;
 }
 
-/** admin 内部链接（自动带上 admin_token，防止平台网关丢弃 Cookie 导致刷新即掉线） */
-export function adminHref(path: string, adminToken?: string): string {
-  const clean = path.startsWith('/') ? path : `/${path}`;
-  if (!adminToken) return clean;
-  return `${clean}${clean.includes('?') ? '&' : '?'}admin_token=${encodeURIComponent(adminToken)}`;
+/**
+ * admin 内部链接。
+ *
+ * **不再拼接 token**：admin 登录态由 `mcp_admin` Cookie 保持，UI 任何链接都不该把令牌
+ * 带进 URL（否则会漏进地址栏、浏览器历史、截图、Referer、平台访问日志）。`adminToken`
+ * 形参保留仅为兼容旧调用方，本函数直接忽略它。服务端仍接受 `X-Admin-Token` 请求头供
+ * 脚本/自动化使用，但不走 URL。
+ */
+export function adminHref(path: string, _adminToken?: string): string {
+  return path.startsWith('/') ? path : `/${path}`;
 }
 
 export function page(opts: PageOptions): string {
@@ -144,6 +175,7 @@ export function page(opts: PageOptions): string {
     { href: `${base}/web3`, key: 'web3', label: 'web3 登录' },
     { href: `${base}/setup`, key: 'setup', label: '接入配置' },
     { href: `${base}/profile`, key: 'profile', label: '我的 Profile' },
+    { href: `${base}/recharge`, key: 'recharge', label: '充值' },
     { href: adminHref('/admin', opts.adminToken), key: 'admin', label: 'Admin 管理端' },
   ];
 
@@ -154,10 +186,24 @@ export function page(opts: PageOptions): string {
     )
     .join('')}</nav>`;
 
+  // Admin 子导航：入口统一放这里，不再散落在每个页面底部（底部按钮很容易被当成页脚忽略）
+  const subnav = opts.adminTab
+    ? `<nav class="subnav">${ADMIN_TABS.map(
+        (t) =>
+          `<a href="${esc(adminHref(t.path, opts.adminToken))}"${
+            opts.adminTab === t.key ? ' class="active"' : ''
+          }>${esc(t.label)}</a>`,
+      ).join('')}<span class="spacer"></span><a class="mini" href="${esc(
+        adminHref('/admin/api/stats', opts.adminToken),
+      )}">统计 JSON</a><a class="mini" href="${esc(
+        adminHref('/admin/logout', opts.adminToken),
+      )}">退出</a></nav>`
+    : '';
+
   return `<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(opts.title)}</title><style>${CSS}</style></head>
-<body>${nav}${opts.body}${versionFooter()}${COPY_SCRIPT}</body></html>`;
+<body>${nav}${subnav}${opts.body}${versionFooter()}${COPY_SCRIPT}</body></html>`;
 }
 
 /**
@@ -201,8 +247,10 @@ export function badge(text: string, kind: 'ok' | 'warn' | 'err' | '' = ''): stri
   return `<span class="badge${kind ? ` ${kind}` : ''}">${esc(text)}</span>`;
 }
 
-export function notice(inner: string): string {
-  return `<div class="notice">${inner}</div>`;
+/** 提示条。`kind` 缺省为「提醒（黄）」，`ok` 绿、`err` 红。 */
+export function notice(inner: string, kind?: 'ok' | 'err'): string {
+  const cls = kind ? `notice ${kind}` : 'notice';
+  return `<div class="${cls}">${inner}</div>`;
 }
 
 /**

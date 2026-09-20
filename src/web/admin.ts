@@ -1,18 +1,18 @@
 /**
  * Admin 管理端。
  *
- * 鉴权：独立 admin 令牌（env `ADMIN_TOKEN`）。三通道接受，任意一条命中即可：
- *   1. Cookie `mcp_admin`（登录页下发）
- *   2. `?admin_token=` 查询参数
- *   3. `X-Admin-Token` 请求头
- * 之所以要留 2/3：部署平台网关可能不透传 Cookie，那样登录后会立刻掉线；
- * 而且 `Authorization` 头会被网关改写，**绝不能**用它传 admin 令牌。
+ * 鉴权：独立 admin 令牌（env `ADMIN_TOKEN`）。两通道接受，任意一条命中即可：
+ *   1. Cookie `mcp_admin`（登录页下发，HttpOnly + SameSite=Lax，UI 主用）
+ *   2. `X-Admin-Token` 请求头（脚本 / 自动化，不进 URL 无泄漏）
+ * 登录态一律靠 Cookie 保持，UI 任何链接都不再把令牌拼进 URL（否则会漏进地址栏 / 历史 /
+ * 截图 / Referer / 平台日志）。`Authorization` 头会被网关改写，**绝不能**用它传 admin 令牌。
+ * admin 与 user 用不同 Cookie 名（`mcp_admin` vs `mcp_demo_user`），单浏览器可同时登录两者。
  *
  * 安全：
  * - 使用默认令牌且非本地环境 → 503（防止忘记注入 ADMIN_TOKEN 就把管理端裸奔在公网）
  * - 登录失败限流（同 IP 10 次 / 10 分钟）
  * - 所有副作用操作一律 POST（`SameSite=Lax` 会放行顶层 GET 导航，写成链接等于裸奔）
- * - 响应统一带 `Referrer-Policy: no-referrer`，避免 admin_token 随 Referer 泄露
+ * - 响应统一带 `Referrer-Policy: no-referrer`（防御纵深；admin 令牌已不进 URL，主要是护住表单里的其它查询参数）
  */
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { timingSafeEqual } from 'node:crypto';
@@ -21,7 +21,9 @@ import * as store from '../auth/store.js';
 import * as authManager from '../auth/manager.js';
 import { getGithub, getRaw, resetGithub, setGithub } from '../settings.js';
 import { getStatsSnapshot } from '../stats.js';
-import { persistStatus } from '../persist.js';
+import * as billing from '../billing.js';
+import * as recharge from '../recharge.js';
+import { persistStatus } from '../db.js';
 import { deriveBase, originOk, readCookie, requestOrigin, requireSameOrigin, wrap } from './http.js';
 import {
   adminHref,
@@ -50,11 +52,10 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(ba, bb);
 }
 
-/** 请求里携带的 admin 令牌（三通道），未携带返回 undefined */
+/** 请求里携带的 admin 令牌（两通道：Cookie / X-Admin-Token 头），未携带返回 undefined */
 export function resolveAdminToken(req: Request): string | undefined {
   const candidates: unknown[] = [
     readCookie(req, COOKIE_NAME),
-    (req.query as Record<string, unknown> | undefined)?.admin_token,
     req.headers['x-admin-token'],
   ];
   for (const c of candidates) {
@@ -172,17 +173,10 @@ ${card(`
 <button class="btn" type="submit">登录</button>
 </form>
 `)}
-<p class="muted">也可以用请求头 <code>X-Admin-Token</code> 或查询参数 <code>?admin_token=</code> 直接访问管理端接口。</p>
+<p class="muted">也可以用请求头 <code>X-Admin-Token</code> 直接访问管理端接口（脚本 / 自动化常用）。</p>
 <p><a href="${esc(base)}/">← 返回首页</a></p>
 `,
   });
-}
-
-/** 本实例视角提示（多副本下数据不完整，必须说清楚，否则用户会以为是 bug） */
-function instanceNotice(): string {
-  return notice(
-    `<b>本实例视角</b>：部署平台为多副本，进程内数据不跨副本共享。以下用户列表与统计<b>仅包含当前实例</b>（instanceId <code>${esc(config.instanceId)}</code>，启动于 ${esc(fmtTime(config.startedAt))}）。用户会随着请求打到本实例而逐步补全。`,
-  );
 }
 
 function dashboardHtml(base: string, adminToken: string): string {
@@ -190,6 +184,8 @@ function dashboardHtml(base: string, adminToken: string): string {
   const users = store.listUsers();
   const gh = getGithub();
   const ps = persistStatus();
+  const b = billing.getTotalBilling();
+  const rc = recharge.getRechargeStats();
 
   const topTools = Object.entries(s.byTool)
     .sort((a, b) => b[1] - a[1])
@@ -221,17 +217,18 @@ function dashboardHtml(base: string, adminToken: string): string {
     adminToken,
     body: `
 <h1>仪表盘</h1>
-${instanceNotice()}
 
-<h2>总计（本实例）</h2>
+<h2>总计</h2>
 <div class="grid">
 ${statCard(s.counters.requests, '请求总数', '带 id 的 JSON-RPC 请求')}
 ${statCard(s.counters.toolCalls, '工具调用次数', '仅 tools/call')}
 ${statCard(s.counters.errors, '错误响应数')}
 ${statCard(users.total, '用户数')}
 ${statCard(Object.keys(s.byUser).length, '活跃调用方', '含匿名桶')}
+${statCard(b.used, '总计费点数', `所有用户累计消耗；匿名 ${b.anonymousUsed}`)}
+${statCard(b.rechargedTotal, '总充值点数', `累计充值入账；共 ${rc.count} 笔`)}
 </div>
-<p class="muted">统计起点 ${esc(fmtTime(s.since))} · 落盘 ${ps.enabled ? `已启用（${esc(ps.dir)}）` : '已关闭'}${ps.lastError ? ` · <span style="color:var(--err)">最近错误：${esc(ps.lastError)}</span>` : ''}</p>
+<p class="muted">统计起点 ${esc(fmtTime(s.since))} · 落盘 ${ps.enabled ? `已启用（${esc(ps.db)} · ${esc(ps.storage)}）` : '已关闭'}${ps.lastError ? ` · <span style="color:var(--err)">最近错误：${esc(ps.lastError)}</span>` : ''}</p>
 
 <h2>系统信息</h2>
 ${table(
@@ -259,6 +256,16 @@ ${topUsers.length === 0 ? '<div class="empty">暂无记录。</div>' : table(['�
     return [label, String(v.calls), String(toolSum), bar(v.calls, maxUser)];
   }))}
 
+<h2>计费明细</h2>
+${b.byUser.length === 0 ? '<div class="empty">暂无计费记录。</div>' : table(['用户', '已消耗', '余额', ''], b.byUser.slice(0, 15).map((r) => {
+    const bar2 = bar(r.used, Math.max(1, ...b.byUser.map((x) => x.used)));
+    const label = r.userId
+      ? `<a href="${esc(adminHref(`/admin/users/${encodeURIComponent(r.userId)}`, adminToken))}">${esc(r.username)}</a>`
+      : `<span class="muted">${esc(r.username)}</span>`;
+    return [label, String(r.used), r.userId ? String(r.balance) : '<span class="muted">—</span>', bar2];
+  }))}
+<p class="muted">余额 = 赠送额度（${esc(String(config.billingFreeCredits))}）- 已消耗；硬计费开启时余额耗尽将拒绝执行收费工具。匿名用户无余额概念（按调用计费须先登录），其消耗计入总计但不计入用户余额。</p>
+
 <h2>最近 14 天趋势</h2>
 ${dayRows.length === 0 ? '<div class="empty">暂无记录。</div>' : table(['日期', '请求数', '工具调用', '匿名', ''], dayRows)}
 
@@ -269,14 +276,8 @@ ${recent.length === 0 ? '<div class="empty">暂无记录。</div>' : table(['时
     c.tool ? `<code>${esc(c.tool)}</code>` : '—',
     c.userId ? esc(c.username) : '<span class="muted">匿名</span>',
   ]))}
-
-<div class="row" style="margin-top:20px">
-<a class="btn alt" href="${esc(adminHref('/admin/users', adminToken))}">用户管理</a>
-<a class="btn alt" href="${esc(adminHref('/admin/settings', adminToken))}">GitHub 设置</a>
-<a class="btn small" href="${esc(adminHref('/admin/api/stats', adminToken))}">统计 JSON</a>
-<a class="btn small" href="${esc(adminHref('/admin/logout', adminToken))}">退出</a>
-</div>
 `,
+    adminTab: 'dashboard',
   });
 }
 
@@ -310,7 +311,6 @@ function usersHtml(base: string, adminToken: string, query: string): string {
     adminToken,
     body: `
 <h1>用户管理</h1>
-${instanceNotice()}
 
 <form method="get" action="${esc(base)}/admin/users" class="row" style="margin:12px 0">
 <input name="q" value="${esc(query)}" placeholder="按用户名 / 邮箱 / GitHub / ID 搜索" style="max-width:320px">
@@ -318,13 +318,10 @@ ${instanceNotice()}
 <a class="btn small alt" href="${esc(adminHref('/admin/users', adminToken))}">重置</a>
 </form>
 
-<p class="muted">共 ${total} 个用户${shown < total ? `（显示前 ${shown} 条）` : ''} ·「请求数 / 工具调用」列为该用户在本实例的统计</p>
+<p class="muted">共 ${total} 个用户${shown < total ? `（显示前 ${shown} 条）` : ''} ·「请求数 / 工具调用」列为该用户的累计统计</p>
 ${table(['用户名', '邮箱', '来源', 'GitHub', '注册时间', '最近活跃', '请求/工具', '操作'], rows)}
-
-<div class="row" style="margin-top:20px">
-<a class="btn alt" href="${esc(adminHref('/admin', adminToken))}">← 返回仪表盘</a>
-</div>
 `,
+    adminTab: 'users',
   });
 }
 
@@ -335,6 +332,7 @@ function userDetailHtml(
   issued?: { token: string; note?: string },
 ): string {
   const s = getStatsSnapshot();
+  const bill = billing.getUserBilling(user.id);
   const stat = s.byUser[user.id];
   const tools = stat?.tools ?? {};
   const toolSum = Object.values(tools).reduce((a: number, b: number) => a + b, 0);
@@ -357,27 +355,35 @@ function userDetailHtml(
     adminToken,
     body: `
 <h1>用户详情</h1>
-${instanceNotice()}
 
 <h2>基本信息</h2>
 ${table(['字段', '值'], infoRows)}
 
-<h2>调用统计（本实例）</h2>
+<h2>调用统计</h2>
 <div class="grid">
 ${statCard(stat?.calls ?? 0, '请求总数')}
 ${statCard(toolSum, '工具调用次数')}
 ${statCard(Object.keys(tools).length, '使用过的工具数')}
 </div>
-${Object.keys(tools).length > 0 ? table(['工具', '次数', ''], Object.entries(tools).sort((a, b) => b[1] - a[1]).map(([n, c]) => [esc(n), String(c), bar(c, maxTool)])) : '<div class="empty">该用户在本实例暂无调用记录。</div>'}
+${Object.keys(tools).length > 0 ? table(['工具', '次数', ''], Object.entries(tools).sort((a, b) => b[1] - a[1]).map(([n, c]) => [esc(n), String(c), bar(c, maxTool)])) : '<div class="empty">该用户暂无调用记录。</div>'}
 <p class="muted">首次记录 ${esc(fmtTime(stat?.firstSeenAt))} · 最近记录 ${esc(fmtTime(stat?.lastSeenAt))}</p>
+
+<h2>计费</h2>
+<div class="grid">
+${statCard(bill?.balance ?? config.billingFreeCredits, '剩余额度')}
+${statCard(bill?.used ?? 0, '已消耗点数')}
+</div>
+<p class="muted">余额 = 赠送额度（${esc(String(config.billingFreeCredits))}）- 已消耗。硬计费开启时余额耗尽将拒绝执行收费工具。</p>
 
 <h2>签发新令牌</h2>
 ${card(`
-<p>为该用户签发一枚新的访问令牌（JWT，有效期 7 天）。令牌内嵌用户身份，任意副本都能校验。</p>
+<p>为该用户签发一枚新的访问令牌（JWT，有效期 7 天）。令牌内嵌用户身份，服务端无需保存会话。</p>
 ${
   issued
     ? `<div style="margin:10px 0"><b>新令牌：</b><br><code>${esc(issued.token)}</code></div>
 <p class="muted">请立即复制保存，此页面刷新后不再显示${issued.note ? `。${esc(issued.note)}` : ''}。</p>
+<!-- 这里必须带 ?token=：管理员浏览器里只有自己的会话 Cookie，不拼令牌看到的还是自己。
+     /profile 只在「尚无 Cookie」时才把 URL 令牌写进 Cookie，所以不会顶掉管理员自己的登录态。 -->
 <div class="row"><a class="btn small" href="${esc(base)}/profile?token=${encodeURIComponent(issued.token)}">以该用户身份打开 Profile</a></div>`
     : ''
 }
@@ -394,10 +400,8 @@ ${card(`
 </form>
 `)}
 
-<div class="row" style="margin-top:20px">
-<a class="btn alt" href="${esc(adminHref('/admin/users', adminToken))}">← 返回用户列表</a>
-</div>
 `,
+    adminTab: 'users',
   });
 }
 
@@ -459,10 +463,179 @@ ${card(`
 </form>
 `)}
 
-<div class="row" style="margin-top:20px">
-<a class="btn alt" href="${esc(adminHref('/admin', adminToken))}">← 返回仪表盘</a>
-</div>
 `,
+    adminTab: 'github',
+  });
+}
+
+/** 链 ID 的展示文本：已知链给中文名，未知链退化成 `Chain <十进制>`。 */
+function chainDisplayName(chainId: string): string {
+  return recharge.chainName(chainId) ?? `Chain ${recharge.chainIdToDecimal(chainId)}`;
+}
+
+function rechargeSettingsHtml(
+  base: string,
+  adminToken: string,
+  opts: { saved?: boolean; error?: string; warning?: string; message?: string } = {},
+): string {
+  const cfg = recharge.getRechargeConfig();
+  const c = cfg ?? { recipient: '', rpcUrl: '', rate: 0, tokenAddress: '', chainId: '' };
+  const isToken = Boolean(c.tokenAddress);
+  /** decimals 缺失 = 入账会被拒绝，必须让管理员一眼看见 */
+  const metaMissing = isToken && c.tokenDecimals === undefined;
+  const metaCell = !isToken
+    ? '<span class="muted">—</span>'
+    : metaMissing
+      ? '<b style="color:var(--err)">未获取（缺少 decimals，入账会被拒绝）</b>'
+      : `${esc(c.tokenName || '—')}（${esc(c.tokenSymbol || '—')}）· decimals ${esc(String(c.tokenDecimals))}`;
+
+  return page({
+    title: 'Admin · 充值设置',
+    base,
+    active: 'admin',
+    adminToken,
+    body: `
+<h1>充值设置（Crypto → 点数）</h1>
+${opts.error ? notice(esc(opts.error), 'err') : ''}
+${opts.warning ? notice(esc(opts.warning)) : ''}
+${opts.message ? notice(esc(opts.message), 'ok') : ''}
+${opts.saved ? notice('已保存，立即生效（无需重启）。', 'ok') : ''}
+
+${card(`
+<h3>当前生效配置</h3>
+${table(
+  ['项', '值'],
+  [
+    ['收款地址', c.recipient ? `<code>${esc(c.recipient)}</code>` : '<span class="muted">未配置</span>'],
+    ['RPC', c.rpcUrl ? `<code>${esc(c.rpcUrl)}</code>` : '<span class="muted">未配置</span>'],
+    ['收取资产', isToken ? `ERC20 <code>${esc(c.tokenAddress)}</code>` : badge('原生币', '')],
+    ['代币元数据', metaCell],
+    ['汇率', c.rate ? `1 ${esc(isToken ? (c.tokenSymbol || '代币') : 'ETH')} = ${esc(String(c.rate))} 点` : '<span class="muted">未配置</span>'],
+    [
+      '链 / 网络',
+      c.chainId
+        ? `${esc(chainDisplayName(c.chainId))} · <code>${esc(recharge.normalizeChainId(c.chainId))}</code>（${esc(recharge.chainIdToDecimal(c.chainId))}）`
+        : '<span class="muted">未指定（用户转账前不会强制切换网络）</span>',
+    ],
+  ],
+)}
+<p class="muted">最近更新：${esc(fmtTime(c.updatedAt))}${c.updatedBy ? ` 由 ${esc(c.updatedBy)}` : ''}</p>
+${isToken ? `
+<form method="post" action="${esc(adminHref('/admin/recharge-settings/refresh-meta', adminToken))}" style="margin-top:10px">
+<button class="btn small alt" type="submit">重新读取元数据</button>
+<span class="muted">RPC 恢复 / 换过 RPC 后点这里重读 name / symbol / decimals，不用重填表单。</span>
+</form>` : ''}
+${isToken && c.tokenMetaError ? `<p class="muted">上次自动读取失败原因：<b>${esc(c.tokenMetaError)}</b></p>` : ''}
+`)}
+
+<h2>修改</h2>
+${card(`
+<form method="post" action="${esc(adminHref('/admin/recharge-settings', adminToken))}">
+<label for="recipient">收款地址（0x…）</label>
+<input id="recipient" name="recipient" value="${esc(c.recipient)}" placeholder="0x 开头 40 位十六进制">
+
+<label for="rpcUrl">RPC 地址</label>
+<input id="rpcUrl" name="rpcUrl" value="${esc(c.rpcUrl)}" placeholder="https://ethereum-rpc.publicnode.com">
+<p class="muted">保存时会用它读 ERC20 元数据、校验转账。节点不通也能保存（只是会告警），换一个可用的再点「重新读取元数据」即可。</p>
+
+<label for="tokenAddress">ERC20 合约地址（留空则收原生币）</label>
+<input id="tokenAddress" name="tokenAddress" value="${esc(c.tokenAddress)}" placeholder="留空 = 收取原生币">
+<p class="muted">填写后保存时会自动读取链上的 name / symbol / decimals 并回显；读不到<b>也会保存</b>，只是会告警，并在 decimals 补全前拒绝入账。</p>
+
+<label for="tokenName">代币名称（可选，留空自动读）</label>
+<input id="tokenName" name="tokenName" value="${esc(c.tokenName ?? '')}" placeholder="如 Tether USD">
+
+<label for="tokenSymbol">代币符号（可选，留空自动读）</label>
+<input id="tokenSymbol" name="tokenSymbol" value="${esc(c.tokenSymbol ?? '')}" placeholder="如 USDT">
+
+<label for="tokenDecimals">decimals（可选；自动读不到时必填）</label>
+<input id="tokenDecimals" name="tokenDecimals" type="number" min="0" max="36" step="1" value="${c.tokenDecimals === undefined ? '' : esc(String(c.tokenDecimals))}" placeholder="如 6 / 18">
+<p class="muted">RPC 不通或合约非标准时可手工填这三项。<b>decimals 填错会算错金额</b>（USDT 是 6，多数代币是 18），不确定就换个可用 RPC 再点「重新读取元数据」。</p>
+
+<label for="rate">汇率（1 个代币兑换多少点数）</label>
+<input id="rate" name="rate" type="number" step="any" min="0" value="${c.rate ? esc(String(c.rate)) : ''}" placeholder="如 1000">
+
+<label for="chainId">链 ID（选填，建议留空让它自动识别）</label>
+<input id="chainId" name="chainId" value="${esc(c.chainId)}" placeholder="如 56 或 0x38，留空则按 RPC 返回值填充">
+<p class="muted">用户在充值页转账前，前端会比对钱包的 <code>eth_chainId</code>，不一致就自动唤起切换网络（钱包里没这条链会请求添加，RPC 用上面填的地址）。<b>填错等于让用户把钱转到别的链上</b>，所以保存时一律以 RPC 实际返回的链 ID 为准，手填的不一致会被更正并提示。</p>
+
+<button class="btn" type="submit">保存</button>
+</form>
+`)}
+
+`,
+    adminTab: 'recharge-settings',
+  });
+}
+
+function rechargeRecordsHtml(
+  base: string,
+  adminToken: string,
+  filter: { userId?: string; kind?: string; status?: string },
+): string {
+  const rows = recharge.listRecharges({
+    userId: filter.userId || undefined,
+    kind: (filter.kind || '') as '' | 'native' | 'erc20',
+    status: (filter.status || '') as '' | 'credited' | 'pending',
+  });
+  const s = recharge.getRechargeStats(rows);
+
+  return page({
+    title: 'Admin · 充值记录',
+    base,
+    active: 'admin',
+    adminToken,
+    body: `
+<h1>充值记录</h1>
+<div class="grid">
+${statCard(s.count, '笔数', '当前筛选结果')}
+${statCard(s.points, '点数合计')}
+${statCard(s.nativePoints, '原生币充值')}
+${statCard(s.erc20Points, 'ERC20 充值')}
+${statCard(s.pendingCount, '待确认', '已入账但链上尚未打包')}
+</div>
+
+<h2>筛选</h2>
+${card(`
+<form method="get" action="${esc(adminHref('/admin/recharge', adminToken))}">
+<label for="userId">用户 ID</label>
+<input id="userId" name="userId" value="${esc(filter.userId ?? '')}" placeholder="留空 = 全部用户">
+<label for="kind">类型</label>
+<select id="kind" name="kind">
+<option value="">全部</option>
+<option value="native"${filter.kind === 'native' ? ' selected' : ''}>原生币</option>
+<option value="erc20"${filter.kind === 'erc20' ? ' selected' : ''}>ERC20</option>
+</select>
+<label for="status">状态</label>
+<select id="status" name="status">
+<option value="">全部</option>
+<option value="credited"${filter.status === 'credited' ? ' selected' : ''}>已到账</option>
+<option value="pending"${filter.status === 'pending' ? ' selected' : ''}>待确认</option>
+</select>
+<button class="btn" type="submit">筛选</button>
+<a class="btn alt" href="${esc(adminHref('/admin/recharge', adminToken))}">重置</a>
+</form>
+`)}
+
+<h2>明细</h2>
+${rows.length === 0
+  ? '<div class="empty">没有符合条件的充值记录。</div>'
+  : table(
+      ['时间', '用户', '类型', '币种', '数量', '点数', '状态', '交易哈希'],
+      rows.map((r) => [
+        esc(fmtTime(r.createdAt)),
+        `<a href="${esc(adminHref(`/admin/users/${encodeURIComponent(r.userId)}`, adminToken))}">${esc(r.username)}</a>`,
+        r.kind === 'native' ? badge('原生币', '') : badge('ERC20', ''),
+        esc(r.token),
+        esc(r.amount),
+        String(r.points),
+        badge(r.status === 'pending' ? '待确认' : '已到账', r.status === 'pending' ? 'warn' : 'ok'),
+        `<code>${esc(r.txHash.slice(0, 10))}…${esc(r.txHash.slice(-6))}</code>`,
+      ]),
+    )}
+
+`,
+    adminTab: 'recharge',
   });
 }
 
@@ -471,7 +644,7 @@ ${card(`
 export function createAdminRouter(): Router {
   const router = Router();
 
-  // 令牌可能出现在 URL 里，统一禁止 Referer 外泄
+  // 防御纵深：admin 令牌已不进 URL，这里主要是护住表单里的其它查询参数不外泄到 Referer
   router.use((_req, res, next) => {
     res.setHeader('Referrer-Policy', 'no-referrer');
     next();
@@ -516,8 +689,8 @@ export function createAdminRouter(): Router {
     if (submitted && safeEqual(submitted, getAdminToken())) {
       failures.delete(key);
       setAdminCookie(req, res, submitted);
-      // 同时把令牌放进 URL：万一平台网关不透传 Cookie，也能正常进入
-      res.redirect(302, `${base}/admin?admin_token=${encodeURIComponent(submitted)}`);
+      // 登录态靠 Cookie 保持，跳转不再把令牌拼进 URL（避免泄漏到地址栏 / 历史 / 日志）
+      res.redirect(302, `${base}/admin`);
       return;
     }
 
@@ -561,8 +734,8 @@ export function createAdminRouter(): Router {
             base,
             active: 'admin',
             adminToken: token,
-            body: `<h1>用户不存在</h1><p class="muted">该用户不在本实例内存中（多副本部署时可能注册在其它副本上）。</p>
-<div class="row"><a class="btn alt" href="${esc(adminHref('/admin/users', token))}">← 返回用户列表</a></div>`,
+            adminTab: 'users',
+            body: `<h1>用户不存在</h1><p class="muted">该用户不在用户存储中（可能已被删除，或数据目录被重置）。</p>`,
           }),
         );
         return;
@@ -631,6 +804,85 @@ export function createAdminRouter(): Router {
     const target = new URL(adminHref('/admin/settings', token), base);
     target.searchParams.set('saved', '1');
     res.redirect(302, target.toString());
+  });
+
+  router.get('/admin/recharge-settings', requireAdmin, (req: Request, res: Response) => {
+    const token = resolveAdminToken(req) ?? '';
+    const q = req.query as Record<string, unknown>;
+    const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+    res.type('html').send(
+      rechargeSettingsHtml(deriveBase(req), token, {
+        saved: str(q.saved) === '1',
+        error: str(q.err),
+        warning: str(q.warn),
+        message: str(q.msg),
+      }),
+    );
+  });
+
+  router.post(
+    '/admin/recharge-settings',
+    requireAdmin,
+    requireSameOrigin,
+    wrap(async (req: Request, res: Response) => {
+      const token = resolveAdminToken(req) ?? '';
+      const base = deriveBase(req);
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const str = (v: unknown) => String(v ?? '').trim();
+
+      const result = await recharge.setRechargeConfig({
+        recipient: str(body.recipient),
+        rpcUrl: str(body.rpcUrl),
+        tokenAddress: str(body.tokenAddress),
+        tokenName: str(body.tokenName),
+        tokenSymbol: str(body.tokenSymbol),
+        tokenDecimals: str(body.tokenDecimals),
+        rate: Number(str(body.rate)),
+        chainId: str(body.chainId),
+      });
+
+      const target = new URL(adminHref('/admin/recharge-settings', token), base);
+      if (result.ok) {
+        target.searchParams.set('saved', '1');
+        if (result.warning) target.searchParams.set('warn', result.warning);
+        if (result.info) target.searchParams.set('msg', result.info);
+      } else {
+        target.searchParams.set('err', result.error);
+      }
+      res.redirect(302, target.toString());
+    }),
+  );
+
+  // 「重新读取元数据」：RPC 恢复后不用重填整张表单
+  router.post(
+    '/admin/recharge-settings/refresh-meta',
+    requireAdmin,
+    requireSameOrigin,
+    wrap(async (req: Request, res: Response) => {
+      const token = resolveAdminToken(req) ?? '';
+      const result = await recharge.refreshTokenMeta();
+      const target = new URL(adminHref('/admin/recharge-settings', token), deriveBase(req));
+      if (result.ok) {
+        if (result.warning) target.searchParams.set('warn', result.warning);
+        else target.searchParams.set('msg', result.info || '元数据已重新读取成功。');
+      } else {
+        target.searchParams.set('err', result.error);
+      }
+      res.redirect(302, target.toString());
+    }),
+  );
+
+  router.get('/admin/recharge', requireAdmin, (req: Request, res: Response) => {
+    const token = resolveAdminToken(req) ?? '';
+    const q = req.query as Record<string, unknown>;
+    const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+    res.type('html').send(
+      rechargeRecordsHtml(deriveBase(req), token, {
+        userId: str(q.userId),
+        kind: str(q.kind),
+        status: str(q.status),
+      }),
+    );
   });
 
   router.post(

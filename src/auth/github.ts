@@ -8,8 +8,8 @@
  *    导致 admin 后台改完必须重启才生效。现在改为每次调用时按 `getGithub()`
  *    现场构造客户端（simple-oauth2 构造函数无网络 I/O，开销可忽略）。
  * 2. **state 改为自签名 JWT**：初版把 state 存在 express-session（MemoryStore）里，
- *    多副本部署时回调极大概率落到另一个副本 → session 读不到 → 「state 校验失败」，
- *    OAuth 成功率约 1/k。改成 JWT 后与整体无状态架构一致，任意副本都能校验。
+ *    内存里的 session 随时可能读不到（进程重启即丢失）→ 「state 校验失败」。
+ *    改成 JWT 后与整体无状态架构一致，重启后也能校验。
  */
 import { AuthorizationCode } from 'simple-oauth2';
 import jwt from 'jsonwebtoken';
@@ -40,7 +40,7 @@ function client(): AuthorizationCode {
 }
 
 /**
- * 生成防 CSRF 的 state（自签名 JWT，10 分钟有效，跨副本可校验）。
+ * 生成防 CSRF 的 state（自签名 JWT，10 分钟有效，服务端无需保存）。
  *
  * 若传入 `authorizeTicket`（加密票据），会一并塞进 state：GitHub 回调只回 `code` + `state`，
  * 所以「原始授权请求」（client_id / redirect_uri / PKCE / state / resource）必须靠 state 带回来，

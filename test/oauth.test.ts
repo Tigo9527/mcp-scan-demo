@@ -13,7 +13,7 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import type { Server } from 'node:http';
 import { createApp } from '../src/web/app.js';
-import { configure } from '../src/persist.js';
+import { configure } from '../src/db.js';
 import { MCP_PATH } from '../src/oauth/metadata.js';
 
 let server: Server;

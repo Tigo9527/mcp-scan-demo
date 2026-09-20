@@ -1,19 +1,16 @@
 /**
- * 用户存储（demo 用，内存为主 + JSON 落盘尽力持久化）。
+ * 用户存储（demo 用，内存为主 + SQLite（Sequelize）持久化）。
  *
  * 相比初版的变化：
- * - 支持落盘（按实例分片 `data/users-<instanceId>.json`，多副本各写各的，不互相覆盖）
+ * - 支持落盘（`data/users.json`，单一文件，重启后仍在）
  * - 提供 `listUsers` / `countUsers` / `deleteUser`，供 admin 后台使用
- * - 提供 `upsertById`（**跨副本按需物化**）：鉴权是无状态 JWT，在 A 副本注册的用户
- *   在 B 副本内存里并不存在；流量打到哪个副本，就在哪个副本按 id 物化一份，
- *   这样 admin 用户列表会随流量逐步补全。
+ * - 提供 `upsertById`（**按需落库**）：鉴权是无状态 JWT，令牌里还原出的用户
+ *   若不在存储里（例如数据目录被清空后重建），就按 id 补一份。
  * - 用户名/GitHub 索引改为 **best-effort**（不互相顶掉），用户列表一律以 byId 为准。
  * 生产环境请替换为数据库实现，并保持相同接口。
  */
 import { randomUUID } from 'node:crypto';
-import { readdirSync } from 'node:fs';
-import { config } from '../config.js';
-import { getDataDir, loadJsonSync, scheduleSave } from '../persist.js';
+import { dbEnabled, loadUsers, saveUsers, scheduleDbWrite } from '../db.js';
 
 export type AuthProvider = 'local' | 'github' | 'web3';
 
@@ -30,7 +27,7 @@ export interface User {
   /** web3 登录用户的钱包地址（0x + 40 位十六进制）。provider 为 web3 时存在。 */
   walletAddress?: string;
   createdAt: string;
-  /** 最近一次携带有效令牌访问本实例的时间 */
+  /** 最近一次携带有效令牌访问的时间 */
   lastSeenAt?: string;
   /** 最近一次连接所用 MCP 客户端的自我声明（initialize 握手的 clientInfo：name/version），用于识别客户端来源 */
   clientInfo?: { name?: string; version?: string; lastSeenAt: string };
@@ -55,7 +52,6 @@ const byUsername = new Map<string, string>();
 const byGithubLogin = new Map<string, string>();
 const byWallet = new Map<string, string>();
 
-const FILE = `users-${config.instanceId}`;
 let loaded = false;
 
 function indexBestEffort(user: User): void {
@@ -70,41 +66,31 @@ function indexBestEffort(user: User): void {
 function ensureLoaded(): void {
   if (loaded) return;
   loaded = true;
-  // 兼容历史分片 + 多副本统一视图：早期 instanceId 每次启动随机，用户散落在多个
-  // users-<id>.json 里互相看不见；这里把数据目录下所有 users-*.json 合并载入，
-  // 让 admin 能看到全部账号、登录也能查到历史账号（避免「反复回登录页」的假象）。
-  const merged: User[] = [];
-  try {
-    const dir = getDataDir();
-    const names = readdirSync(dir).filter(
-      (n) =>
-        n.startsWith('users-') &&
-        n.endsWith('.json') &&
-        !n.endsWith('.bak.json') &&
-        !n.includes('.corrupt-'),
-    );
-    for (const n of names) {
-      const data = loadJsonSync<{ users?: User[] }>(n.replace(/\.json$/, ''), {});
-      merged.push(...(data.users ?? []));
-    }
-  } catch {
-    // 目录不存在 / 无读取权限：忽略，退回单文件加载
-  }
-  if (merged.length === 0) {
-    const data = loadJsonSync<{ users?: User[] }>(FILE, {});
-    merged.push(...(data.users ?? []));
-  }
-  for (const u of merged) {
-    if (!u?.id || !u?.username) continue;
-    if (!byId.has(u.id)) {
-      byId.set(u.id, u);
-      indexBestEffort(u);
+  // 启用 DB 时，内存数据由 loadUsersFromDb() 在启动期（app.listen 之前）预热；
+  // 这里不读库，保持同步。DB 关闭（测试 / MCP_DEMO_PERSIST=0）时即空内存态。
+}
+
+/** 从 SQLite 重新加载全部用户到内存（启动预热 + 测试里重启模拟用）。 */
+export async function reloadUsersFromDb(): Promise<void> {
+  byId.clear();
+  byUsername.clear();
+  byGithubLogin.clear();
+  byWallet.clear();
+  if (dbEnabled()) {
+    const users = await loadUsers();
+    for (const u of users) {
+      if (!u?.id || !u?.username) continue;
+      if (!byId.has(u.id)) {
+        byId.set(u.id, u);
+        indexBestEffort(u);
+      }
     }
   }
+  loaded = true;
 }
 
 function markDirty(): void {
-  scheduleSave(FILE, () => ({ users: [...byId.values()] }));
+  scheduleDbWrite('users', () => saveUsers([...byId.values()]));
 }
 
 export function createUser(input: {
@@ -191,7 +177,7 @@ export function upsertWeb3User(input: { address: string }): User {
 }
 
 /**
- * 按 id 物化一个由 JWT 还原出来的用户（跨副本补全用）。
+ * 按 id 落库一个由 JWT 还原出来的用户（存储里没有时补全）。
  *
  * 关键规则：**仅当新令牌的 iat 不早于已记录值时，才刷新用户资料字段**。
  * 否则用户先用新令牌刷新了资料、之后一个 7 天前的旧令牌打过来，会把新数据覆盖回旧值。
@@ -260,7 +246,7 @@ export function upsertById(user: User & { tokenIat?: number }): UpsertByIdResult
 
 /**
  * 用户列表（admin 用）。一律以 byId 为准 —— id 唯一，天然去重，
- * 不会因为跨副本同名导致索引互顶而丢记录。
+ * 不会因为同名导致索引互顶而丢记录。
  */
 export function listUsers(options: ListUsersOptions = {}): { items: User[]; total: number } {
   ensureLoaded();
@@ -306,7 +292,7 @@ export function deleteUser(id: string): boolean {
   return true;
 }
 
-/** 统计重名用户（admin 页用于标记，跨副本同名属正常现象） */
+/** 统计重名用户（admin 页用于标记同名账号） */
 export function duplicatedUsernames(): Set<string> {
   ensureLoaded();
   const counts = new Map<string, number>();

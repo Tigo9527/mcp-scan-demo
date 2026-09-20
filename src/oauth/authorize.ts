@@ -7,7 +7,7 @@
  *
  * 刻意**不**用会话：GET 渲染表单、POST 一次性完成登录与授权，参数全部经隐藏字段往返，
  * 并在 POST 时**重新完整校验**（隐藏字段是用户可篡改的，redirect_uri 必须仍属于该 client）。
- * 这样多副本部署下无需共享任何登录态。
+ * 这样服务端无需保存任何登录态。
  *
  * 暂只支持账号密码登录：GitHub 在本部署环境出站被封，接进来只会给一个点不动的按钮。
  */
@@ -21,7 +21,7 @@ import {
   OAUTH_SCOPE,
 } from './metadata.js';
 import { seal } from './tickets.js';
-import { deriveBase, requireSameOrigin, wrap } from '../web/http.js';
+import { deriveBase, requireSameOrigin, setUserTokenCookie, wrap } from '../web/http.js';
 import { authorizeCompleteHtml, card, esc, notice, page } from '../web/layout.js';
 import { isGitHubConfigured } from '../auth/github.js';
 
@@ -56,6 +56,22 @@ export interface AuthorizeTicket {
 type Validation =
   | { ok: true; params: AuthorizeParams }
   | { ok: false; error: string; description: string; redirectTo?: string; state?: string };
+
+/** 从已校验的授权参数重新签发加密票据（GET 渲染与 POST 失败重渲染共用，保证上下文不丢）。 */
+function sealAuthorizeTicket(p: AuthorizeParams): string {
+  return seal(
+    'authorize',
+    {
+      clientId: p.clientId,
+      redirectUri: p.redirectUri,
+      state: p.state,
+      codeChallenge: p.codeChallenge,
+      scope: p.scope,
+      resource: p.resource,
+    } satisfies AuthorizeTicket,
+    AUTHORIZE_TICKET_TTL_SECONDS,
+  );
+}
 
 function str(v: unknown): string {
   return typeof v === 'string' ? v : '';
@@ -264,18 +280,7 @@ export function createAuthorizeRouter(): Router {
       }
       const client = readClient(v.params.clientId)!;
       // 把原始授权请求封成加密票据，供「通过 GitHub 登录」链接穿过 GitHub 流程后回跳客户端。
-      const authorizeTicket = seal(
-        'authorize',
-        {
-          clientId: v.params.clientId,
-          redirectUri: v.params.redirectUri,
-          state: v.params.state,
-          codeChallenge: v.params.codeChallenge,
-          scope: v.params.scope,
-          resource: v.params.resource,
-        } satisfies AuthorizeTicket,
-        AUTHORIZE_TICKET_TTL_SECONDS,
-      );
+      const authorizeTicket = sealAuthorizeTicket(v.params);
       res
         .type('html')
         .send(
@@ -313,12 +318,19 @@ export function createAuthorizeRouter(): Router {
 
       let user: store.User;
       try {
-        user = auth.loginWithPassword(username, password).user;
+        const result = auth.loginWithPassword(username, password);
+        user = result.user;
+        // 在授权页登录也算登录本站：落会话 Cookie，之后进 /profile、/recharge 不用再带令牌
+        setUserTokenCookie(req, res, result.token);
       } catch (err) {
         const msg =
           err instanceof auth.AuthError && err.status === 400 ? err.message : '用户名或密码错误';
+        // 关键：失败重渲染必须重新签发 authorize 票据（从已校验参数 p 生成），
+        // 否则错误页上的「注册新账号 / 用钱包 / 通过 GitHub」链接会丢失 OAuth 上下文，
+        // 用户改走注册等入口后服务端拿不到票据、无法回跳客户端，回调就此丢失。
+        const authorizeTicket = sealAuthorizeTicket(p);
         res.status(401).type('html').send(
-          authorizeHtml(base, p, client.client_name ?? '未命名 MCP 客户端', msg),
+          authorizeHtml(base, p, client.client_name ?? '未命名 MCP 客户端', msg, authorizeTicket),
         );
         return;
       }

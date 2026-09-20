@@ -68,7 +68,7 @@ export function issueOAuthAccessToken(params: {
 }
 
 /**
- * 刷新令牌。自签名 JWT，不落盘（多副本无共享存储）。
+ * 刷新令牌。自签名 JWT，不落盘（无服务端存储）。
  * 因此**不支持轮换** —— 无状态方案检测不到旧令牌是否被重放。
  */
 export function issueOAuthRefreshToken(params: {
@@ -132,7 +132,7 @@ export function readTokenAudience(token: string): string | null | undefined {
 
 /** 为用户签发访问令牌，格式：mcp_demo_<jwt>。
  *  采用无状态设计：用户关键信息（username/email/provider/githubToken）直接写进 JWT，
- *  这样在发布平台多副本部署时，任意副本都能独立校验，无需共享内存存储。 */
+ *  服务端校验不依赖任何内存状态，进程重启后依然有效。 */
 export function issueToken(user: store.User): string {
   const jwtToken = jwt.sign(
     {
@@ -142,7 +142,7 @@ export function issueToken(user: store.User): string {
       provider: user.provider,
       githubLogin: user.githubLogin,
       githubToken: user.githubToken,
-      // 真实注册时间：跨副本物化用户时用它，避免退化成「iat 伪造的注册时间」
+      // 真实注册时间：按需落库时用它，避免退化成「iat 伪造的注册时间」
       createdAt: user.createdAt,
     },
     config.jwtSecret,
@@ -201,7 +201,7 @@ export function authenticate(tokenOrHeader: string | undefined): store.User | nu
 
 /**
  * admin 专用：为指定用户 id 签发令牌。
- * JWT 本身是身份真值来源，所以即便该用户不在本实例内存里（跨副本），也能签发。
+ * JWT 本身是身份真值来源，所以即便该用户不在用户存储里，也能签发。
  */
 export function issueTokenForId(
   id: string,

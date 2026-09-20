@@ -18,11 +18,11 @@
 ```
 src/
   config.ts           运行时配置（端口 / JWT 密钥 / 实例 ID / admin 令牌）
-  persist.ts          极简 JSON 落盘（原子写 + 防抖 + 按实例分片 + 读降级）
+  db.ts               SQLite 存储层（Sequelize ORM：自动建表 + 防抖写库 + 旧 JSON 自动导入）
   settings.ts         GitHub OAuth 运行时可变设置（落盘）
   stats.ts            MCP 调用统计（计数器 + 环形缓冲 + 落盘）
   auth/
-    store.ts          用户存储（内存 + 落盘 + 跨副本物化 + 列表/详情）
+    store.ts          用户存储（内存 + 落盘 + 按需落库 + 列表/详情）
     context.ts        请求级鉴权上下文（AsyncLocalStorage）
     manager.ts        注册 / 签发 / 校验 JWT / 请求鉴权
     github.ts         GitHub OAuth 2.0 接入（凭据每次现读，state 为自签名 JWT）
@@ -41,11 +41,11 @@ src/
     layout.ts         共享页面布局 + HTML 转义 esc()
     admin.ts          Admin 管理端（路由 + 页面）
     profile.ts        用户 Profile 页面
-  index.ts            启动入口（顶部加载 .env）+ 打印访问 URL 横幅 + 退出前落盘
+  index.ts            启动入口（顶部加载 .env）+ 连库预热 + 打印访问 URL 横幅 + 退出前刷库
 test/
   integration.test.ts 集成测试：健康检查 / 注册 / 握手 / 登录引导 / 405 / XSS / my_stats
   admin.test.ts       Admin：登录鉴权 / 用户管理 / GitHub 设置 / 统计接口
-  stats.test.ts       调用统计增量断言 / 跨副本物化 / Profile 页面
+  stats.test.ts       调用统计增量断言 / 按需落库 / Profile 页面
   admin-token-guard.test.ts  公网默认令牌防护（503）
   setup-page.test.ts  免登录接入页 /setup：无令牌泄露、配置可复制、MCP 工具返回 setupUrl
   dotenv.test.ts      .env 自动加载（入口 import 顺序 + 平台 env 优先于 .env）
@@ -107,7 +107,16 @@ npm start            # 启动后控制台会打印可访问 URL，含 /admin 与
 
 > 网页注册/登录均为 `POST` 表单，配合 `SameSite=Lax` Cookie + Origin 校验防 CSRF；口令只经表单提交，绝不以 URL / `GET` / `Authorization` 传递。
 
-1. 在 `/register`（或 `/auth/github`）完成注册 → 拿到 Bearer 令牌（页面上有「查看我的 Profile →」入口）
+> **登录态自动保持**：注册 / 登录（账号密码、GitHub、钱包）成功后会下发会话 Cookie
+> `mcp_demo_user`（HttpOnly + SameSite=Lax + 7 天），之后直接访问 `/profile`、`/recharge`
+> 就是登录态，不必再往 URL 上拼 `?token=`（令牌也不该进浏览器历史）。
+> `/mcp` 端点**刻意不读**这份 Cookie —— 否则第三方页面能带着浏览器登录态调受保护工具（CSRF），
+> MCP 客户端必须显式带令牌。退出登录走 `/logout`。
+>
+> 注意：部署平台网关会把响应里的 `SameSite=Lax` 改写成 `SameSite=None`（跨站也会带 Cookie），
+> 所以 CSRF 防护不靠 SameSite，而是靠「`/mcp` 不读 Cookie」+「所有写路由校验 Origin」两道。
+
+1. 在 `/register`（或 `/auth/github`）完成注册 → 拿到 Bearer 令牌（浏览器已自动登录，页面上有「查看我的 Profile →」入口）
 2. 把令牌拼到端点 URL 后，或放到请求头 `X-Authorization`：
 
 ```json
@@ -129,7 +138,13 @@ npm start            # 启动后控制台会打印可访问 URL，含 /admin 与
 
 ### 用户 Profile
 
-- 访问 `/profile?token=<你的令牌>` 查看自己的资料、按工具/按天的个人统计，并复制 MCP 客户端配置。
+- 登录后访问 `/profile` 查看自己的资料、按工具/按天的个人统计，并复制 MCP 客户端配置（登录态由会话 Cookie 保持，无需拼 `?token=`）。
+- 充值页会在转账框下方显示该钱包在收款资产上的可用余额（ERC20 走 `balanceOf`，原生币走
+  `eth_getBalance`，都用服务端配置的 RPC 读）。余额不足会被拦下；**读不到则只提示、不阻拦**——
+  RPC 抖一下不该让用户充不了值。
+- 充值页在钱包转账前会比对 `eth_chainId`：不在收款链上就自动唤起切换网络，
+  钱包里没这条链时请求添加（RPC 用充值设置里配的地址）。链 ID 由保存配置时从 RPC 自动识别，
+  手填与 RPC 不一致时以 RPC 为准——填错链等于让用户把钱转到另一条链上。
 
 ### 调用统计
 
@@ -176,8 +191,8 @@ npm start            # 启动后控制台会打印可访问 URL，含 /admin 与
    就走 CIMD，绕过我们的 DCR 端点。
 4. **受众（`aud`）不符返回 403 而不是 401**。官方 SDK 有熔断：鉴权流程完成后再收到 401 会
    直接抛错而不是重跑流程，401 会把「受众不符」伪装成「还没登录」，表现为死循环。
-5. **所有 OAuth 状态都是自包含加密票据**（`src/oauth/tickets.ts`），不落盘。多副本部署下
-   `persist.ts` 无锁无 CAS、数据按 instanceId 分片，副本 A 存的东西副本 B 查不到，
+5. **所有 OAuth 状态都是自包含加密票据**（`src/oauth/tickets.ts`），不落盘。
+   `persist.ts` 无锁无 CAS（并发写会互相覆盖）、`settings.json` 每个进程只读一次，
    所以必须用「签名的、自带内容的」票据。代价见「已知限制」。
 
 想关掉强制登录（恢复旧的匿名握手，例如给钉钉这类不带 OAuth 的客户端用）：
@@ -204,14 +219,15 @@ npm run oauth:e2e
 https://a8b79d8a477856f1e.app.workbuddy.link
 ```
 
-> 部署适配：发布平台是多副本 + 网关改写 `Authorization` 头。本服务已做：
-> 1. **鉴权无状态化**：JWT 内嵌用户声明，校验不依赖服务端内存存储，任意副本都能处理。
-> 2. **MCP 传输无状态化**：每次请求新建独立 transport（关闭会话管理），跨副本无状态。
+> 部署适配：平台网关会改写 `Authorization` 头。本服务已做：
+> 1. **鉴权无状态化**：JWT 内嵌用户声明，校验不依赖服务端内存存储，重启后依然有效。
+> 2. **MCP 传输无状态化**：每次请求新建独立 transport（关闭会话管理），不依赖进程内会话。
 > 3. **鉴权通道避开 `Authorization`**：服务端只认 `X-Authorization` 头或 `?token=` 参数
 >    （必须带本服务前缀 `mcp_demo_`），网关注入的 `Authorization` 一律忽略。
 > 4. **支持匿名握手 + 登录引导**：未携带令牌时不会拒绝连接，而是暴露 `login` 工具、
 >    受保护工具返回中文登录引导（含可点击的登录 URL）。
-> 5. **数据按实例落盘分片**：用户 / 统计 / 设置各副本写自己的文件，不互相覆盖。
+> 5. **单一 SQLite 文件**：所有数据集落在 `data/mcp-demo.sqlite`（users / billing / recharge_records /
+>    recharge_settings / github_settings / stats 六张表），启动自动建表、旧 JSON 自动导入，不存在按进程 / 实例拆分。
 
 ### 钉钉 MCP 配置（不含 token，靠登录引导）
 
@@ -290,8 +306,10 @@ npm test
 ## 安全说明
 
 - 所有页面输出经过 **HTML 转义**，用户名等用户输入不会造成 XSS。
-- Admin 鉴权三通道（`Cookie` / `?admin_token=` / `X-Admin-Token`），令牌比较用 `timingSafeEqual`；
-  所有副作用操作均为 POST，并有登录失败限流与 `SameSite=Lax` + Origin 校验防 CSRF。
+- Admin 鉴权两通道（`Cookie` `mcp_admin` / `X-Admin-Token` 请求头），令牌比较用 `timingSafeEqual`；
+  UI 任何链接都**不**把令牌拼进 URL（避免泄漏到地址栏 / 历史 / 截图 / Referer / 平台日志），
+  登录态靠 `mcp_admin` Cookie 保持。所有副作用操作均为 POST，并有登录失败限流与
+  `SameSite=Lax` + Origin 校验防 CSRF。
 - 公网环境下使用默认 admin 令牌会被直接禁用（503），强制要求注入真实 `ADMIN_TOKEN`。
 - 部署平台网关会改写 `Authorization` 头，因此本服务**永不**信任传入的 `Authorization` 头传令牌。
 
@@ -303,10 +321,10 @@ npm test
   最后一跳（带令牌调 `/mcp`）会被网关吞掉**；本地直连 / 自托管无此限制。
 - **动态注册的客户端无法单独吊销**：`client_id` 是自包含票据、不落盘，换 `JWT_SECRET`
   才能让全部已注册客户端失效。
-- **授权码重放只在单副本内被拦截**：「已用授权码」表是进程内 `Map`；跨副本时防线退化为
+- **授权码重放只在单进程内被拦截**：「已用授权码」表是进程内 `Map`；防线退化为
   「60 秒有效期 + PKCE」——攻击者必须同时截获授权码与 `code_verifier`。
 - **refresh_token 不轮换**：同理，无状态方案检测不到旧令牌是否被重放，轮换不会更安全。
-- **多副本**：用户列表与调用统计为**本实例视角**（Admin 仪表盘顶部明确标注 instanceId）。
-  某副本注册的用户可能落在别的副本上、本实例看不到；用户随请求物化会逐步补全。
 - **磁盘**：平台磁盘可能不持久化，重启/重新部署后数据可能丢失（退出前会尽量 flush）。
-- `?admin_token=` / `?token=` 会进入浏览器历史与平台访问日志，已用 `Referrer-Policy: no-referrer` 缓解。
+- `?token=`（user 端访问令牌）会进入浏览器历史与平台访问日志，已用 `Referrer-Policy: no-referrer`
+  缓解；登录后该令牌会被落到 `mcp_demo_user` Cookie，后续免挂参数。admin 端已改用 `mcp_admin`
+  Cookie，URL 中不再出现令牌。

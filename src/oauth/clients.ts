@@ -5,7 +5,7 @@
  * 一个全新的、没有预置凭据的客户端，**没有 DCR 就拿不到 client_id，流程根本走不起来**。
  *
  * 实现上不落盘：`client_id` 本身就是一枚加密自包含票据（见 tickets.ts），
- * 里面封着该客户端注册的 redirect_uris。这样多副本之间无需共享任何状态。
+ * 里面封着该客户端注册的 redirect_uris。这样服务端无需保存任何状态。
  * 代价是无法吊销单个客户端 —— demo 可接受，代价写在 README 里。
  */
 import { seal, open } from './tickets.js';

@@ -8,7 +8,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createHash, randomBytes } from 'node:crypto';
 import type { Server } from 'node:http';
 import { createApp } from '../src/web/app.js';
-import { configure } from '../src/persist.js';
+import { configure } from '../src/db.js';
 import { canonicalResourceUri } from '../src/oauth/metadata.js';
 import { seal } from '../src/oauth/tickets.js';
 import { Wallet } from 'ethers';

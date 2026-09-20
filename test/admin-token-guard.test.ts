@@ -17,7 +17,7 @@ beforeAll(async () => {
   vi.stubEnv('ADMIN_TOKEN', '');
 
   const { createApp } = await import('../src/web/app.js');
-  const { configure } = await import('../src/persist.js');
+  const { configure } = await import('../src/db.js');
   configure({ enabled: false });
 
   server = createApp().listen(0, '127.0.0.1');

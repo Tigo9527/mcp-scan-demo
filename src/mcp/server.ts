@@ -85,7 +85,7 @@ export function createMcpServer(): McpServer {
         profileUrl: `${base}/profile`,
         mcpConfig: { mcpServers: { 'mcp-demo': { url: `${base}/mcp`, transport: 'streamable-http' } } },
         howToUseToken:
-          '登录（账号密码或 GitHub）后会得到一个 mcp_demo_ 开头的令牌。把它配置到 MCP 客户端：请求头 X-Authorization: Bearer <token>，或在 MCP 端点 URL 后追加 ?token=<token>；把令牌拼到 profileUrl 后可查看个人资料与调用统计。mcpConfig 是不含令牌的客户端配置，可直接复制使用；先连上再登录，无需一开始就配令牌。',
+          '登录（账号密码或 GitHub）后会得到一个 mcp_demo_ 开头的令牌。把它配置到 MCP 客户端：请求头 X-Authorization: Bearer <token>，或在 MCP 端点 URL 后追加 ?token=<token>（MCP 客户端必须显式带令牌，服务端不接受会话 Cookie，以防 CSRF）。浏览器里登录一次即自动保持，之后直接打开 profileUrl 就能看到个人资料与调用统计，不用往链接上拼令牌。mcpConfig 是不含令牌的客户端配置，可直接复制使用；先连上再登录，无需一开始就配令牌。',
       });
     },
   );
@@ -133,7 +133,7 @@ export function createMcpServer(): McpServer {
         };
       }
       // 基本信息用鉴权上下文的用户即可；clientInfo 等「附属信息」是运行时采集、只存在 store 里，
-      // 故从这里读最新的一份（JWT 还原的对象不含它）。跨副本尚未物化时回退到鉴权用户。
+      // 故从这里读最新的一份（JWT 还原的对象不含它）。存储里没有时回退到鉴权用户。
       const stored = getUser(user.id);
       const info = stored ?? user;
       return text({
@@ -212,7 +212,7 @@ export function createMcpServer(): McpServer {
         firstSeenAt: stat?.firstSeenAt ?? null,
         lastSeenAt: stat?.lastSeenAt ?? null,
         profileUrl: `${base}/profile`,
-        note: '统计为本实例视角（平台多副本部署，数据不跨副本共享）。',
+        note: '统计口径：requests 含 initialize / tools/list 等全部带 id 的请求，toolCalls 只算 tools/call。',
       });
     },
   );

@@ -14,14 +14,14 @@
      Web portal / one-click register : http://127.0.0.1:<port>/
      GitHub OAuth login              : http://127.0.0.1:<port>/auth/github
      MCP endpoint (Streamable HTTP)  : http://127.0.0.1:<port>/mcp
-     User profile                    : http://127.0.0.1:<port>/profile?token=<your-token>
+     User profile                    : http://127.0.0.1:<port>/profile
      Admin console                   : http://127.0.0.1:<port>/admin
      Health check                    : http://127.0.0.1:<port>/health
    ==========================================================
    ```
 
 4. **把上面这段 URL 逐字转述给用户**，并说明：门户可一键注册拿令牌；
-   把令牌拼到 `/profile?token=...` 可查看个人资料与调用统计；
+   浏览器里登录一次即自动保持，直接打开 `/profile` 就能看个人资料与调用统计（不用拼 `?token=`）；
    Admin 管理端用 `ADMIN_TOKEN` 登录（本地开发可用默认令牌 `dev-admin-change-me`）。
 
 ## 约定（重要）
@@ -31,6 +31,38 @@
   `.env` 不覆盖已存在的环境变量（`dotenv` 默认 `override: false`），
   故部署平台注入的 `JWT_SECRET` / `ADMIN_TOKEN` / `PUBLIC_BASE_URL` 永远优先。
   **改 env 相关代码后必须跑 `npx vitest run test/dotenv.test.ts`。**
+- **浏览器页面靠会话 Cookie 保持登录，`/mcp` 端点绝不认 Cookie**。
+  登录（一键注册 / 账号密码 / GitHub / 钱包）成功后一律 `setUserTokenCookie()` 下发
+  `mcp_demo_user`（HttpOnly + SameSite=Lax + Path=/ + 7 天，https 下补 Secure）；
+  Web 页面用 `authenticateWebUserRequest()`（读 Cookie），MCP 端点继续用
+  `authenticateUserRequest()`（**不读** Cookie）—— 否则任意第三方页面都能带着浏览器登录态调
+  受保护工具，就是一个 CSRF。**不要为了「让 MCP 也免登录」把 Cookie 开给 `/mcp`。**
+  页面里也别再教用户往 URL 上拼令牌（令牌会漏进浏览器历史 / Referer）；
+  URL 上带 `?token=` 的老链接由 `adoptTokenFromUrl()` 兜底转成 Cookie，
+  且**只在尚无 Cookie 时写**，避免管理员点「以该用户身份打开 Profile」时顶掉自己的登录态。
+  ⚠️ **部署平台网关会把 Set-Cookie 里的 `SameSite=Lax` 改写成 `SameSite=None`**
+  （线上实测：`Path=/; Max-Age=604800; HttpOnly; Secure; SameSite=None`），
+  于是跨站请求也会带上会话 Cookie，**不能指望 SameSite 做 CSRF 防护**。
+  真正的防线是：① `/mcp` 不读 Cookie；② 所有写路由必须挂 `requireSameOrigin`（Origin 校验）。
+  **新增任何会改状态的 POST/DELETE 路由时，先问一句有没有挂 `requireSameOrigin`。**
+- **涉及链上转账的页面，转账前必须校验钱包的 `eth_chainId`**：
+  收款地址在不同链上是不同账本，用户在 BSC 往「以太坊地址」转 USDT，钱照样转出去但服务端
+  永远查不到——对用户就是钱没了。充值页因此会在 `eth_sendTransaction` 之前
+  `ensureChain()`：`wallet_switchEthereumChain`，钱包里没有这条链（错误码 4902）再
+  `wallet_addEthereumChain`（参数由 `buildChainAddParams()` 生成，RPC 用配置里那个）。
+  链名 / 原生币这些链上读不到的信息只能靠 `KNOWN_CHAINS` 内置表，加新链记得往里补。
+  链 ID **保存时一律以 RPC 实际返回的为准**（手填不一致会被更正并告警），读不到就留空，
+  此时前端不强制切换——宁可明说没保护，也不要假装保护过。
+  注意 `setRechargeConfig()` 会真的去连 RPC，有 `CHAIN_ID_TIMEOUT_MS` 超时兜底；
+  **测试里必须注入假 provider**，否则单测会联网。
+- **「读不到数据」不等于「数据为零」，降级要显式**：充值页读 ERC20 余额
+  （`readWalletBalance` / `GET /recharge/balance`）失败时显示「未能读取，不影响转账」并
+  **放行转账**，只有**明确读到且确实不足**才拦（`balanceRaw !== null && raw > balanceRaw`）。
+  RPC 抽风是运营事件，不许让用户充值不了。同理：地址非法 / decimals 缺失要报错或显式提示，
+  绝不返回 0 —— 显示成「余额 0」用户会以为自己没钱。
+  余额一律走**服务端配置的 RPC** 读，不用钱包自带 provider：钱包网络和收款链不一致时，
+  后者读到的是另一条链的余额，那是比「读不到」更危险的误导。
+  原生币不给「用全部余额」：转光了就没 gas，交易根本发不出去。
 - **`/mcp` 默认要求登录：未携带有效令牌返回 401 + `WWW-Authenticate`**（`MCP_DEMO_REQUIRE_AUTH`
   默认 `on`，设成 `off` 才恢复旧的匿名握手）。**不要改回永远 200** —— 那正是「客户端识别不了
   登录方式」的根因：客户端只有收到 401 才会去读 `resource_metadata` 并启动标准 OAuth 发现。
@@ -46,7 +78,8 @@
   ③ **绝不能**在 AS 元数据里声明 `client_id_metadata_document_supported`
   —— SDK 一见到它就走 CIMD，绕过我们的 DCR 端点。
 - **OAuth 状态一律走自包含加密票据（`src/oauth/tickets.ts`），不要改成「存起来再查」**：
-  多副本部署下 `persist.ts` 无锁无 CAS、数据按 `instanceId` 分片，副本 A 存的东西副本 B 查不到。
+  `persist.ts` 无锁无 CAS（并发写会互相覆盖）、`settings.json` 每个进程只读一次，
+  存进去的东西下次不一定读得到。
   票据用 HKDF 从 `JWT_SECRET` 派生密钥（不复用 HMAC 的），并用 AES-GCM 的 AAD 绑定用途
   （`dcr` / `code`），防止一枚 client_id 票据被当成授权码去换令牌。
 - **改了 OAuth 相关代码后必须同时跑 `npm test` 和 `npm run oauth:e2e`**。后者用官方 SDK 的
@@ -65,6 +98,19 @@
 - **`/setup` 是免登录的接入说明页，页面里绝不能出现任何令牌**（它是直接转发给新用户的）。
   同理首页 `/` 的配置块也只能用不含令牌的 `publicMcpConfigJson()`。
   `test/setup-page.test.ts` 用 `mcp_demo_` 正则锁住了这一点，改这两处后必须跑。
+- **存储层用 SQLite + Sequelize（`src/db.ts`），不要回到「多副本 / 分片」设计**。
+  所有数据集落在 `data/mcp-demo.sqlite` 单一文件（users / billing / recharge_records /
+  recharge_settings / github_settings / stats 六张表），启动期 `initDb()` 自动建表、`loadAllStores()`
+  预热内存态，旧 JSON 数据在首次启动自动导入并归档到 `data/_migrated_json/`。
+  不要再搞 `instanceId` 后缀、按进程拆分文件名、启动合并分片这类东西；页面与接口文案里
+  也不要再写「本实例视角 / 数据不跨副本共享」之类的说明。
+- **sqlite3 是原生模块，部署机器若 `npm install` 编译失败**（常见于 node-gyp 拉不到 node 头文件，
+  如 nodejs.org 被墙）：用 `npm_config_nodedir=<本机 node 头文件目录> npm install sqlite3 --build-from-source`
+  指向本地头文件即可，无需联网编译。
+- **保存配置时不要因为外部依赖不可用就整单拒绝**。曾经 ERC20 元数据读不到就拒绝落盘，
+  结果 RPC 一抽风（如 `eth.llamarpc.com` 返回 525）管理员连收款地址都存不进去。
+  正确做法：**照常保存 + 页面告警 + 提供「重新读取」与手工填写兜底**，
+  只在真正影响资金安全的环节拦截（例如 decimals 缺失时拒绝入账，绝不默认 18 去猜）。
 - **所有 HTML 插值必须过 `esc()`**（src/web/layout.ts），包括属性位置。
   用户名来自用户输入，历史上这里出过 XSS。
 - **所有 async Express 路由必须用 `wrap()` 包一层**。Express 4 不捕获 async 的 rejection，

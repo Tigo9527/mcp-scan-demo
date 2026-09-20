@@ -12,7 +12,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { Server } from 'node:http';
 import { createApp } from '../src/web/app.js';
-import { configure } from '../src/persist.js';
+import { configure } from '../src/db.js';
 import * as auth from '../src/auth/manager.js';
 import * as store from '../src/auth/store.js';
 import { canonicalResourceUri, MCP_PATH } from '../src/oauth/metadata.js';
@@ -880,5 +880,121 @@ describe('通过账号密码注册完成 MCP 授权', () => {
     const html = await res.text();
     expect(html).toContain('name="authorize"');
     expect(html).not.toContain('正在跳回客户端');
+  });
+});
+
+// ---------------- 授权回调在「登录失败 → 注册 / 再登录」路径下不丢失 ----------------
+
+describe('授权回调在「登录失败 → 注册 / 再登录」路径下不丢失', () => {
+  function extractAuthorizeTicketFromRegisterLink(html: string): string {
+    const m = /\/register\?authorize=([^"&]+)/.exec(html);
+    expect(m, `授权页应含带 authorize 票据的注册链接，实际：${html.slice(0, 300)}`).toBeTruthy();
+    return decodeEntities(m![1]);
+  }
+
+  it('口令错误回到登录页后，注册链接仍带非空 authorize 票据', async () => {
+    const reg = await registerClient([REDIRECT], 'lost-cb-client');
+    const client = (await reg.json()) as { client_id: string };
+    const { challenge } = pkce();
+    const page = await fetch(
+      authorizeUrl({ clientId: client.client_id, redirectUri: REDIRECT, challenge }),
+      { redirect: 'manual' },
+    );
+    const hidden = hiddenInputs(await page.text());
+    const res = await fetch(`${base}/oauth/authorize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ ...hidden, username: USERNAME, password: 'wrong-password' }).toString(),
+      redirect: 'manual',
+    });
+    expect(res.status).toBe(401);
+    const ticket = extractAuthorizeTicketFromRegisterLink(await res.text());
+    expect(ticket.length).toBeGreaterThan(0);
+  });
+
+  it('先登录失败、再从错误页注册 → 仍能完成授权回跳（code 可换令牌）', async () => {
+    const reg = await registerClient([REDIRECT], 'lost-cb-reg');
+    const client = (await reg.json()) as { client_id: string };
+    const { verifier, challenge } = pkce();
+    const page = await fetch(
+      authorizeUrl({ clientId: client.client_id, redirectUri: REDIRECT, challenge, state: 'lc-state' }),
+      { redirect: 'manual' },
+    );
+    const hidden = hiddenInputs(await page.text());
+    const errRes = await fetch(`${base}/oauth/authorize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ ...hidden, username: USERNAME, password: 'wrong-password' }).toString(),
+      redirect: 'manual',
+    });
+    const ticket = extractAuthorizeTicketFromRegisterLink(await errRes.text());
+    expect(ticket.length).toBeGreaterThan(0);
+
+    const username = `lostcb_user_${randomUUID().slice(0, 8)}`;
+    const res = await fetch(`${base}/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ username, password: PASSWORD, authorize: ticket }).toString(),
+      redirect: 'manual',
+    });
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('正在跳回客户端');
+    const callbackUrl = extractCallback(html);
+    const loc = new URL(callbackUrl);
+    expect(`${loc.origin}${loc.pathname}`).toBe(REDIRECT);
+    expect(loc.searchParams.get('state')).toBe('lc-state');
+    const code = loc.searchParams.get('code');
+    expect(code).toBeTruthy();
+
+    const tok = await exchange({
+      grant_type: 'authorization_code',
+      code: code!,
+      client_id: client.client_id,
+      redirect_uri: REDIRECT,
+      code_verifier: verifier,
+      resource: canonicalResourceUri(base),
+    });
+    expect(tok.status).toBe(200);
+    expect(((await tok.json()) as { access_token: string }).access_token).toMatch(/^mcp_demo_/);
+  });
+
+  it('独立 /login 带 authorize 票据 → 登录成功即回跳客户端', async () => {
+    const reg = await registerClient([REDIRECT], 'lost-cb-login');
+    const client = (await reg.json()) as { client_id: string };
+    const { verifier, challenge } = pkce();
+    const page = await fetch(
+      authorizeUrl({ clientId: client.client_id, redirectUri: REDIRECT, challenge, state: 'lc-login-state' }),
+      { redirect: 'manual' },
+    );
+    const ticket = extractAuthorizeTicketFromRegisterLink(await page.text());
+    expect(ticket.length).toBeGreaterThan(0);
+
+    const res = await fetch(`${base}/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ username: USERNAME, password: PASSWORD, authorize: ticket }).toString(),
+      redirect: 'manual',
+    });
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('正在跳回客户端');
+    const callbackUrl = extractCallback(html);
+    const loc = new URL(callbackUrl);
+    expect(`${loc.origin}${loc.pathname}`).toBe(REDIRECT);
+    expect(loc.searchParams.get('state')).toBe('lc-login-state');
+    const code = loc.searchParams.get('code');
+    expect(code).toBeTruthy();
+
+    const tok = await exchange({
+      grant_type: 'authorization_code',
+      code: code!,
+      client_id: client.client_id,
+      redirect_uri: REDIRECT,
+      code_verifier: verifier,
+      resource: canonicalResourceUri(base),
+    });
+    expect(tok.status).toBe(200);
+    expect(((await tok.json()) as { access_token: string }).access_token).toMatch(/^mcp_demo_/);
   });
 });

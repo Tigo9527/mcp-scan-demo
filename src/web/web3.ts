@@ -11,7 +11,7 @@
  * 不带时维持原行为：返回令牌，由前端跳到 /web3?token=... 结果页。
  */
 import { Router, type Request, type Response } from 'express';
-import { allowPublicCors, deriveBase, wrap } from './http.js';
+import { allowPublicCors, deriveBase, setUserTokenCookie, wrap } from './http.js';
 import { AuthError } from '../auth/manager.js';
 import * as web3 from '../auth/web3.js';
 import { completeAuthorizeFromTicket } from '../oauth/complete.js';
@@ -66,6 +66,8 @@ export function createWeb3Router(): Router {
       }
       try {
         const result = web3.verifyWeb3Signature(address, signature);
+        // 钱包登录同样落会话 Cookie，之后进 /profile、/recharge 自动保持登录
+        setUserTokenCookie(req, res, result.token);
         // OAuth 授权流程：签发授权码并回跳发起方（与账号密码 / GitHub 登录共用最后一跳）
         const oauthHtml = completeAuthorizeFromTicket(result, deriveBase(req), authorize);
         if (oauthHtml) {

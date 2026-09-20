@@ -12,7 +12,7 @@
  * 必须区分，否则 admin 永远无法把已配好的 GitHub 登录关掉。
  */
 import { config } from './config.js';
-import { loadJsonSync, scheduleSave } from './persist.js';
+import { dbEnabled, loadGithubSettings, saveGithubSettings, scheduleDbWrite } from './db.js';
 
 export interface GithubSettings {
   clientId?: string;
@@ -33,7 +33,7 @@ export interface EffectiveGithubSettings {
   source: 'env' | 'admin';
 }
 
-/** GitHub 配置是全局项（OAuth 回调落到任一副本都必须一致），故不按实例分片 */
+/** GitHub 配置是全局项（`settings.json`，一份即可） */
 const FILE = 'settings';
 
 let loaded = false;
@@ -42,13 +42,19 @@ let current: GithubSettings = {};
 function ensure(): GithubSettings {
   if (!loaded) {
     loaded = true;
-    current = loadJsonSync<GithubSettings>(FILE, {}) ?? {};
+    // 启用 DB 时，内存数据由 reloadGithubFromDb() 在启动期预热；此处不读库。
   }
   return current;
 }
 
+/** 从 SQLite 重新加载 GitHub 设置到内存（启动预热 + 测试里重启模拟用）。 */
+export async function reloadGithubFromDb(): Promise<void> {
+  current = dbEnabled() ? (await loadGithubSettings()) ?? {} : {};
+  loaded = true;
+}
+
 function persist(): void {
-  scheduleSave(FILE, () => ({ ...current }));
+  scheduleDbWrite(FILE, () => saveGithubSettings({ ...current }));
 }
 
 /** 原始存储值（admin 表单回填用）。 */

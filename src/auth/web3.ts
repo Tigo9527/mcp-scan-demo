@@ -12,7 +12,7 @@
  *   - 后端用服务端保存的 nonce 重建 `message` 再验签，绝不信任客户端传来的 message；
  *   - 仅比对恢复出的地址与请求地址（大小写不敏感），不依赖任何客户端声明。
  *
- * 注意：`nonce` 存于内存（Map），多副本不共享 —— 演示场景足够；生产应换成
+ * 注意：`nonce` 存于内存（Map），进程重启即丢失 —— 演示场景足够；生产应换成
  * 带 TTL 的共享存储（Redis）或把 nonce 做成服务端签名令牌（stateless）。
  */
 import { randomBytes } from 'node:crypto';

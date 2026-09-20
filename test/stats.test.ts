@@ -8,7 +8,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vites
 import type { Server } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { createApp } from '../src/web/app.js';
-import { configure } from '../src/persist.js';
+import { configure } from '../src/db.js';
 import { diffStats, getStatsSnapshot, resetStats } from '../src/stats.js';
 import * as store from '../src/auth/store.js';
 import { issueTokenForId } from '../src/auth/manager.js';
@@ -163,7 +163,7 @@ describe('MCP 调用统计', () => {
     expect(b.counters.requests).not.toBe(99999);
   });
 
-  it('跨副本物化：用其它实例签发的令牌调用后，本实例能补全该用户', async () => {
+  it('按需落库：用 admin 签发的令牌调用后，用户会被补进存储', async () => {
     const remoteId = randomUUID();
     const { token } = issueTokenForId(remoteId, 'remote_user');
     expect(store.getUser(remoteId)).toBeUndefined();
@@ -181,7 +181,7 @@ describe('用户 Profile 页面', () => {
   it('未携带令牌时提示去注册', async () => {
     const res = await fetch(`${base}/profile`);
     const html = await res.text();
-    expect(html).toContain('未提供有效令牌');
+    expect(html).toContain('你还没登录');
     expect(html).toContain('/register');
   });
 

@@ -11,7 +11,7 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import type { Server } from 'node:http';
 import { createApp, publicMcpConfigJson } from '../src/web/app.js';
 import { copyBlock } from '../src/web/layout.js';
-import { configure } from '../src/persist.js';
+import { configure } from '../src/db.js';
 
 let server: Server;
 let base: string;

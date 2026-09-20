@@ -13,8 +13,7 @@
  * 内存增长防护：byUser 按 userId 分桶并设上限（按 lastSeenAt 淘汰）、
  * byDay 只保留最近 90 天、recent 用固定长度环形缓冲。
  */
-import { config } from './config.js';
-import { loadJsonSync, scheduleSave } from './persist.js';
+import { dbEnabled, loadStats, saveStats, scheduleDbWrite } from './db.js';
 
 const RECENT_MAX = 200;
 const BY_USER_MAX = 500;
@@ -50,7 +49,6 @@ export interface RecentCall {
 }
 
 export interface StatsSnapshot {
-  instanceId: string;
   /** 统计起点 */
   since: string;
   counters: {
@@ -85,14 +83,13 @@ export interface RpcMessageLike {
   error?: unknown;
 }
 
-const FILE = `stats-${config.instanceId}`;
+const FILE = 'stats';
 
 let loaded = false;
 let state: StatsSnapshot = emptyState();
 
 function emptyState(): StatsSnapshot {
   return {
-    instanceId: config.instanceId,
     since: new Date().toISOString(),
     counters: { requests: 0, toolCalls: 0, errors: 0 },
     byMethod: {},
@@ -109,29 +106,38 @@ let recentIdx = 0;
 function ensureLoaded(): void {
   if (loaded) return;
   loaded = true;
-  const saved = loadJsonSync<StatsSnapshot | null>(FILE, null);
-  if (saved && typeof saved === 'object' && saved.counters) {
-    state = {
-      ...emptyState(),
-      ...saved,
-      instanceId: config.instanceId,
-      counters: { ...emptyState().counters, ...saved.counters },
-      byMethod: saved.byMethod ?? {},
-      byTool: saved.byTool ?? {},
-      byUser: saved.byUser ?? {},
-      byDay: saved.byDay ?? {},
-      recent: Array.isArray(saved.recent) ? saved.recent.slice(-RECENT_MAX) : [],
-    };
-    recentIdx = state.recent.length % RECENT_MAX;
-    // 兼容旧版本落盘数据（可能缺 days 字段）
-    for (const [k, v] of Object.entries(state.byUser)) {
-      state.byUser[k] = { ...v, days: v.days ?? {} };
+  // 启用 DB 时，内存数据由 reloadStatsFromDb() 在启动期预热；这里保持同步、不读库。
+}
+
+/** 从 SQLite 重新加载统计快照到内存（启动预热 + 测试里重启模拟用）。 */
+export async function reloadStatsFromDb(): Promise<void> {
+  if (dbEnabled()) {
+    const loaded2 = await loadStats();
+    if (loaded2 && loaded2.snapshot && loaded2.snapshot.counters) {
+      state = {
+        ...emptyState(),
+        ...loaded2.snapshot,
+        counters: { ...emptyState().counters, ...loaded2.snapshot.counters },
+        byMethod: loaded2.snapshot.byMethod ?? {},
+        byTool: loaded2.snapshot.byTool ?? {},
+        byDay: loaded2.snapshot.byDay ?? {},
+        recent: Array.isArray(loaded2.snapshot.recent) ? loaded2.snapshot.recent.slice(-RECENT_MAX) : [],
+      };
+      recentIdx = loaded2.recentIdx % RECENT_MAX;
+      for (const [k, v] of Object.entries(state.byUser)) {
+        state.byUser[k] = { ...v, days: v.days ?? {} };
+      }
+      loaded = true;
+      return;
     }
   }
+  state = emptyState();
+  recentIdx = 0;
+  loaded = true;
 }
 
 function markDirty(): void {
-  scheduleSave(FILE, () => structuredClone(state));
+  scheduleDbWrite(FILE, () => saveStats(state, recentIdx));
 }
 
 function dayKey(ts: number): string {
