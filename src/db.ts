@@ -10,6 +10,8 @@
  * - `MCP_DEMO_PERSIST=0` 或 `configureDb({ enabled: false })` 会关停 DB：模块退回纯内存态，
  *   测试期间即此模式（不落库、不连 sqlite），行为与旧 `enabled:false` 一致。
  * - 永不抛出：写库失败只记录 lastError，绝不因为落盘问题让服务崩溃。
+ * - 双方言：默认 `sqlite`；设 `STORAGE_DRIVER=mysql` 可切换为 MySQL（Sequelize 方言切换，
+ *   模型无需改动）。MySQL 连接优先读 `MYSQL_URL`，否则读 `MYSQL_HOST/PORT/USER/PASSWORD/DATABASE`。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -39,10 +41,70 @@ function resolveDataDir(): string {
   return overrides.dataDir ?? process.env.DATA_DIR ?? config.dataDir;
 }
 
+// ---------------------------------------------------------------- 方言选择（sqlite / mysql）
+
+export type StorageDriver = 'sqlite' | 'mysql';
+
+/** 当前存储方言：默认 sqlite，可由 `STORAGE_DRIVER` 环境变量切换为 mysql。 */
+function resolveDriver(): StorageDriver {
+  const v = (process.env.STORAGE_DRIVER ?? 'sqlite').trim().toLowerCase();
+  return v === 'mysql' ? 'mysql' : 'sqlite';
+}
+
+export interface MySqlOptions {
+  url?: string;
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database: string;
+}
+
+/** 解析 MySQL 连接参数：优先 `MYSQL_URL`（完整连接串），否则读各分项（带默认值）。 */
+export function resolveMysqlOptions(): MySqlOptions {
+  const url = process.env.MYSQL_URL?.trim() || undefined;
+  return {
+    url,
+    host: process.env.MYSQL_HOST?.trim() || '127.0.0.1',
+    port: Number(process.env.MYSQL_PORT ?? '3306') || 3306,
+    user: process.env.MYSQL_USER?.trim() || 'root',
+    password: process.env.MYSQL_PASSWORD?.trim() ?? '',
+    database: process.env.MYSQL_DATABASE?.trim() || 'mcp_demo',
+  };
+}
+
+/** 把解析出的方言 / 连接参数转成 Sequelize 构造选项（不建立连接），便于测试断言。 */
+export function resolveSequelizeOptions(driver: StorageDriver): Record<string, unknown> {
+  if (driver === 'mysql') {
+    const o = resolveMysqlOptions();
+    if (o.url) return { dialect: 'mysql', url: o.url, logging: false };
+    return {
+      dialect: 'mysql',
+      host: o.host,
+      port: o.port,
+      username: o.user,
+      password: o.password,
+      database: o.database,
+      logging: false,
+    };
+  }
+  return { dialect: 'sqlite', logging: false };
+}
+
+/** 人类可读的存储位置描述（sqlite 为文件路径，mysql 为 host/db，不含口令）。 */
+function describeStorage(): string {
+  if (driverKind === 'mysql') {
+    const o = resolveMysqlOptions();
+    return `mysql://${o.host}:${o.port}/${o.database}`;
+  }
+  return storagePath || resolveDataDir();
+}
+
 // ---------------------------------------------------------------- Sequelize 实例与模型
 
 let sequelize: Sequelize | null = null;
 let storagePath = '';
+let driverKind: StorageDriver = 'sqlite';
 let saves = 0;
 let lastError: string | null = null;
 
@@ -51,7 +113,7 @@ export function dbEnabled(): boolean {
 }
 
 export function getStoragePath(): string {
-  return storagePath;
+  return describeStorage();
 }
 
 export class UserModel extends Model {}
@@ -443,17 +505,45 @@ function archiveLegacyJson(dir: string): void {
 }
 
 /**
- * 连接并初始化数据库。仅在 `enabled` 时连 sqlite；否则置空（模块退回纯内存）。
- * 可在同进程内多次调用（测试：不同 dataDir 重建实例），会自动关掉上一个连接。
+ * 连接并初始化数据库。仅在 `enabled` 时连库（sqlite 或 mysql，由 `STORAGE_DRIVER` 决定）；
+ * 否则置空（模块退回纯内存）。可在同进程内多次调用（测试：不同 dataDir 重建实例），
+ * 会自动关掉上一个连接。
  */
 export async function initDb(opts: Overrides = {}): Promise<void> {
   overrides = { ...overrides, ...opts };
   if (!isEnabled()) {
     await closeDb();
+    driverKind = resolveDriver();
     return;
   }
 
   await closeDb();
+  driverKind = resolveDriver();
+
+  if (driverKind === 'mysql') {
+    const o = resolveMysqlOptions();
+    if (o.url) {
+      sequelize = new Sequelize(o.url, { dialect: 'mysql', logging: false });
+    } else {
+      sequelize = new Sequelize({
+        dialect: 'mysql',
+        host: o.host,
+        port: o.port,
+        username: o.user,
+        password: o.password,
+        database: o.database,
+        logging: false,
+      });
+    }
+    defineModels(sequelize);
+    await sequelize.authenticate();
+    await sequelize.sync();
+    saves = 0;
+    lastError = null;
+    return;
+  }
+
+  // 默认：sqlite
   const dir = resolveDataDir();
   storagePath = path.join(dir, 'mcp-demo.sqlite');
   await fs.promises.mkdir(dir, { recursive: true });
@@ -643,8 +733,8 @@ export interface DbStatus {
 export function persistStatus(): DbStatus {
   return {
     enabled: dbEnabled(),
-    db: 'sqlite',
-    storage: storagePath || resolveDataDir(),
+    db: driverKind,
+    storage: describeStorage(),
     writable: lastError === null,
     saves,
     lastError,
