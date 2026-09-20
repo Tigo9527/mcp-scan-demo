@@ -565,6 +565,8 @@ export async function initDb(opts: Overrides = {}): Promise<void> {
     // 受保护的遗留数据导入：仅当各表为空时，才从 DATA_DIR 下的旧 JSON 导入，
     // 避免「指向 MySQL 却以空库静默启动」。注意 sqlite→mysql 的库内迁移不在此自动完成。
     await migrateLegacyJson(resolveDataDir());
+    // 导入完成后把旧 JSON 移出（与 sqlite 分支一致），防止日后清空某表后重启又重放陈旧数据。
+    archiveLegacyJson(resolveDataDir());
     saves = 0;
     lastError = null;
     return;

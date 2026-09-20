@@ -10,10 +10,24 @@ import {
   configureDb,
   flushDb,
   initDb,
+  loadBilling,
+  loadGithubSettings,
+  loadRechargeRecords,
+  loadRechargeSettings,
+  loadStats,
   persistStatus,
   resolveMysqlOptions,
   resolveSequelizeOptions,
+  saveBilling,
+  saveGithubSettings,
+  saveRechargeRecords,
+  saveRechargeSettings,
+  saveStats,
 } from '../src/db.js';
+import type { GithubSettings } from '../src/settings.js';
+import type { RechargeConfig, RechargeRecord } from '../src/recharge.js';
+import type { StatsSnapshot } from '../src/stats.js';
+import type { UserBilling } from '../src/billing.js';
 import * as store from '../src/auth/store.js';
 
 const RUN_LIVE = process.env.RUN_MYSQL_TESTS === '1';
@@ -128,14 +142,73 @@ describe.runIf(RUN_LIVE && isDisposableTestDb())(
   () => {
   beforeEach(() => configureDb({ enabled: true }));
 
-  it('连 MySQL 后落库、清内存再加载，账号仍在', async () => {
+  it('连 MySQL 后各存储（users/billing/recharge/settings/stats）落库并回读', async () => {
     process.env.STORAGE_DRIVER = 'mysql';
     await initDb({ enabled: true });
+
+    // users（集成路径：store → flushDb → reload）
     store.__resetForTest();
     store.createUser({ username: 'mysql_u1', email: null, provider: 'local' });
     await flushDb();
     store.__resetForTest();
     await store.reloadUsersFromDb();
     expect(store.countUsers()).toBeGreaterThanOrEqual(1);
+
+    // billing（事务整表替换）
+    const billingState: Record<string, UserBilling> = {
+      acct1: { userId: 'acct1', used: 5, balance: 100, recharged: 50, firstSeenAt: '', lastSeenAt: '' },
+    };
+    await saveBilling(billingState);
+    expect((await loadBilling()).acct1?.balance).toBe(100);
+
+    // recharge settings（upsert）
+    const rc: RechargeConfig = {
+      recipient: '0xabcdef0000000000000000000000000000000001',
+      rpcUrl: 'https://example.test',
+      rate: 1000,
+      tokenAddress: '0x2222222222222222222222222222222222222222',
+      chainId: '0x1',
+      tokenName: 'Tether',
+      tokenSymbol: 'USDT',
+      tokenDecimals: 6,
+    };
+    await saveRechargeSettings(rc);
+    expect((await loadRechargeSettings())?.tokenSymbol).toBe('USDT');
+
+    // recharge records（事务整表替换）
+    const rec: RechargeRecord = {
+      id: 'r_' + Date.now(),
+      txHash: '0xdeadbeef',
+      userId: 'acct1',
+      username: 'mysql_u1',
+      kind: 'native',
+      token: 'CFX',
+      amount: '1',
+      rawAmount: '1000000000000000000',
+      points: 1000,
+      rate: 1000,
+      status: 'confirmed',
+      createdAt: '',
+    };
+    await saveRechargeRecords([rec]);
+    expect((await loadRechargeRecords()).some((r) => r.id === rec.id)).toBe(true);
+
+    // github settings（upsert）
+    const gh: GithubSettings = { clientId: 'cid', clientSecret: 'csec', redirectUri: 'https://cb', scope: 'read:user' };
+    await saveGithubSettings(gh);
+    expect((await loadGithubSettings())?.clientId).toBe('cid');
+
+    // stats（upsert）
+    const snap: StatsSnapshot = {
+      since: '',
+      counters: { requests: 1, toolCalls: 1, errors: 0 },
+      byMethod: {},
+      byTool: {},
+      byUser: {},
+      byDay: {},
+      recent: [],
+    };
+    await saveStats(snap, 0);
+    expect((await loadStats())?.snapshot.counters.requests).toBe(1);
   });
 });
