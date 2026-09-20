@@ -13,7 +13,7 @@ import * as billing from '../src/billing.js';
 import * as stats from '../src/stats.js';
 import * as recharge from '../src/recharge.js';
 import * as settings from '../src/settings.js';
-import { closeDb, configureDb, flushDb, initDb, saveUsers } from '../src/db.js';
+import { archiveLegacyJson, closeDb, configureDb, flushDb, initDb, saveUsers } from '../src/db.js';
 
 async function freshDb(): Promise<string> {
   const dir = mkdtempSync(join(tmpdir(), 'mcp-sqlite-'));
@@ -183,6 +183,36 @@ describe('整表替换的事务安全（destroy+bulkCreate 必须原子）', () 
     store.__resetForTest();
     await store.reloadUsersFromDb();
     expect(store.countUsers()).toBe(2);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('archiveLegacyJson 只归档真正导入过的数据集', () => {
+  it('传 keys 时只移走指定文件，跳过的文件保留原处', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcp-arch-'));
+    writeFileSync(join(dir, 'users.json'), '{}');
+    writeFileSync(join(dir, 'settings.json'), '{}');
+    writeFileSync(join(dir, 'stats.json'), '{}');
+    // 仅 settings / stats 被导入过 → 只有它们被移走，users.json 保留（表非空被跳过的场景）
+    archiveLegacyJson(dir, ['settings', 'stats']);
+    expect(existsSync(join(dir, 'users.json'))).toBe(true);
+    expect(existsSync(join(dir, '_migrated_json', 'settings.json'))).toBe(true);
+    expect(existsSync(join(dir, '_migrated_json', 'stats.json'))).toBe(true);
+    // .bak 也一并处理
+    writeFileSync(join(dir, 'recharge.json.bak'), '{}');
+    archiveLegacyJson(dir, ['recharge']);
+    expect(existsSync(join(dir, '_migrated_json', 'recharge.json.bak'))).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('不传 keys 时移动全部（sqlite 新建库场景）', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcp-arch-'));
+    writeFileSync(join(dir, 'users.json'), '{}');
+    writeFileSync(join(dir, 'billing.json'), '{}');
+    archiveLegacyJson(dir);
+    expect(existsSync(join(dir, 'users.json'))).toBe(false);
+    expect(existsSync(join(dir, '_migrated_json', 'users.json'))).toBe(true);
+    expect(existsSync(join(dir, '_migrated_json', 'billing.json'))).toBe(true);
     rmSync(dir, { recursive: true, force: true });
   });
 });

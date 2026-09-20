@@ -445,8 +445,13 @@ export function configureDb(next: Overrides): void {
   overrides = { ...overrides, ...next };
 }
 
-/** 旧 JSON 数据自动导入：仅当对应表为空时才导入，保证幂等（重复启动不重复导入）。 */
-async function migrateLegacyJson(dir: string): Promise<void> {
+/**
+ * 旧 JSON 数据自动导入：仅当对应表为空时才导入，保证幂等（重复启动不重复导入）。
+ * 返回实际已导入的数据集 base 名（如 'users'），供 archiveLegacyJson 只归档真正导入过的文件，
+ * 避免「表非空而跳过某文件、却仍把它移走」导致遗漏的用户/配置丢失。
+ */
+async function migrateLegacyJson(dir: string): Promise<string[]> {
+  const imported: string[] = [];
   const readJson = (name: string): unknown => {
     try {
       const p = path.join(dir, name);
@@ -460,7 +465,10 @@ async function migrateLegacyJson(dir: string): Promise<void> {
   if ((await UserModel.count()) === 0) {
     const data = readJson('users.json') as { users?: User[] } | undefined;
     const users = (data?.users ?? []).filter((u) => u?.id && u?.username);
-    if (users.length) await UserModel.bulkCreate(users.map(toUserRow));
+    if (users.length) {
+      await UserModel.bulkCreate(users.map(toUserRow));
+      imported.push('users');
+    }
   }
 
   if ((await BillingModel.count()) === 0) {
@@ -470,24 +478,34 @@ async function migrateLegacyJson(dir: string): Promise<void> {
       if (!v || typeof v !== 'object') continue;
       rows.push(toBillingRow(k, v));
     }
-    if (rows.length) await BillingModel.bulkCreate(rows);
+    if (rows.length) {
+      await BillingModel.bulkCreate(rows);
+      imported.push('billing');
+    }
   }
 
   if ((await RechargeRecordModel.count()) === 0) {
     const data = readJson('recharge.json') as RechargeRecord[] | undefined;
     const rows = (Array.isArray(data) ? data : []).filter((r) => r && typeof r === 'object');
-    if (rows.length) await RechargeRecordModel.bulkCreate(rows.map(toRecordRow));
+    if (rows.length) {
+      await RechargeRecordModel.bulkCreate(rows.map(toRecordRow));
+      imported.push('recharge');
+    }
   }
 
   if ((await RechargeSettingModel.count()) === 0) {
     const data = readJson('recharge-settings.json') as RechargeConfig | undefined;
-    if (data && data.recipient) await RechargeSettingModel.create(toSettingsRow(data));
+    if (data && data.recipient) {
+      await RechargeSettingModel.create(toSettingsRow(data));
+      imported.push('recharge-settings');
+    }
   }
 
   if ((await GithubSettingModel.count()) === 0) {
     const data = readJson('settings.json') as GithubSettings | undefined;
     if (data && (data.clientId !== undefined || data.clientSecret !== undefined)) {
       await GithubSettingModel.create(toGithubRow(data));
+      imported.push('settings');
     }
   }
 
@@ -495,26 +513,26 @@ async function migrateLegacyJson(dir: string): Promise<void> {
     const data = readJson('stats.json') as StatsSnapshot | undefined;
     if (data && data.counters) {
       await StatsModel.create(toStatsRow(data, (data.recent?.length ?? 0) % 200));
+      imported.push('stats');
     }
   }
+
+  return imported;
 }
 
-/** 把已迁移的遗留 JSON 移出 data/，保持目录里只有 .sqlite。失败不阻塞。 */
-function archiveLegacyJson(dir: string): void {
-  const names = [
-    'users.json',
-    'billing.json',
-    'recharge.json',
-    'recharge-settings.json',
-    'settings.json',
-    'stats.json',
-    'users.json.bak',
-    'billing.json.bak',
-    'recharge.json.bak',
-    'recharge-settings.json.bak',
-    'settings.json.bak',
-    'stats.json.bak',
-  ];
+/**
+ * 把已迁移的遗留 JSON 移出 data/，保持目录干净。失败不阻塞。
+ * - 不传 keys：移动全部（sqlite 新建库场景，所有表均为空且都已导入）；
+ * - 传 keys：只移动真正导入过的数据集（mysql 场景：表非空而跳过的文件不被误删/误移）。
+ */
+export function archiveLegacyJson(dir: string, keys?: string[]): void {
+  const bases = ['users', 'billing', 'recharge', 'recharge-settings', 'settings', 'stats'];
+  const names: string[] = [];
+  for (const b of bases) {
+    if (keys && !keys.includes(b)) continue;
+    names.push(`${b}.json`);
+    names.push(`${b}.json.bak`);
+  }
   const dest = path.join(dir, '_migrated_json');
   for (const n of names) {
     const src = path.join(dir, n);
@@ -564,9 +582,10 @@ export async function initDb(opts: Overrides = {}): Promise<void> {
     await sequelize.sync();
     // 受保护的遗留数据导入：仅当各表为空时，才从 DATA_DIR 下的旧 JSON 导入，
     // 避免「指向 MySQL 却以空库静默启动」。注意 sqlite→mysql 的库内迁移不在此自动完成。
-    await migrateLegacyJson(resolveDataDir());
-    // 导入完成后把旧 JSON 移出（与 sqlite 分支一致），防止日后清空某表后重启又重放陈旧数据。
-    archiveLegacyJson(resolveDataDir());
+    const imported = await migrateLegacyJson(resolveDataDir());
+    // 只归档真正导入过的数据集：表非空而跳过的文件（可能含额外用户/配置）保留原处待手动迁移，
+    // 防止日后清空某表后重启又重放陈旧数据。
+    archiveLegacyJson(resolveDataDir(), imported);
     saves = 0;
     lastError = null;
     return;
