@@ -98,8 +98,30 @@ export const listLatestTransactionsSchema = z.object({
     .describe('跳过的最新交易记录条数'),
 });
 
+/** ConfluxScan「全网转账流」(v1/transfer) 参数。 */
+export const listTransfersSchema = z.object({
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .default(10)
+    .describe('返回的最大转账记录条数，1 ~ 100'),
+  skip: z
+    .number()
+    .int()
+    .nonnegative()
+    .default(0)
+    .describe('跳过的转账记录条数'),
+  transferType: z
+    .enum(['CFX', 'CRC20', 'CRC721', 'CRC1155'])
+    .default('CFX')
+    .describe('转账类型：CFX（原生币）/ CRC20 / CRC721 / CRC1155（代币）'),
+});
+
 export type ListCfxTransfersInput = z.input<typeof listCfxTransfersSchema>;
 export type ListLatestTransactionsInput = z.input<typeof listLatestTransactionsSchema>;
+export type ListTransfersInput = z.input<typeof listTransfersSchema>;
 
 /** 统一解析 ConfluxScan 响应：非 2xx 或业务 code !== 0 都抛错。 */
 async function request(url: string): Promise<ConfluxScanResponse> {
@@ -159,6 +181,21 @@ export async function listLatestTransactions(
   const url = new URL('v1/transaction', baseUrl);
   url.searchParams.set('limit', String(params.limit));
   url.searchParams.set('skip', String(params.skip));
+
+  return request(url.toString());
+}
+
+/** 列出 ConfluxScan 全网（指定 transferType 的）最新转账记录。 */
+export async function listTransfers(input: ListTransfersInput): Promise<ConfluxScanResponse> {
+  const params = listTransfersSchema.parse(input);
+  // 默认 testnet（ConfluxScan 的 v1/transfer 浏览器 API 在 testnet 子域最常用）；
+  // 查主网时把 CONFLUXSCAN_TRANSFER_API_URL 设为 https://www.confluxscan.org 即可。
+  const apiBaseUrl = process.env.CONFLUXSCAN_TRANSFER_API_URL ?? 'https://testnet.confluxscan.org';
+  const baseUrl = apiBaseUrl.endsWith('/') ? apiBaseUrl : `${apiBaseUrl}/`;
+  const url = new URL('v1/transfer', baseUrl);
+  url.searchParams.set('limit', String(params.limit));
+  url.searchParams.set('skip', String(params.skip));
+  url.searchParams.set('transferType', params.transferType);
 
   return request(url.toString());
 }
