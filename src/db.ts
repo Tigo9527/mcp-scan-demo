@@ -230,12 +230,14 @@ function defineModels(seq: Sequelize): void {
     {
       id: { type: DataTypes.INTEGER, primaryKey: true, defaultValue: 1 },
       since: { type: DataTypes.STRING, allowNull: true },
-      counters: { type: DataTypes.TEXT, allowNull: true },
-      byMethod: { type: DataTypes.TEXT, allowNull: true },
-      byTool: { type: DataTypes.TEXT, allowNull: true },
-      byUser: { type: DataTypes.TEXT, allowNull: true },
-      byDay: { type: DataTypes.TEXT, allowNull: true },
-      recent: { type: DataTypes.TEXT, allowNull: true },
+      // 序列化后的统计 JSON 可能超过 MySQL TEXT 的 64 KiB 上限（byUser/recent 在 500 用户 /
+      // 90 天 / 200 条近期 上限下会很大），故用 'long' → MySQL 的 LONGTEXT（SQLite 仍为 TEXT，均足够）。
+      counters: { type: DataTypes.TEXT('long'), allowNull: true },
+      byMethod: { type: DataTypes.TEXT('long'), allowNull: true },
+      byTool: { type: DataTypes.TEXT('long'), allowNull: true },
+      byUser: { type: DataTypes.TEXT('long'), allowNull: true },
+      byDay: { type: DataTypes.TEXT('long'), allowNull: true },
+      recent: { type: DataTypes.TEXT('long'), allowNull: true },
       recentIdx: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
     },
     { sequelize: seq, timestamps: false, modelName: 'stats', tableName: 'stats' },

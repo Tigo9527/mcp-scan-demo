@@ -198,17 +198,22 @@ describe.runIf(RUN_LIVE && isDisposableTestDb())(
     await saveGithubSettings(gh);
     expect((await loadGithubSettings())?.clientId).toBe('cid');
 
-    // stats（upsert）
+    // stats（upsert）—— 故意写入超过 MySQL TEXT 64KiB 上限的大体积，验证 LONGTEXT 列式足够
+    const bigByUser: Record<string, number> = {};
+    for (let i = 0; i < 4000; i++) bigByUser[`user_${i}`] = i;
+    const bigRecent = Array.from({ length: 800 }, (_, i) => ({ ts: String(i), tool: 't', user: `user_${i}` }));
     const snap: StatsSnapshot = {
       since: '',
-      counters: { requests: 1, toolCalls: 1, errors: 0 },
+      counters: { requests: 4000, toolCalls: 4000, errors: 0 },
       byMethod: {},
       byTool: {},
-      byUser: {},
+      byUser: bigByUser,
       byDay: {},
-      recent: [],
+      recent: bigRecent,
     };
-    await saveStats(snap, 0);
-    expect((await loadStats())?.snapshot.counters.requests).toBe(1);
+    await saveStats(snap, bigRecent.length % 200);
+    const loadedStats = await loadStats();
+    expect(loadedStats?.snapshot.counters.requests).toBe(4000);
+    expect(Object.keys(loadedStats?.snapshot.byUser ?? {}).length).toBe(4000);
   });
 });
