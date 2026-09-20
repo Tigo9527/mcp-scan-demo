@@ -17,6 +17,22 @@ import {
 import * as store from '../src/auth/store.js';
 
 const RUN_LIVE = process.env.RUN_MYSQL_TESTS === '1';
+
+/** 真实落库测试会调用 flushDb → saveUsers（整表销毁后重写），具有破坏性。
+ *  仅当目标库名以 `_test` 结尾时才允许运行，强制使用一次性/专用测试库，避免误清生产数据。 */
+function resolvedMySqlDatabase(): string {
+  const o = resolveMysqlOptions();
+  if (o.url) {
+    try {
+      const db = new URL(o.url).pathname.replace(/^\/+/, '');
+      if (db) return db;
+    } catch {
+      /* 忽略：交给下方兜底 */
+    }
+  }
+  return o.database;
+}
+const isDisposableTestDb = (): boolean => resolvedMySqlDatabase().endsWith('_test');
 const MYSQL_KEYS = [
   'STORAGE_DRIVER',
   'MCP_DEMO_PERSIST',
@@ -88,9 +104,28 @@ describe('MySQL 存储选项解析（不连库）', () => {
     expect(ps.db).toBe('mysql');
     expect(ps.storage).toContain('mysql://');
   });
+
+  it('MYSQL_URL 设置时 persistStatus 上报 redacted 的 host/db（不含口令）', async () => {
+    process.env.STORAGE_DRIVER = 'mysql';
+    process.env.MYSQL_URL = 'mysql://u:p@db.example.com:3307/mydb';
+    process.env.MCP_DEMO_PERSIST = '0'; // 不连库
+    await initDb({ enabled: false });
+    const ps = persistStatus();
+    expect(ps.db).toBe('mysql');
+    expect(ps.storage).toBe('mysql://db.example.com:3307/mydb');
+    expect(ps.storage).not.toContain('u:p'); // 口令不得出现在状态里
+  });
+
+  it('STORAGE_DRIVER 非法值时 initDb 抛错（fail-fast，避免误落 sqlite）', async () => {
+    process.env.STORAGE_DRIVER = 'postgres';
+    process.env.MCP_DEMO_PERSIST = '0';
+    await expect(initDb({ enabled: false })).rejects.toThrow(/STORAGE_DRIVER/);
+  });
 });
 
-describe.runIf(RUN_LIVE)('MySQL 真实落库（需 RUN_MYSQL_TESTS=1 且 MySQL 可达）', () => {
+describe.runIf(RUN_LIVE && isDisposableTestDb())(
+  'MySQL 真实落库（需 RUN_MYSQL_TESTS=1 且目标库名以 _test 结尾，避免清掉生产数据）',
+  () => {
   beforeEach(() => configureDb({ enabled: true }));
 
   it('连 MySQL 后落库、清内存再加载，账号仍在', async () => {

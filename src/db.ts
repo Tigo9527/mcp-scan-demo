@@ -45,10 +45,20 @@ function resolveDataDir(): string {
 
 export type StorageDriver = 'sqlite' | 'mysql';
 
-/** 当前存储方言：默认 sqlite，可由 `STORAGE_DRIVER` 环境变量切换为 mysql。 */
+/**
+ * 当前存储方言：默认 sqlite，可由 `STORAGE_DRIVER` 环境变量切换为 mysql。
+ * 非法值直接抛错（fail-fast），避免「本想用 MySQL 却悄悄落到本地 sqlite」导致数据错写。
+ */
 function resolveDriver(): StorageDriver {
-  const v = (process.env.STORAGE_DRIVER ?? 'sqlite').trim().toLowerCase();
-  return v === 'mysql' ? 'mysql' : 'sqlite';
+  const raw = process.env.STORAGE_DRIVER?.trim();
+  if (!raw) return 'sqlite';
+  const v = raw.toLowerCase();
+  if (v === 'sqlite') return 'sqlite';
+  if (v === 'mysql') return 'mysql';
+  throw new Error(
+    `STORAGE_DRIVER 取值非法: "${raw}"（仅支持 sqlite 或 mysql）。` +
+      `未设置时默认 sqlite；若本想用 MySQL，请检查拼写。`,
+  );
 }
 
 export interface MySqlOptions {
@@ -68,7 +78,8 @@ export function resolveMysqlOptions(): MySqlOptions {
     host: process.env.MYSQL_HOST?.trim() || '127.0.0.1',
     port: Number(process.env.MYSQL_PORT ?? '3306') || 3306,
     user: process.env.MYSQL_USER?.trim() || 'root',
-    password: process.env.MYSQL_PASSWORD?.trim() ?? '',
+    // 口令不做 trim：首尾空白可能是有效凭据的一部分，误删会导致认证失败。
+    password: process.env.MYSQL_PASSWORD ?? '',
     database: process.env.MYSQL_DATABASE?.trim() || 'mcp_demo',
   };
 }
@@ -95,9 +106,22 @@ export function resolveSequelizeOptions(driver: StorageDriver): Record<string, u
 function describeStorage(): string {
   if (driverKind === 'mysql') {
     const o = resolveMysqlOptions();
+    if (o.url) return describeMySqlUrl(o.url);
     return `mysql://${o.host}:${o.port}/${o.database}`;
   }
   return storagePath || resolveDataDir();
+}
+
+/** 从 MYSQL_URL 解析出不含口令的 redacted 描述（mysql://host:port/db）。 */
+function describeMySqlUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    const db = u.pathname.replace(/^\/+/, '');
+    const port = u.port || '3306';
+    return `mysql://${u.hostname}:${port}/${db}`;
+  } catch {
+    return 'mysql://(invalid-url)';
+  }
 }
 
 // ---------------------------------------------------------------- Sequelize 实例与模型
@@ -538,6 +562,9 @@ export async function initDb(opts: Overrides = {}): Promise<void> {
     defineModels(sequelize);
     await sequelize.authenticate();
     await sequelize.sync();
+    // 受保护的遗留数据导入：仅当各表为空时，才从 DATA_DIR 下的旧 JSON 导入，
+    // 避免「指向 MySQL 却以空库静默启动」。注意 sqlite→mysql 的库内迁移不在此自动完成。
+    await migrateLegacyJson(resolveDataDir());
     saves = 0;
     lastError = null;
     return;
