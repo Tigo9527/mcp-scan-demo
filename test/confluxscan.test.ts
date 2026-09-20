@@ -132,7 +132,7 @@ describe('登录保护', () => {
   });
 });
 
-describe('list_transfers（ConfluxScan 全网转账流 v1/transfer）', () => {
+describe('whole_chain_cfx_transfer_list（ConfluxScan 全网转账流 v1/transfer）', () => {
   it('默认拼接 testnet.confluxscan.org/v1/transfer 并带 limit/skip/transferType', async () => {
     fetchMock.mockImplementation(async () => okResponse({ code: 0, message: 'OK', data: { total: 0, list: [] } }));
     await confluxscan.listTransfers({});
@@ -168,7 +168,7 @@ describe('list_transfers（ConfluxScan 全网转账流 v1/transfer）', () => {
     expect(url).toContain('www.confluxscan.org/v1/transfer');
   });
 
-  it('list_transfers 不在 PUBLIC_MCP_TOOLS 中（需登录后才能调用）', () => {
-    expect(PUBLIC_MCP_TOOLS.has('list_transfers')).toBe(false);
+  it('whole_chain_cfx_transfer_list 不在 PUBLIC_MCP_TOOLS 中（需登录后才能调用）', () => {
+    expect(PUBLIC_MCP_TOOLS.has('whole_chain_cfx_transfer_list')).toBe(false);
   });
 });

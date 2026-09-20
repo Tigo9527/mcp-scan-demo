@@ -27,7 +27,7 @@ const TOOL_NAMES = [
   'search_repos',
   'list_cfx_transfers',
   'list_latest_transactions',
-  'list_transfers',
+  'whole_chain_cfx_transfer_list',
 ];
 
 /** 无需登录即可调用的公开工具（供未登录客户端安装后获取登录入口 / 一键注册）。 */
@@ -315,7 +315,7 @@ export function createMcpServer(): McpServer {
   );
 
   server.tool(
-    'list_transfers',
+    'whole_chain_cfx_transfer_list',
     '使用 ConfluxScan API 列出全网（指定 transferType 的）最新转账记录（公开只读数据，但本工具需要登录后调用）。transferType 可选 CFX（原生币）/ CRC20 / CRC721 / CRC1155。默认查 Conflux Core 测试网（testnet.confluxscan.org），可通过环境变量 CONFLUXSCAN_TRANSFER_API_URL 切到主网。',
     confluxscan.listTransfersSchema.shape,
     async (input) => {
@@ -325,7 +325,7 @@ export function createMcpServer(): McpServer {
         return {
           isError: true,
           ...text({
-            error: '未登录：当前请求未携带有效令牌，无法调用 list_transfers。',
+            error: '未登录：当前请求未携带有效令牌，无法调用 whole_chain_cfx_transfer_list。',
             action: '调用 login 工具获取登录入口，或调用 register_user 一键注册后再试。',
             registerUrl: `${base}/register`,
             githubAuthUrl: `${base}/auth/github`,
