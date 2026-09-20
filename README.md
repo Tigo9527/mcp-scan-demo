@@ -298,6 +298,9 @@ npm test
 | `register_user` | 一键注册新用户并返回令牌 | 否（匿名可用） |
 | `my_stats` | 查看当前用户自己的调用统计（工具/按天） | 是（需登录） |
 | `search_repos` | 用当前用户 GitHub 令牌搜索仓库（演示 OAuth） | 是 + 需 GitHub 登录 |
+| `list_cfx_transfers` | 列出某 Conflux Core 账户的原生 CFX 转账记录（ConfluxScan Open API） | 是（需登录） |
+| `list_latest_transactions` | 列出 Conflux Core 最新交易（ConfluxScan 浏览器 API） | 是（需登录） |
+| `list_transfers` | 列出全网（指定 transferType 的）最新转账记录（ConfluxScan v1/transfer，默认测试网） | 是（需登录） |
 
 > `/mcp` **默认要求登录**（`MCP_DEMO_REQUIRE_AUTH` 默认 `on`）：未携带有效令牌返回 401 +
 > `WWW-Authenticate`，由客户端走标准 OAuth 流程。设成 `off` 后恢复匿名握手，
