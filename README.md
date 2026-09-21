@@ -19,7 +19,7 @@
 src/
   config.ts           运行时配置（端口 / JWT 密钥 / 实例 ID / admin 令牌）
   db.ts               存储层（Sequelize ORM：自动建表 + 防抖写库 + 旧 JSON 自动导入；
-                      默认 SQLite，可切 MySQL——见下方「存储后端」）
+                      单一 mcp-demo.sqlite 文件，启动自动建表，全局单写者队列防 SQLITE_BUSY）
   settings.ts         GitHub OAuth 运行时可变设置（落盘）
   stats.ts            MCP 调用统计（计数器 + 环形缓冲 + 落盘）
   auth/

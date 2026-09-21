@@ -13,7 +13,7 @@ import * as billing from '../src/billing.js';
 import * as stats from '../src/stats.js';
 import * as recharge from '../src/recharge.js';
 import * as settings from '../src/settings.js';
-import { archiveLegacyJson, closeDb, configureDb, flushDb, initDb, migrateLegacyJson, saveUsers, scheduleDbWrite } from '../src/db.js';
+import { archiveLegacyJson, closeDb, configureDb, flushDb, initDb, migrateLegacyJson, saveBilling, saveUsers, scheduleDbWrite } from '../src/db.js';
 
 async function freshDb(): Promise<string> {
   const dir = mkdtempSync(join(tmpdir(), 'mcp-sqlite-'));
@@ -332,6 +332,57 @@ describe('同数据集写入串行化（防并发整表替换覆盖，PR #2 comm
     store.__resetForTest();
     await store.reloadUsersFromDb();
     expect(store.countUsers()).toBe(2); // 最新快照完整落库，无旧快照覆盖
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('不同数据集的整表替换事务也不会并行（全局单写者队列，防 SQLITE_BUSY，PR #3 comment 8）', async () => {
+    const dir = await freshDb();
+    store.__resetForTest();
+    store.createUser({ username: 'u_a', email: null, provider: 'local' });
+    const billingState: Record<string, billing.UserBilling> = {
+      u_a: { userId: 'u_a', used: 1, balance: 1, recharged: 1, firstSeenAt: '', lastSeenAt: '' },
+    };
+
+    let active = 0;
+    let maxConcurrent = 0;
+    let usersRan = false;
+    let billingRan = false;
+    const slowUsers = async () => {
+      active += 1;
+      maxConcurrent = Math.max(maxConcurrent, active);
+      usersRan = true;
+      await delay(200); // 模拟慢网络事务
+      await saveUsers(store.listUsers().items);
+      active -= 1;
+    };
+    const slowBilling = async () => {
+      active += 1;
+      maxConcurrent = Math.max(maxConcurrent, active);
+      billingRan = true;
+      await delay(200);
+      await saveBilling(billingState);
+      active -= 1;
+    };
+
+    // 触发 users 在途事务（防抖定时器 300ms 后进入慢事务，active=1 可观测）
+    scheduleDbWrite('users', slowUsers);
+    const started = await waitFor(() => usersRan && active === 1, 2000);
+    expect(started).toBe(true);
+
+    // users 还在途时，再排程一个 billing 写入并 flush：应排队等 users 事务结束，
+    // 不可与 users 并行（SQLite 单写者），否则会触发 SQLITE_BUSY（PR #3 comment 8）
+    scheduleDbWrite('billing', slowBilling);
+    await flushDb();
+
+    expect(usersRan).toBe(true);
+    expect(billingRan).toBe(true);
+    expect(maxConcurrent).toBe(1); // 不同数据集也未并行
+
+    store.__resetForTest();
+    await store.reloadUsersFromDb();
+    await billing.reloadBillingFromDb();
+    expect(store.countUsers()).toBe(1);
+    expect(billing.getUserBilling('u_a')).toBeTruthy();
     rmSync(dir, { recursive: true, force: true });
   });
 });
