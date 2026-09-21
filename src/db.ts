@@ -73,16 +73,20 @@ export interface MySqlOptions {
 /** 解析 MySQL 连接参数：优先 `MYSQL_URL`（完整连接串），否则读各分项（带默认值）。 */
 export function resolveMysqlOptions(): MySqlOptions {
   const url = process.env.MYSQL_URL?.trim() || undefined;
-  const rawPort = process.env.MYSQL_PORT?.trim();
   let port = 3306;
-  if (rawPort !== undefined && rawPort !== '') {
-    const n = Number(rawPort);
-    // 仅当变量缺失/为空时用默认；非整数或越界（如 3306x / -1 / 70000）直接 fail-fast，
-    // 避免连到非预期端口（PR #3 comment 1）
-    if (!Number.isInteger(n) || n < 1 || n > 65535) {
-      throw new Error(`MYSQL_PORT 非法：必须是 1-65535 的整数，收到 "${rawPort}"`);
+  // MYSQL_URL 优先：仅当未提供 URL 时才解析/校验分项 MYSQL_PORT。否则一个与 URL 无关的
+  // 非法 MYSQL_PORT 会让本可通过 URL 连上的部署无故启动失败（Copilot review：Medium）。
+  if (!url) {
+    const rawPort = process.env.MYSQL_PORT?.trim();
+    if (rawPort !== undefined && rawPort !== '') {
+      const n = Number(rawPort);
+      // 仅当变量缺失/为空时用默认；非整数或越界（如 3306x / -1 / 70000）直接 fail-fast，
+      // 避免连到非预期端口（PR #3 comment 1）
+      if (!Number.isInteger(n) || n < 1 || n > 65535) {
+        throw new Error(`MYSQL_PORT 非法：必须是 1-65535 的整数，收到 "${rawPort}"`);
+      }
+      port = n;
     }
-    port = n;
   }
   return {
     url,
@@ -720,7 +724,19 @@ export async function initDb(opts: Overrides = {}): Promise<void> {
 
   if (fresh) {
     const migration = await migrateLegacyJson(dir);
-    archiveLegacyJson(dir, migration);
+    // 全新 SQLite 库：有效遗留文件已由 migrateLegacyJson 导入（表为空才会导入）。
+    // 把「存在但未导入」的遗留文件（空文件 / 非法文件 / .bak 备份）也纳入 skipped 一起归档移出，
+    // 避免它们永久残留在 DATA_DIR（reviewer: Medium）；但仅对【真正存在文件】的 base 写标记，
+    // 无遗留文件的 base 不写标记，避免误忽略后续手动放入的遗留文件（PR #3 comment 3）。
+    const legacyBases = ['users', 'billing', 'recharge', 'recharge-settings', 'settings', 'stats'];
+    const skipped = [...migration.skipped];
+    for (const b of legacyBases) {
+      if (migration.imported.includes(b) || skipped.includes(b)) continue;
+      if (fs.existsSync(path.join(dir, `${b}.json`)) || fs.existsSync(path.join(dir, `${b}.json.bak`))) {
+        skipped.push(b);
+      }
+    }
+    archiveLegacyJson(dir, { imported: migration.imported, skipped });
   }
   saves = 0;
   lastError = null;

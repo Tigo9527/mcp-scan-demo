@@ -104,6 +104,14 @@ describe('MySQL 存储选项解析（不连库）', () => {
     }
   });
 
+  it('提供合法 MYSQL_URL 时即便 MYSQL_PORT 非法也不应 fail-fast（URL 优先）', () => {
+    process.env.MYSQL_URL = 'mysql://u:p@db:3307/mydb';
+    process.env.MYSQL_PORT = 'not-a-port'; // 与 URL 无关、且非法的分项，不应触发校验
+    const o = resolveMysqlOptions();
+    expect(o.url).toBe('mysql://u:p@db:3307/mydb');
+    expect(() => resolveMysqlOptions()).not.toThrow();
+  });
+
   it('resolveSequelizeOptions(mysql) 用 URL 时返回 [uri, options] 重载参数', () => {
     process.env.MYSQL_URL = 'mysql://u:p@db:3307/mydb';
     const [arg, extra] = resolveSequelizeOptions('mysql');
