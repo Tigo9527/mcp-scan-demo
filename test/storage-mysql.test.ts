@@ -59,6 +59,8 @@ const MYSQL_KEYS = [
   'MYSQL_USER',
   'MYSQL_PASSWORD',
   'MYSQL_DATABASE',
+  // 一并保存/恢复：下面「现有 SQLite 存储」测试会临时改写它，避免污染后续用例
+  'DATA_DIR',
 ];
 const savedEnv: Record<string, string | undefined> = {};
 
@@ -143,12 +145,18 @@ describe('MySQL 存储选项解析（不连库）', () => {
   it('检测到现有 SQLite 存储时切到 MySQL 启动失败（避免静默丢数据）', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'mcp-sqlite-detect-'));
     writeFileSync(join(dir, 'mcp-demo.sqlite'), '');
+    const prevDataDir = process.env.DATA_DIR;
     process.env.DATA_DIR = dir;
     process.env.STORAGE_DRIVER = 'mysql';
     // 在尝试连 MySQL 之前就应抛错（fail-fast），不会静默以空库启动
-    await expect(initDb({ enabled: true })).rejects.toThrow(/mcp-demo\.sqlite/);
-    delete process.env.DATA_DIR;
-    rmSync(dir, { recursive: true, force: true });
+    try {
+      await expect(initDb({ enabled: true })).rejects.toThrow(/mcp-demo\.sqlite/);
+    } finally {
+      // 还原 runner 启动时的 DATA_DIR（afterEach 也会再兜底一次），避免影响后续用例
+      if (prevDataDir === undefined) delete process.env.DATA_DIR;
+      else process.env.DATA_DIR = prevDataDir;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -202,7 +210,7 @@ describe.runIf(RUN_LIVE && isDisposableTestDb())(
       rawAmount: '1000000000000000000',
       points: 1000,
       rate: 1000,
-      status: 'confirmed',
+      status: 'credited',
       createdAt: '',
     };
     await saveRechargeRecords([rec]);
@@ -214,9 +222,25 @@ describe.runIf(RUN_LIVE && isDisposableTestDb())(
     expect((await loadGithubSettings())?.clientId).toBe('cid');
 
     // stats（upsert）—— 故意写入超过 MySQL TEXT 64KiB 上限的大体积，验证 LONGTEXT 列式足够
-    const bigByUser: Record<string, number> = {};
-    for (let i = 0; i < 4000; i++) bigByUser[`user_${i}`] = i;
-    const bigRecent = Array.from({ length: 800 }, (_, i) => ({ ts: String(i), tool: 't', user: `user_${i}` }));
+    const bigByUser: StatsSnapshot['byUser'] = {};
+    for (let i = 0; i < 4000; i++) {
+      bigByUser[`user_${i}`] = {
+        userId: `user_${i}`,
+        username: `user_${i}`,
+        calls: i,
+        tools: {},
+        days: {},
+        firstSeenAt: '',
+        lastSeenAt: '',
+      };
+    }
+    const bigRecent: StatsSnapshot['recent'] = Array.from({ length: 800 }, (_, i) => ({
+      ts: String(i),
+      method: 'tools/call',
+      tool: 't',
+      userId: `user_${i}`,
+      username: `user_${i}`,
+    }));
     const snap: StatsSnapshot = {
       since: '',
       counters: { requests: 4000, toolCalls: 4000, errors: 0 },
