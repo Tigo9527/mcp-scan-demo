@@ -76,7 +76,6 @@ export interface Allowance {
 }
 
 const FILE = 'billing';
-
 let loaded = false;
 let state: Record<string, UserBilling> = {};
 
@@ -191,14 +190,19 @@ export function creditBalance(userId: string, points: number): UserBilling {
   ensureLoaded();
   if (!userId) throw new Error('creditBalance 需要已登录用户 id');
   const n = Number(points);
-  if (!Number.isFinite(n) || n <= 0) {
-    throw new Error(`充值点数必须为正数，收到：${String(points)}`);
+  if (!Number.isFinite(n) || n <= 0 || !Number.isSafeInteger(n)) {
+    throw new Error(`充值点数必须为正的安全整数（<= ${Number.MAX_SAFE_INTEGER}），收到：${String(points)}`);
   }
   const now = new Date().toISOString();
   const entry = state[userId] ?? emptyEntry(userId, now);
+  const nextBalance = entry.balance + n;
+  const nextRecharged = entry.recharged + n;
+  if (!Number.isSafeInteger(nextBalance) || !Number.isSafeInteger(nextRecharged)) {
+    throw new Error(`充值后余额或累计充值将超过安全整数上限（${Number.MAX_SAFE_INTEGER}），请联系管理员处理。`);
+  }
   entry.userId = userId;
-  entry.balance += n;
-  entry.recharged += n;
+  entry.balance = nextBalance;
+  entry.recharged = nextRecharged;
   entry.lastSeenAt = now;
   state[userId] = entry;
   markDirty();

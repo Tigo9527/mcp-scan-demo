@@ -18,7 +18,8 @@
 ```
 src/
   config.ts           运行时配置（端口 / JWT 密钥 / 实例 ID / admin 令牌）
-  db.ts               SQLite 存储层（Sequelize ORM：自动建表 + 防抖写库 + 旧 JSON 自动导入）
+  db.ts               存储层（Sequelize ORM：自动建表 + 防抖写库 + 旧 JSON 自动导入；
+                      默认 SQLite，可切 MySQL——见下方「存储后端」）
   settings.ts         GitHub OAuth 运行时可变设置（落盘）
   stats.ts            MCP 调用统计（计数器 + 环形缓冲 + 落盘）
   auth/
@@ -226,8 +227,37 @@ https://a8b79d8a477856f1e.app.workbuddy.link
 >    （必须带本服务前缀 `mcp_demo_`），网关注入的 `Authorization` 一律忽略。
 > 4. **支持匿名握手 + 登录引导**：未携带令牌时不会拒绝连接，而是暴露 `login` 工具、
 >    受保护工具返回中文登录引导（含可点击的登录 URL）。
-> 5. **单一 SQLite 文件**：所有数据集落在 `data/mcp-demo.sqlite`（users / billing / recharge_records /
->    recharge_settings / github_settings / stats 六张表），启动自动建表、旧 JSON 自动导入，不存在按进程 / 实例拆分。
+> 5. **存储后端可切换**：默认所有数据集落在 `data/mcp-demo.sqlite`（users / billing / recharge_records /
+>    recharge_settings / github_settings / stats 六张表），启动自动建表、旧 JSON 自动导入。
+>    也可切换为 MySQL（见下方「存储后端」）。存储不存在按进程 / 实例拆分——见下方单实例说明。
+
+### 存储后端（SQLite / MySQL）
+
+存储层由 `src/db.ts` 实现，通过 `STORAGE_DRIVER` 选择方言（默认 `sqlite`）：
+
+| 变量 | 说明 | 默认 |
+| --- | --- | --- |
+| `STORAGE_DRIVER` | `sqlite`（默认）或 `mysql` | `sqlite` |
+| `MYSQL_URL` | MySQL 连接串（完整 `mysql://user:pass@host:port/db`），优先于下方各项 | 空 |
+| `MYSQL_HOST` / `MYSQL_PORT` | 分项连接参数 | `127.0.0.1` / `3306` |
+| `MYSQL_USER` / `MYSQL_PASSWORD` | 账号 / 口令（口令原样传入，不做 trim） | `root` / 空 |
+| `MYSQL_DATABASE` | 数据库名 | `mcp_demo` |
+
+`/health` 与 Admin 控制台会回显当前 `db` 方言与连接描述（不含口令）。
+
+**重要限制（务必先读）：**
+
+- **单实例持久化**：MySQL 后端沿用「内存态为唯一权威 + 写库为整表替换（事务保护）」的模型，
+  与 SQLite 一致。**多副本 / 多进程共用同一 MySQL 库会导致跨实例数据覆盖**——整表替换会清掉其它实例
+  刚写入的行、再写入本进程的内存快照。因此 MySQL 仅适合**单实例**部署，请勿多副本共享同一数据库。
+- **SQLite→MySQL 不自动迁移**：若 `DATA_DIR` 下已存在 `mcp-demo.sqlite`（说明之前跑在 SQLite 上、旧 JSON 已迁走），
+  直接设 `STORAGE_DRIVER=mysql` 会启动失败（fail-fast），避免静默以空库启动丢失数据。请先手动把 SQLite 数据迁到
+  MySQL，或确认不再需要旧数据后删除该 `.sqlite` 文件再启动。MySQL 启动时会把 `DATA_DIR` 下尚未导入的旧 JSON 按表为空才导入：
+  - 真正导入过的数据集，其文件移入 `DATA_DIR/_migrated_json/`；
+  - 表非空而被跳过的文件（可能含额外用户/配置），移入 `DATA_DIR/_migrated_json/_skipped_for_review/`
+    （待人工处理，**不会留在 `DATA_DIR`**），并写 `_migrated_json/_status.json` 记录每个数据集的
+    `imported` / `skipped` 标记，后续启动会忽略已处理的数据集，避免清空某表后重启又重放陈旧数据。
+- 已有 MySQL 表（早期 `TEXT` 列）如需更大的统计容量，请将 stats 相关列改为 `LONGTEXT`（`DataTypes.TEXT('long')`）。
 
 ### 钉钉 MCP 配置（不含 token，靠登录引导）
 

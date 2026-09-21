@@ -241,6 +241,7 @@ describe('submitRechargeTx', () => {
     expect(billing.getBalance('u2')).toBe(balanceAfterFirst);
     expect(recharge.listRecharges()).toHaveLength(1);
   });
+
 });
 
 describe('listRecharges 筛选', () => {

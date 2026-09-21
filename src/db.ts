@@ -10,10 +10,13 @@
  * - `MCP_DEMO_PERSIST=0` 或 `configureDb({ enabled: false })` 会关停 DB：模块退回纯内存态，
  *   测试期间即此模式（不落库、不连 sqlite），行为与旧 `enabled:false` 一致。
  * - 永不抛出：写库失败只记录 lastError，绝不因为落盘问题让服务崩溃。
+ * - 双方言：默认 `sqlite`；设 `STORAGE_DRIVER=mysql` 可切换为 MySQL（Sequelize 方言切换，
+ *   模型无需改动）。MySQL 连接优先读 `MYSQL_URL`，否则读 `MYSQL_HOST/PORT/USER/PASSWORD/DATABASE`。
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { Sequelize, DataTypes, Model } from 'sequelize';
+import type { Options as SequelizeOptions } from 'sequelize';
 import { config } from './config.js';
 
 import type { User } from './auth/store.js';
@@ -39,10 +42,156 @@ function resolveDataDir(): string {
   return overrides.dataDir ?? process.env.DATA_DIR ?? config.dataDir;
 }
 
+// ---------------------------------------------------------------- 方言选择（sqlite / mysql）
+
+export type StorageDriver = 'sqlite' | 'mysql';
+const DRIVER_MARK_FILE = '.storage-driver';
+
+function parseStorageDriver(raw: string, source: 'env' | 'mark' = 'env'): StorageDriver {
+  const v = raw.trim().toLowerCase();
+  if (v === 'sqlite') return 'sqlite';
+  if (v === 'mysql') return 'mysql';
+  if (source === 'mark') {
+    throw new Error(`检测到无效存储后端标记（${DRIVER_MARK_FILE}）: "${raw}"，仅支持 sqlite 或 mysql。`);
+  }
+  throw new Error(
+    `STORAGE_DRIVER 取值非法: "${raw}"（仅支持 sqlite 或 mysql）。` +
+      `未设置时默认 sqlite；若本想用 MySQL，请检查拼写。`,
+  );
+}
+
+function driverMarkPath(dir: string): string {
+  return path.join(dir, DRIVER_MARK_FILE);
+}
+
+function readStoredDriver(dir: string): StorageDriver | null {
+  const p = driverMarkPath(dir);
+  if (!fs.existsSync(p)) return null;
+  const raw = fs.readFileSync(p, 'utf8').trim();
+  if (!raw) return null;
+  return parseStorageDriver(raw, 'mark');
+}
+
+function writeStoredDriver(dir: string, driver: StorageDriver): void {
+  const p = driverMarkPath(dir);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(p, `${driver}\n`);
+}
+
+/**
+ * 当前存储方言：默认 sqlite，可由 `STORAGE_DRIVER` 环境变量切换为 mysql。
+ * 非法值直接抛错（fail-fast），避免「本想用 MySQL 却悄悄落到本地 sqlite」导致数据错写。
+ */
+function resolveDriver(dir: string): StorageDriver {
+  const stored = readStoredDriver(dir);
+  const raw = process.env.STORAGE_DRIVER?.trim();
+  if (raw) {
+    const envDriver = parseStorageDriver(raw, 'env');
+    if (stored && stored !== envDriver) {
+      throw new Error(
+        `存储后端不一致：STORAGE_DRIVER=${envDriver}，但 ${DRIVER_MARK_FILE} 记录为 ${stored}。` +
+          '请保持一致，或在完成数据迁移后再切换。',
+      );
+    }
+    return envDriver;
+  }
+  // 首次启动（无标记）仍默认 sqlite；一旦初始化过 mysql，会由标记兜底避免静默回退到 sqlite。
+  if (stored) return stored;
+  return 'sqlite';
+}
+
+export interface MySqlOptions {
+  url?: string;
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database: string;
+}
+
+/** 解析 MySQL 连接参数：优先 `MYSQL_URL`（完整连接串），否则读各分项（带默认值）。 */
+export function resolveMysqlOptions(): MySqlOptions {
+  const url = process.env.MYSQL_URL?.trim() || undefined;
+  let port = 3306;
+  // MYSQL_URL 优先：仅当未提供 URL 时才解析/校验分项 MYSQL_PORT。否则一个与 URL 无关的
+  // 非法 MYSQL_PORT 会让本可通过 URL 连上的部署无故启动失败（Copilot review：Medium）。
+  if (!url) {
+    const rawPort = process.env.MYSQL_PORT?.trim();
+    if (rawPort !== undefined && rawPort !== '') {
+      const n = Number(rawPort);
+      // 仅当变量缺失/为空时用默认；非整数或越界（如 3306x / -1 / 70000）直接 fail-fast，
+      // 避免连到非预期端口（PR #3 comment 1）
+      if (!Number.isInteger(n) || n < 1 || n > 65535) {
+        throw new Error(`MYSQL_PORT 非法：必须是 1-65535 的整数，收到 "${rawPort}"`);
+      }
+      port = n;
+    }
+  }
+  return {
+    url,
+    host: process.env.MYSQL_HOST?.trim() || '127.0.0.1',
+    port,
+    user: process.env.MYSQL_USER?.trim() || 'root',
+    // 口令不做 trim：首尾空白可能是有效凭据的一部分，误删会导致认证失败。
+    password: process.env.MYSQL_PASSWORD ?? '',
+    database: process.env.MYSQL_DATABASE?.trim() || 'mcp_demo',
+  };
+}
+
+/**
+ * 把方言 / 连接参数转成 Sequelize 构造参数（`new Sequelize(...)` 的实参），便于复用与测试断言。
+ * 注意 Sequelize v6 的对象式构造不支持 `url` 字段，URI 必须用 `new Sequelize(uri, options)` 重载，
+ * 因此这里返回构造实参元组而非带 `url` 的对象（PR #3 comment 2）。
+ */
+export type SequelizeArgs = [string, SequelizeOptions] | [SequelizeOptions];
+
+export function resolveSequelizeOptions(driver: StorageDriver): SequelizeArgs {
+  if (driver === 'mysql') {
+    const o = resolveMysqlOptions();
+    const opts: SequelizeOptions = { dialect: 'mysql', logging: false };
+    if (o.url) return [o.url, opts];
+    return [
+      {
+        dialect: 'mysql',
+        host: o.host,
+        port: o.port,
+        username: o.user,
+        password: o.password,
+        database: o.database,
+        logging: false,
+      },
+    ];
+  }
+  return [{ dialect: 'sqlite', logging: false }];
+}
+
+/** 人类可读的存储位置描述（sqlite 为文件路径，mysql 为 host/db，不含口令）。 */
+function describeStorage(): string {
+  if (driverKind === 'mysql') {
+    const o = resolveMysqlOptions();
+    if (o.url) return describeMySqlUrl(o.url);
+    return `mysql://${o.host}:${o.port}/${o.database}`;
+  }
+  return storagePath || resolveDataDir();
+}
+
+/** 从 MYSQL_URL 解析出不含口令的 redacted 描述（mysql://host:port/db）。 */
+function describeMySqlUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    const db = u.pathname.replace(/^\/+/, '');
+    const port = u.port || '3306';
+    return `mysql://${u.hostname}:${port}/${db}`;
+  } catch {
+    return 'mysql://(invalid-url)';
+  }
+}
+
 // ---------------------------------------------------------------- Sequelize 实例与模型
 
 let sequelize: Sequelize | null = null;
 let storagePath = '';
+let driverKind: StorageDriver = 'sqlite';
 let saves = 0;
 let lastError: string | null = null;
 
@@ -51,7 +200,7 @@ export function dbEnabled(): boolean {
 }
 
 export function getStoragePath(): string {
-  return storagePath;
+  return describeStorage();
 }
 
 export class UserModel extends Model {}
@@ -82,9 +231,9 @@ function defineModels(seq: Sequelize): void {
   BillingModel.init(
     {
       userId: { type: DataTypes.STRING, primaryKey: true },
-      used: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
-      balance: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
-      recharged: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+      used: { type: DataTypes.BIGINT, allowNull: false, defaultValue: 0 },
+      balance: { type: DataTypes.BIGINT, allowNull: false, defaultValue: 0 },
+      recharged: { type: DataTypes.BIGINT, allowNull: false, defaultValue: 0 },
       firstSeenAt: { type: DataTypes.STRING, allowNull: true },
       lastSeenAt: { type: DataTypes.STRING, allowNull: true },
     },
@@ -96,7 +245,7 @@ function defineModels(seq: Sequelize): void {
       id: { type: DataTypes.INTEGER, primaryKey: true, defaultValue: 1 },
       recipient: { type: DataTypes.STRING, allowNull: false },
       rpcUrl: { type: DataTypes.TEXT, allowNull: false },
-      rate: { type: DataTypes.FLOAT, allowNull: false, defaultValue: 0 },
+      rate: { type: DataTypes.DOUBLE, allowNull: false, defaultValue: 0 },
       tokenAddress: { type: DataTypes.STRING, allowNull: true },
       tokenDecimals: { type: DataTypes.INTEGER, allowNull: true },
       chainId: { type: DataTypes.STRING, allowNull: true },
@@ -119,8 +268,8 @@ function defineModels(seq: Sequelize): void {
       token: { type: DataTypes.STRING, allowNull: false },
       amount: { type: DataTypes.STRING, allowNull: false },
       rawAmount: { type: DataTypes.TEXT, allowNull: false },
-      points: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
-      rate: { type: DataTypes.FLOAT, allowNull: false, defaultValue: 0 },
+      points: { type: DataTypes.BIGINT, allowNull: false, defaultValue: 0 },
+      rate: { type: DataTypes.DOUBLE, allowNull: false, defaultValue: 0 },
       status: { type: DataTypes.STRING, allowNull: false },
       createdAt: { type: DataTypes.STRING, allowNull: true },
     },
@@ -144,12 +293,14 @@ function defineModels(seq: Sequelize): void {
     {
       id: { type: DataTypes.INTEGER, primaryKey: true, defaultValue: 1 },
       since: { type: DataTypes.STRING, allowNull: true },
-      counters: { type: DataTypes.TEXT, allowNull: true },
-      byMethod: { type: DataTypes.TEXT, allowNull: true },
-      byTool: { type: DataTypes.TEXT, allowNull: true },
-      byUser: { type: DataTypes.TEXT, allowNull: true },
-      byDay: { type: DataTypes.TEXT, allowNull: true },
-      recent: { type: DataTypes.TEXT, allowNull: true },
+      // 序列化后的统计 JSON 可能超过 MySQL TEXT 的 64 KiB 上限（byUser/recent 在 500 用户 /
+      // 90 天 / 200 条近期 上限下会很大），故用 'long' → MySQL 的 LONGTEXT（SQLite 仍为 TEXT，均足够）。
+      counters: { type: DataTypes.TEXT('long'), allowNull: true },
+      byMethod: { type: DataTypes.TEXT('long'), allowNull: true },
+      byTool: { type: DataTypes.TEXT('long'), allowNull: true },
+      byUser: { type: DataTypes.TEXT('long'), allowNull: true },
+      byDay: { type: DataTypes.TEXT('long'), allowNull: true },
+      recent: { type: DataTypes.TEXT('long'), allowNull: true },
       recentIdx: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
     },
     { sequelize: seq, timestamps: false, modelName: 'stats', tableName: 'stats' },
@@ -201,9 +352,9 @@ function fromUserRow(r: Record<string, unknown>): User {
 function toBillingRow(userId: string, b: UserBilling): Record<string, unknown> {
   return {
     userId,
-    used: b.used | 0,
-    balance: b.balance | 0,
-    recharged: b.recharged | 0,
+    used: Math.trunc(Number(b.used) || 0),
+    balance: Math.trunc(Number(b.balance) || 0),
+    recharged: Math.trunc(Number(b.recharged) || 0),
     firstSeenAt: b.firstSeenAt,
     lastSeenAt: b.lastSeenAt,
   };
@@ -359,8 +510,34 @@ export function configureDb(next: Overrides): void {
   overrides = { ...overrides, ...next };
 }
 
-/** 旧 JSON 数据自动导入：仅当对应表为空时才导入，保证幂等（重复启动不重复导入）。 */
-async function migrateLegacyJson(dir: string): Promise<void> {
+type MigrationStatus = Record<string, 'imported' | 'skipped'>;
+
+/** 读取上次遗留 JSON 迁移的完成/跳过标记。已处理过的数据集不再重复读取旧 JSON，
+ * 避免「表被管理员清空后重启又读旧 JSON 复活已删除数据」（PR #2 comment 8）。 */
+function readMigrationStatus(dir: string): MigrationStatus {
+  try {
+    const p = path.join(dir, '_migrated_json', '_status.json');
+    if (!fs.existsSync(p)) return {};
+    const d = JSON.parse(fs.readFileSync(p, 'utf8'));
+    return d && typeof d === 'object' ? (d as MigrationStatus) : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * 旧 JSON 数据自动导入：仅当对应表为空时才导入，保证幂等（重复启动不重复导入）。
+ * 返回实际导入的数据集（imported）与因表非空而跳过的数据集（skipped）。
+ * - imported 的文件会被归档移走；
+ * - skipped 的文件（表非空，旧 JSON 可能含额外用户/配置）也会被移出 DATA_DIR 到
+ *   `_migrated_json/_skipped_for_review`，并写入迁移标记，后续启动忽略之——
+ *   否则若管理员日后清空该表，重启会再次读这份旧 JSON 把已删除数据复活。
+ */
+export async function migrateLegacyJson(dir: string): Promise<{ imported: string[]; skipped: string[] }> {
+  const imported: string[] = [];
+  const skipped: string[] = [];
+  // 已处理过（导入或跳过）的数据集不再重复处理
+  const done = readMigrationStatus(dir);
   const readJson = (name: string): unknown => {
     try {
       const p = path.join(dir, name);
@@ -370,91 +547,207 @@ async function migrateLegacyJson(dir: string): Promise<void> {
       return undefined;
     }
   };
+  const consider = (base: string): boolean => !done[base];
+  const wasImported = (base: string): boolean => {
+    imported.push(base);
+    return true;
+  };
+  // 仅当遗留 JSON 实际存在时才标记 skipped：普通启动（表非空、无遗留文件）写入永久标记后，
+  // 日后同一 DATA_DIR 放入合法遗留文件用于空库替换会被忽略，反而丢数据（PR #3 comment 3）。
+  const wasSkipped = (base: string): boolean => {
+    if (fs.existsSync(path.join(dir, `${base}.json`))) skipped.push(base);
+    return true;
+  };
 
-  if ((await UserModel.count()) === 0) {
-    const data = readJson('users.json') as { users?: User[] } | undefined;
-    const users = (data?.users ?? []).filter((u) => u?.id && u?.username);
-    if (users.length) await UserModel.bulkCreate(users.map(toUserRow));
-  }
-
-  if ((await BillingModel.count()) === 0) {
-    const data = readJson('billing.json') as Record<string, UserBilling> | undefined;
-    const rows: Record<string, unknown>[] = [];
-    for (const [k, v] of Object.entries(data ?? {})) {
-      if (!v || typeof v !== 'object') continue;
-      rows.push(toBillingRow(k, v));
-    }
-    if (rows.length) await BillingModel.bulkCreate(rows);
-  }
-
-  if ((await RechargeRecordModel.count()) === 0) {
-    const data = readJson('recharge.json') as RechargeRecord[] | undefined;
-    const rows = (Array.isArray(data) ? data : []).filter((r) => r && typeof r === 'object');
-    if (rows.length) await RechargeRecordModel.bulkCreate(rows.map(toRecordRow));
-  }
-
-  if ((await RechargeSettingModel.count()) === 0) {
-    const data = readJson('recharge-settings.json') as RechargeConfig | undefined;
-    if (data && data.recipient) await RechargeSettingModel.create(toSettingsRow(data));
-  }
-
-  if ((await GithubSettingModel.count()) === 0) {
-    const data = readJson('settings.json') as GithubSettings | undefined;
-    if (data && (data.clientId !== undefined || data.clientSecret !== undefined)) {
-      await GithubSettingModel.create(toGithubRow(data));
+  if (consider('users')) {
+    if ((await UserModel.count()) === 0) {
+      const data = readJson('users.json') as { users?: User[] } | undefined;
+      const users = (data?.users ?? []).filter((u) => u?.id && u?.username);
+      if (users.length) {
+        await UserModel.bulkCreate(users.map(toUserRow));
+        wasImported('users');
+      }
+    } else {
+      wasSkipped('users');
     }
   }
 
-  if ((await StatsModel.count()) === 0) {
-    const data = readJson('stats.json') as StatsSnapshot | undefined;
-    if (data && data.counters) {
-      await StatsModel.create(toStatsRow(data, (data.recent?.length ?? 0) % 200));
+  if (consider('billing')) {
+    if ((await BillingModel.count()) === 0) {
+      const data = readJson('billing.json') as Record<string, UserBilling> | undefined;
+      const rows: Record<string, unknown>[] = [];
+      for (const [k, v] of Object.entries(data ?? {})) {
+        if (!v || typeof v !== 'object') continue;
+        rows.push(toBillingRow(k, v));
+      }
+      if (rows.length) {
+        await BillingModel.bulkCreate(rows);
+        wasImported('billing');
+      }
+    } else {
+      wasSkipped('billing');
     }
   }
+
+  if (consider('recharge')) {
+    if ((await RechargeRecordModel.count()) === 0) {
+      const data = readJson('recharge.json') as RechargeRecord[] | undefined;
+      const rows = (Array.isArray(data) ? data : []).filter((r) => r && typeof r === 'object');
+      if (rows.length) {
+        await RechargeRecordModel.bulkCreate(rows.map(toRecordRow));
+        wasImported('recharge');
+      }
+    } else {
+      wasSkipped('recharge');
+    }
+  }
+
+  if (consider('recharge-settings')) {
+    if ((await RechargeSettingModel.count()) === 0) {
+      const data = readJson('recharge-settings.json') as RechargeConfig | undefined;
+      if (data && data.recipient) {
+        await RechargeSettingModel.create(toSettingsRow(data));
+        wasImported('recharge-settings');
+      }
+    } else {
+      wasSkipped('recharge-settings');
+    }
+  }
+
+  if (consider('settings')) {
+    if ((await GithubSettingModel.count()) === 0) {
+      const data = readJson('settings.json') as GithubSettings | undefined;
+      if (data && (data.clientId !== undefined || data.clientSecret !== undefined)) {
+        await GithubSettingModel.create(toGithubRow(data));
+        wasImported('settings');
+      }
+    } else {
+      wasSkipped('settings');
+    }
+  }
+
+  if (consider('stats')) {
+    if ((await StatsModel.count()) === 0) {
+      const data = readJson('stats.json') as StatsSnapshot | undefined;
+      if (data && data.counters) {
+        await StatsModel.create(toStatsRow(data, (data.recent?.length ?? 0) % 200));
+        wasImported('stats');
+      }
+    } else {
+      wasSkipped('stats');
+    }
+  }
+
+  return { imported, skipped };
 }
 
-/** 把已迁移的遗留 JSON 移出 data/，保持目录里只有 .sqlite。失败不阻塞。 */
-function archiveLegacyJson(dir: string): void {
-  const names = [
-    'users.json',
-    'billing.json',
-    'recharge.json',
-    'recharge-settings.json',
-    'settings.json',
-    'stats.json',
-    'users.json.bak',
-    'billing.json.bak',
-    'recharge.json.bak',
-    'recharge-settings.json.bak',
-    'settings.json.bak',
-    'stats.json.bak',
-  ];
-  const dest = path.join(dir, '_migrated_json');
-  for (const n of names) {
-    const src = path.join(dir, n);
-    if (!fs.existsSync(src)) continue;
-    try {
-      fs.mkdirSync(dest, { recursive: true });
-      fs.renameSync(src, path.join(dest, n));
-    } catch {
-      /* 忽略：迁移已成功，留着旧文件不影响 */
+/**
+ * 把已处理的遗留 JSON 移出 data/，保持目录干净。失败不阻塞。
+ * - 不传 result：移动全部（sqlite 新建库场景，所有表均为空且都已导入），并记录为 imported；
+ * - 传 result：imported 移入 `_migrated_json`，skipped 移入 `_migrated_json/_skipped_for_review`，
+ *   并写 `_migrated_json/_status.json` 记录每个数据集的 imported/skipped 标记，
+ *   供后续启动忽略已处理的数据集（PR #2 comment 8）。
+ */
+export function archiveLegacyJson(dir: string, result?: { imported: string[]; skipped: string[] }): void {
+  const bases = ['users', 'billing', 'recharge', 'recharge-settings', 'settings', 'stats'];
+  const status = readMigrationStatus(dir);
+  const move = (base: string, destDir: string): void => {
+    for (const n of [`${base}.json`, `${base}.json.bak`]) {
+      const src = path.join(dir, n);
+      if (!fs.existsSync(src)) continue;
+      try {
+        fs.mkdirSync(destDir, { recursive: true });
+        fs.renameSync(src, path.join(destDir, n));
+      } catch {
+        /* 忽略：迁移已成功，留着旧文件不影响 */
+      }
     }
+  };
+
+  if (!result) {
+    const dest = path.join(dir, '_migrated_json');
+    for (const b of bases) {
+      move(b, dest);
+      status[b] = 'imported';
+    }
+  } else {
+    const importedDir = path.join(dir, '_migrated_json');
+    const skippedDir = path.join(dir, '_migrated_json', '_skipped_for_review');
+    for (const b of result.imported) {
+      move(b, importedDir);
+      status[b] = 'imported';
+    }
+    for (const b of result.skipped) {
+      move(b, skippedDir);
+      status[b] = 'skipped';
+    }
+  }
+
+  try {
+    const dest = path.join(dir, '_migrated_json');
+    fs.mkdirSync(dest, { recursive: true });
+    fs.writeFileSync(path.join(dest, '_status.json'), JSON.stringify(status, null, 2));
+  } catch {
+    /* 忽略：标记写入失败不影响主流程 */
   }
 }
 
 /**
- * 连接并初始化数据库。仅在 `enabled` 时连 sqlite；否则置空（模块退回纯内存）。
+ * 连接并初始化数据库（SQLite）。仅在 `enabled` 时连库；否则置空（模块退回纯内存）。
  * 可在同进程内多次调用（测试：不同 dataDir 重建实例），会自动关掉上一个连接。
  */
 export async function initDb(opts: Overrides = {}): Promise<void> {
   overrides = { ...overrides, ...opts };
+  const dataDir = resolveDataDir();
   if (!isEnabled()) {
     await closeDb();
+    driverKind = resolveDriver(dataDir);
     return;
   }
 
   await closeDb();
-  const dir = resolveDataDir();
+  driverKind = resolveDriver(dataDir);
+
+  if (driverKind === 'mysql') {
+    // 现有 SQLite 存储检测：若 DATA_DIR 下已有 mcp-demo.sqlite，说明此前跑在 SQLite 上、旧 JSON
+    // 已被迁走，直接切到 MySQL 会静默以空库启动丢失数据。此处 fail-fast，要求先手动做
+    // SQLite→MySQL 迁移（或确认不再需要旧数据后删除该文件）。
+    const sqliteFile = path.join(dataDir, 'mcp-demo.sqlite');
+    if (fs.existsSync(sqliteFile)) {
+      throw new Error(
+        '检测到现有 SQLite 存储（mcp-demo.sqlite），STORAGE_DRIVER=mysql 无法自动迁移，启动中止。' +
+          '请先手动完成 SQLite→MySQL 迁移，或在确认不再需要旧数据后删除该文件再启动。',
+      );
+    }
+    // 单实例提示：MySQL 后端沿用「内存态为热点缓存 + 整表替换写库」模型（与 SQLite 一致）。
+    // 多副本共用同一 MySQL 库时，整表替换会覆盖其它实例写入的数据，造成跨实例丢失；
+    // 因此 MySQL 仅作单实例持久化，请勿多副本共享同一数据库。
+    console.warn(
+      '[db] 使用 MySQL 后端：仅作单实例持久化（内存态为唯一权威、写库为整表替换），' +
+        '多副本共用同一 MySQL 库会造成跨实例数据覆盖，请勿多实例共享。',
+    );
+
+    // 复用 resolveSequelizeOptions 构造 Sequelize 实例（含 MYSQL_URL 的 new Sequelize(uri, opts) 重载），
+    // 避免对象式构造把 url 当普通字段导致连不上（PR #3 comment 2）。
+    const mysqlArgs = resolveSequelizeOptions('mysql');
+    sequelize = typeof mysqlArgs[0] === 'string' ? new Sequelize(mysqlArgs[0], mysqlArgs[1]) : new Sequelize(mysqlArgs[0]);
+    defineModels(sequelize);
+    await sequelize.authenticate();
+    await sequelize.sync();
+    writeStoredDriver(dataDir, 'mysql');
+    // 受保护的遗留数据导入：仅当各表为空时，才从 DATA_DIR 下的旧 JSON 导入，
+    // 避免「指向 MySQL 却以空库静默启动」。注意 sqlite→mysql 的库内迁移不在此自动完成。
+    const migration = await migrateLegacyJson(dataDir);
+    // 归档真正导入过的数据集；表非空而跳过的文件也移出 DATA_DIR（到 _skipped_for_review）并写迁移标记，
+    // 后续启动忽略之，防止日后清空某表后重启又重放陈旧数据复活已删除的数据（PR #2 comment 8）。
+    archiveLegacyJson(dataDir, migration);
+    saves = 0;
+    lastError = null;
+    return;
+  }
+
+  // 默认：sqlite
+  const dir = dataDir;
   storagePath = path.join(dir, 'mcp-demo.sqlite');
   await fs.promises.mkdir(dir, { recursive: true });
 
@@ -463,6 +756,7 @@ export async function initDb(opts: Overrides = {}): Promise<void> {
   defineModels(sequelize);
   await sequelize.authenticate();
   await sequelize.sync();
+  writeStoredDriver(dir, 'sqlite');
   // 写并发更好（热路径频繁落盘），且崩溃恢复更稳
   try {
     await sequelize.query('PRAGMA journal_mode=WAL');
@@ -471,8 +765,20 @@ export async function initDb(opts: Overrides = {}): Promise<void> {
   }
 
   if (fresh) {
-    await migrateLegacyJson(dir);
-    archiveLegacyJson(dir);
+    const migration = await migrateLegacyJson(dir);
+    // 全新 SQLite 库：有效遗留文件已由 migrateLegacyJson 导入（表为空才会导入）。
+    // 把「存在但未导入」的遗留文件（空文件 / 非法文件 / .bak 备份）也纳入 skipped 一起归档移出，
+    // 避免它们永久残留在 DATA_DIR（reviewer: Medium）；但仅对【真正存在文件】的 base 写标记，
+    // 无遗留文件的 base 不写标记，避免误忽略后续手动放入的遗留文件（PR #3 comment 3）。
+    const legacyBases = ['users', 'billing', 'recharge', 'recharge-settings', 'settings', 'stats'];
+    const skipped = [...migration.skipped];
+    for (const b of legacyBases) {
+      if (migration.imported.includes(b) || skipped.includes(b)) continue;
+      if (fs.existsSync(path.join(dir, `${b}.json`)) || fs.existsSync(path.join(dir, `${b}.json.bak`))) {
+        skipped.push(b);
+      }
+    }
+    archiveLegacyJson(dir, { imported: migration.imported, skipped });
   }
   saves = 0;
   lastError = null;
@@ -527,21 +833,29 @@ export async function loadStats(): Promise<{ snapshot: StatsSnapshot; recentIdx:
 
 export async function saveUsers(users: User[]): Promise<void> {
   if (!sequelize) return;
-  await UserModel.destroy({ where: {} });
-  if (users.length) await UserModel.bulkCreate(users.map(toUserRow));
+  // 整表替换放进事务：bulkCreate 失败时回滚 destroy，避免「删完没写入」的中间态丢数据
+  // （落库抖动时必须事务保护，保证原子性）。
+  await sequelize.transaction(async (t) => {
+    await UserModel.destroy({ where: {}, transaction: t });
+    if (users.length) await UserModel.bulkCreate(users.map(toUserRow), { transaction: t });
+  });
 }
 
 export async function saveBilling(state: Record<string, UserBilling>): Promise<void> {
   if (!sequelize) return;
-  await BillingModel.destroy({ where: {} });
-  const rows = Object.entries(state).map(([k, v]) => toBillingRow(k, v));
-  if (rows.length) await BillingModel.bulkCreate(rows);
+  await sequelize.transaction(async (t) => {
+    await BillingModel.destroy({ where: {}, transaction: t });
+    const rows = Object.entries(state).map(([k, v]) => toBillingRow(k, v));
+    if (rows.length) await BillingModel.bulkCreate(rows, { transaction: t });
+  });
 }
 
 export async function saveRechargeRecords(records: RechargeRecord[]): Promise<void> {
   if (!sequelize) return;
-  await RechargeRecordModel.destroy({ where: {} });
-  if (records.length) await RechargeRecordModel.bulkCreate(records.map(toRecordRow));
+  await sequelize.transaction(async (t) => {
+    await RechargeRecordModel.destroy({ where: {}, transaction: t });
+    if (records.length) await RechargeRecordModel.bulkCreate(records.map(toRecordRow), { transaction: t });
+  });
 }
 
 export async function saveRechargeSettings(cfg: RechargeConfig | null): Promise<void> {
@@ -571,7 +885,15 @@ const firstAt = new Map<string, number>();
 const DEBOUNCE_MS = 300;
 const MAX_WAIT_MS = 5000;
 
-/** 排队写库（防抖 300ms、最长 5s 强制刷、同 key 串行化）。DB 关时无任何操作。 */
+// 全局单写者队列：SQLite 整个数据库同一时刻只允许一个写事务，所有整表替换事务
+// （users / billing / recharge_records …）必须严格串行，否则 flushDb() 的 Promise.all
+// 或独立的 debounce 定时器并发跑不同数据集会争用写锁，导致其中一个写入被 SQLite 以
+// SQLITE_BUSY 吞掉（PR #3 comment 8）。writeChain 始终指向「当前排队写事务的尾部」，
+// 任何一次写入都先 await 它再执行，从而把整库写入压成一条单写者流水线。
+// （同数据集串行这一旧语义自动包含在内——它只是全局串行的特例。）
+let writeChain: Promise<void> = Promise.resolve();
+
+/** 排队写库（防抖 300ms、最长 5s 强制刷、全局串行化写事务）。DB 关时无任何操作。 */
 export function scheduleDbWrite(name: string, task: () => Promise<void>): void {
   if (!dbEnabled()) return;
   pending.set(name, task);
@@ -597,23 +919,33 @@ async function runNow(name: string): Promise<void> {
   if (!prev) return;
   pending.delete(name);
   firstAt.delete(name);
-  try {
-    await prev();
-    saves += 1;
-    lastError = null;
-  } catch (err) {
-    lastError = err instanceof Error ? err.message : String(err);
-    // 落库失败不影响服务，仅记录
-    console.error(`[db] 写入 ${name} 失败：${lastError}`);
-  }
+  // 串到全局写队列尾部：保证任意时刻整库只有一个事务在跑，杜绝 SQLITE_BUSY（PR #3 comment 8）。
+  // 同数据集串行（旧 inFlight 语义）自动包含在内。
+  const run = writeChain.then(async () => {
+    try {
+      await prev();
+      saves += 1;
+      lastError = null;
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+      // 落库失败不影响服务，仅记录
+      console.error(`[db] 写入 ${name} 失败：${lastError}`);
+    }
+  });
+  // 用不随 run 失败而 reject 的 promise 续接写链，避免一个写入失败污染后续排队写入
+  writeChain = run.catch(() => undefined);
+  await run;
 }
 
-/** 立即刷回所有待写数据（退出前 / 测试里调用）。 */
+/** 立即刷回所有待写数据（退出前 / 测试里调用）。全局串行，已触发但仍在途的写入也会被收尾。 */
 export async function flushDb(): Promise<void> {
   const names = [...pending.keys()];
   for (const t of timers.values()) clearTimeout(t);
   timers.clear();
-  await Promise.all(names.map((n) => runNow(n)));
+  // 已排程的逐个刷（runNow 内部走全局单写者队列，自动串行）；末尾再 await 写链尾部，
+  // 覆盖定时器已提交到链上、但 pending 已被对应 runNow 取走的写入，避免并发整表替换互相吞掉。
+  await Promise.all([...names].map((n) => runNow(n)));
+  await writeChain;
 }
 
 export async function closeDb(): Promise<void> {
@@ -621,6 +953,14 @@ export async function closeDb(): Promise<void> {
   timers.clear();
   pending.clear();
   firstAt.clear();
+  // 先把在途写入收尾，再关连接，避免 sequelize 已关时事务报错。writeChain 尾部已用
+  // .catch 续接，永不 reject，故 await 安全。
+  const tail = writeChain;
+  try {
+    await tail;
+  } catch {
+    /* 忽略：落库失败不影响关闭 */
+  }
   if (sequelize) {
     try {
       await sequelize.close();
@@ -643,8 +983,8 @@ export interface DbStatus {
 export function persistStatus(): DbStatus {
   return {
     enabled: dbEnabled(),
-    db: 'sqlite',
-    storage: storagePath || resolveDataDir(),
+    db: driverKind,
+    storage: describeStorage(),
     writable: lastError === null,
     saves,
     lastError,
