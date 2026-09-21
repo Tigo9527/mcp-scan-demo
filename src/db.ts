@@ -736,6 +736,9 @@ const timers = new Map<string, NodeJS.Timeout>();
 const firstAt = new Map<string, number>();
 const DEBOUNCE_MS = 300;
 const MAX_WAIT_MS = 5000;
+// 每个数据集一个「在途写入」promise：保证同数据集的事务严格串行，
+// 避免慢网络下两个整表替换事务交错、旧快照后提交覆盖新数据（PR #2 comment 7）。
+const inFlight = new Map<string, Promise<void>>();
 
 /** 排队写库（防抖 300ms、最长 5s 强制刷、同 key 串行化）。DB 关时无任何操作。 */
 export function scheduleDbWrite(name: string, task: () => Promise<void>): void {
@@ -759,27 +762,47 @@ export function scheduleDbWrite(name: string, task: () => Promise<void>): void {
 }
 
 async function runNow(name: string): Promise<void> {
+  // 同数据集串行：若已有一个整表替换事务在途（例如定时器已触发但网络事务仍在进行，
+  // 此刻又调用了 flushDb），先等它结束再开始下一个，杜绝交错提交（PR #2 comment 7）。
+  const prevInFlight = inFlight.get(name);
+  if (prevInFlight) {
+    try {
+      await prevInFlight;
+    } catch {
+      /* 前一个写入失败不阻塞当前写入 */
+    }
+  }
   const prev = pending.get(name);
   if (!prev) return;
   pending.delete(name);
   firstAt.delete(name);
+  const p = (async () => {
+    try {
+      await prev();
+      saves += 1;
+      lastError = null;
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+      // 落库失败不影响服务，仅记录
+      console.error(`[db] 写入 ${name} 失败：${lastError}`);
+    }
+  })();
+  inFlight.set(name, p);
   try {
-    await prev();
-    saves += 1;
-    lastError = null;
-  } catch (err) {
-    lastError = err instanceof Error ? err.message : String(err);
-    // 落库失败不影响服务，仅记录
-    console.error(`[db] 写入 ${name} 失败：${lastError}`);
+    await p;
+  } finally {
+    if (inFlight.get(name) === p) inFlight.delete(name);
   }
 }
 
-/** 立即刷回所有待写数据（退出前 / 测试里调用）。 */
+/** 立即刷回所有待写数据（退出前 / 测试里调用）。会等待任何已触发但仍在途的同数据集写入完成。 */
 export async function flushDb(): Promise<void> {
   const names = [...pending.keys()];
   for (const t of timers.values()) clearTimeout(t);
   timers.clear();
-  await Promise.all(names.map((n) => runNow(n)));
+  // 既刷掉已排程的，也等待任何已触发但仍在途（慢事务）的同数据集写入，避免并发整表替换
+  const all = new Set<string>([...names, ...inFlight.keys()]);
+  await Promise.all([...all].map((n) => runNow(n)));
 }
 
 export async function closeDb(): Promise<void> {
@@ -787,6 +810,16 @@ export async function closeDb(): Promise<void> {
   timers.clear();
   pending.clear();
   firstAt.clear();
+  // 先把在途写入收尾，再关连接，避免 sequelize 已关时事务报错
+  const flights = [...inFlight.values()];
+  inFlight.clear();
+  if (flights.length) {
+    try {
+      await Promise.all(flights);
+    } catch {
+      /* 忽略：落库失败不影响关闭 */
+    }
+  }
   if (sequelize) {
     try {
       await sequelize.close();

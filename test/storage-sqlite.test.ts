@@ -13,7 +13,7 @@ import * as billing from '../src/billing.js';
 import * as stats from '../src/stats.js';
 import * as recharge from '../src/recharge.js';
 import * as settings from '../src/settings.js';
-import { archiveLegacyJson, closeDb, configureDb, flushDb, initDb, saveUsers } from '../src/db.js';
+import { archiveLegacyJson, closeDb, configureDb, flushDb, initDb, saveUsers, scheduleDbWrite } from '../src/db.js';
 
 async function freshDb(): Promise<string> {
   const dir = mkdtempSync(join(tmpdir(), 'mcp-sqlite-'));
@@ -213,6 +213,41 @@ describe('archiveLegacyJson 只归档真正导入过的数据集', () => {
     expect(existsSync(join(dir, 'users.json'))).toBe(false);
     expect(existsSync(join(dir, '_migrated_json', 'users.json'))).toBe(true);
     expect(existsSync(join(dir, '_migrated_json', 'billing.json'))).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('同数据集写入串行化（防并发整表替换覆盖，PR #2 comment 7）', () => {
+  const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  it('定时器已触发在途写入时，flushDb 串行等待而非并行开启第二个同表事务', async () => {
+    const dir = await freshDb();
+    store.__resetForTest();
+    store.createUser({ username: 'u_a', email: null, provider: 'local' });
+
+    let active = 0;
+    let maxConcurrent = 0;
+    const slowWrite = async () => {
+      active += 1;
+      maxConcurrent = Math.max(maxConcurrent, active);
+      await delay(300); // 模拟慢网络事务
+      await saveUsers(store.listUsers().items);
+      active -= 1;
+    };
+
+    // 排程第一个写入；防抖定时器（300ms）触发后 runNow 进入慢事务、在途
+    scheduleDbWrite('users', slowWrite);
+    await delay(360); // 已越过 DEBOUNCE_MS，首个事务应在途（active=1）
+
+    // 此刻再排程第二个并立即 flushDb：应等待在途的首个事务结束，再写第二个，不可并行
+    store.createUser({ username: 'u_b', email: null, provider: 'local' });
+    scheduleDbWrite('users', slowWrite);
+    await flushDb();
+
+    expect(maxConcurrent).toBe(1); // 同数据集事务从未并行
+    store.__resetForTest();
+    await store.reloadUsersFromDb();
+    expect(store.countUsers()).toBe(2); // 最新快照完整落库，无旧快照覆盖
     rmSync(dir, { recursive: true, force: true });
   });
 });
