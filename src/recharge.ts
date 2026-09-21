@@ -182,8 +182,6 @@ const TRANSFER_TOPIC = keccakId('Transfer(address,address,uint256)');
 
 const SETTINGS_FILE = 'recharge-settings';
 const RECORD_FILE = 'recharge';
-const MAX_PERSISTED_POINTS = 2_147_483_647;
-
 let settingsLoaded = false;
 let settings: RechargeConfig | null = null;
 let recordsLoaded = false;
@@ -816,10 +814,6 @@ export async function submitRechargeTx(
   if (points <= 0) {
     throw new Error('按当前汇率换算的点数为 0，请提高转账金额或调整汇率。');
   }
-  if (points > MAX_PERSISTED_POINTS) {
-    throw new Error(`按当前汇率换算的点数超过上限（${MAX_PERSISTED_POINTS}），请降低金额或汇率后重试。`);
-  }
-
   creditBalance(params.userId, points);
 
   const record: RechargeRecord = {

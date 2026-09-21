@@ -178,6 +178,40 @@ describe('MySQL 存储选项解析（不连库）', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('DATA_DIR 里已有 mysql 后端标记时，缺省 STORAGE_DRIVER 也保持 mysql（不静默回退 sqlite）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcp-driver-mark-'));
+    writeFileSync(join(dir, '.storage-driver'), 'mysql\n');
+    const prevDataDir = process.env.DATA_DIR;
+    process.env.DATA_DIR = dir;
+    delete process.env.STORAGE_DRIVER;
+    process.env.MCP_DEMO_PERSIST = '0';
+    try {
+      await initDb({ enabled: false });
+      const ps = persistStatus();
+      expect(ps.db).toBe('mysql');
+    } finally {
+      if (prevDataDir === undefined) delete process.env.DATA_DIR;
+      else process.env.DATA_DIR = prevDataDir;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('STORAGE_DRIVER 与 DATA_DIR 后端标记不一致时 fail-fast', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcp-driver-mismatch-'));
+    writeFileSync(join(dir, '.storage-driver'), 'mysql\n');
+    const prevDataDir = process.env.DATA_DIR;
+    process.env.DATA_DIR = dir;
+    process.env.STORAGE_DRIVER = 'sqlite';
+    process.env.MCP_DEMO_PERSIST = '0';
+    try {
+      await expect(initDb({ enabled: false })).rejects.toThrow(/不一致/);
+    } finally {
+      if (prevDataDir === undefined) delete process.env.DATA_DIR;
+      else process.env.DATA_DIR = prevDataDir;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe.runIf(RUN_LIVE && isDisposableTestDb())(
@@ -217,6 +251,10 @@ describe.runIf(RUN_LIVE && isDisposableTestDb())(
     };
     await saveRechargeSettings(rc);
     expect((await loadRechargeSettings())?.tokenSymbol).toBe('USDT');
+    // 高精度汇率 round-trip（DOUBLE）：避免 FLOAT 在 MySQL 下约 7 位有效数字导致点数漂移
+    const preciseRate = 12_345_678.901_234_5;
+    await saveRechargeSettings({ ...rc, rate: preciseRate });
+    expect((await loadRechargeSettings())?.rate).toBeCloseTo(preciseRate, 10);
 
     // recharge records（事务整表替换）
     const rec: RechargeRecord = {
@@ -235,6 +273,9 @@ describe.runIf(RUN_LIVE && isDisposableTestDb())(
     };
     await saveRechargeRecords([rec]);
     expect((await loadRechargeRecords()).some((r) => r.id === rec.id)).toBe(true);
+    await saveRechargeRecords([{ ...rec, id: rec.id + '_precise', txHash: '0xdeadbeef01', rate: preciseRate }]);
+    const preciseSaved = (await loadRechargeRecords()).find((r) => r.id === rec.id + '_precise');
+    expect(preciseSaved?.rate).toBeCloseTo(preciseRate, 10);
 
     // github settings（upsert）
     const gh: GithubSettings = { clientId: 'cid', clientSecret: 'csec', redirectUri: 'https://cb', scope: 'read:user' };

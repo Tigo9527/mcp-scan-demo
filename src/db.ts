@@ -16,6 +16,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { Sequelize, DataTypes, Model } from 'sequelize';
+import type { Options as SequelizeOptions } from 'sequelize';
 import { config } from './config.js';
 
 import type { User } from './auth/store.js';
@@ -44,21 +45,59 @@ function resolveDataDir(): string {
 // ---------------------------------------------------------------- 方言选择（sqlite / mysql）
 
 export type StorageDriver = 'sqlite' | 'mysql';
+const DRIVER_MARK_FILE = '.storage-driver';
+
+function parseStorageDriver(raw: string, source: 'env' | 'mark' = 'env'): StorageDriver {
+  const v = raw.trim().toLowerCase();
+  if (v === 'sqlite') return 'sqlite';
+  if (v === 'mysql') return 'mysql';
+  if (source === 'mark') {
+    throw new Error(`检测到无效存储后端标记（${DRIVER_MARK_FILE}）: "${raw}"，仅支持 sqlite 或 mysql。`);
+  }
+  throw new Error(
+    `STORAGE_DRIVER 取值非法: "${raw}"（仅支持 sqlite 或 mysql）。` +
+      `未设置时默认 sqlite；若本想用 MySQL，请检查拼写。`,
+  );
+}
+
+function driverMarkPath(dir: string): string {
+  return path.join(dir, DRIVER_MARK_FILE);
+}
+
+function readStoredDriver(dir: string): StorageDriver | null {
+  const p = driverMarkPath(dir);
+  if (!fs.existsSync(p)) return null;
+  const raw = fs.readFileSync(p, 'utf8').trim();
+  if (!raw) return null;
+  return parseStorageDriver(raw, 'mark');
+}
+
+function writeStoredDriver(dir: string, driver: StorageDriver): void {
+  const p = driverMarkPath(dir);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(p, `${driver}\n`);
+}
 
 /**
  * 当前存储方言：默认 sqlite，可由 `STORAGE_DRIVER` 环境变量切换为 mysql。
  * 非法值直接抛错（fail-fast），避免「本想用 MySQL 却悄悄落到本地 sqlite」导致数据错写。
  */
-function resolveDriver(): StorageDriver {
+function resolveDriver(dir: string): StorageDriver {
+  const stored = readStoredDriver(dir);
   const raw = process.env.STORAGE_DRIVER?.trim();
-  if (!raw) return 'sqlite';
-  const v = raw.toLowerCase();
-  if (v === 'sqlite') return 'sqlite';
-  if (v === 'mysql') return 'mysql';
-  throw new Error(
-    `STORAGE_DRIVER 取值非法: "${raw}"（仅支持 sqlite 或 mysql）。` +
-      `未设置时默认 sqlite；若本想用 MySQL，请检查拼写。`,
-  );
+  if (raw) {
+    const envDriver = parseStorageDriver(raw, 'env');
+    if (stored && stored !== envDriver) {
+      throw new Error(
+        `存储后端不一致：STORAGE_DRIVER=${envDriver}，但 ${DRIVER_MARK_FILE} 记录为 ${stored}。` +
+          '请保持一致，或在完成数据迁移后再切换。',
+      );
+    }
+    return envDriver;
+  }
+  // 首次启动（无标记）仍默认 sqlite；一旦初始化过 mysql，会由标记兜底避免静默回退到 sqlite。
+  if (stored) return stored;
+  return 'sqlite';
 }
 
 export interface MySqlOptions {
@@ -104,12 +143,12 @@ export function resolveMysqlOptions(): MySqlOptions {
  * 注意 Sequelize v6 的对象式构造不支持 `url` 字段，URI 必须用 `new Sequelize(uri, options)` 重载，
  * 因此这里返回构造实参元组而非带 `url` 的对象（PR #3 comment 2）。
  */
-export type SequelizeArgs = [string | Record<string, unknown>, Record<string, unknown>?];
+export type SequelizeArgs = [string, SequelizeOptions] | [SequelizeOptions];
 
 export function resolveSequelizeOptions(driver: StorageDriver): SequelizeArgs {
   if (driver === 'mysql') {
     const o = resolveMysqlOptions();
-    const opts: Record<string, unknown> = { dialect: 'mysql', logging: false };
+    const opts: SequelizeOptions = { dialect: 'mysql', logging: false };
     if (o.url) return [o.url, opts];
     return [
       {
@@ -192,9 +231,9 @@ function defineModels(seq: Sequelize): void {
   BillingModel.init(
     {
       userId: { type: DataTypes.STRING, primaryKey: true },
-      used: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
-      balance: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
-      recharged: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+      used: { type: DataTypes.BIGINT, allowNull: false, defaultValue: 0 },
+      balance: { type: DataTypes.BIGINT, allowNull: false, defaultValue: 0 },
+      recharged: { type: DataTypes.BIGINT, allowNull: false, defaultValue: 0 },
       firstSeenAt: { type: DataTypes.STRING, allowNull: true },
       lastSeenAt: { type: DataTypes.STRING, allowNull: true },
     },
@@ -206,7 +245,7 @@ function defineModels(seq: Sequelize): void {
       id: { type: DataTypes.INTEGER, primaryKey: true, defaultValue: 1 },
       recipient: { type: DataTypes.STRING, allowNull: false },
       rpcUrl: { type: DataTypes.TEXT, allowNull: false },
-      rate: { type: DataTypes.FLOAT, allowNull: false, defaultValue: 0 },
+      rate: { type: DataTypes.DOUBLE, allowNull: false, defaultValue: 0 },
       tokenAddress: { type: DataTypes.STRING, allowNull: true },
       tokenDecimals: { type: DataTypes.INTEGER, allowNull: true },
       chainId: { type: DataTypes.STRING, allowNull: true },
@@ -229,8 +268,8 @@ function defineModels(seq: Sequelize): void {
       token: { type: DataTypes.STRING, allowNull: false },
       amount: { type: DataTypes.STRING, allowNull: false },
       rawAmount: { type: DataTypes.TEXT, allowNull: false },
-      points: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
-      rate: { type: DataTypes.FLOAT, allowNull: false, defaultValue: 0 },
+      points: { type: DataTypes.BIGINT, allowNull: false, defaultValue: 0 },
+      rate: { type: DataTypes.DOUBLE, allowNull: false, defaultValue: 0 },
       status: { type: DataTypes.STRING, allowNull: false },
       createdAt: { type: DataTypes.STRING, allowNull: true },
     },
@@ -659,20 +698,21 @@ export function archiveLegacyJson(dir: string, result?: { imported: string[]; sk
  */
 export async function initDb(opts: Overrides = {}): Promise<void> {
   overrides = { ...overrides, ...opts };
+  const dataDir = resolveDataDir();
   if (!isEnabled()) {
     await closeDb();
-    driverKind = resolveDriver();
+    driverKind = resolveDriver(dataDir);
     return;
   }
 
   await closeDb();
-  driverKind = resolveDriver();
+  driverKind = resolveDriver(dataDir);
 
   if (driverKind === 'mysql') {
     // 现有 SQLite 存储检测：若 DATA_DIR 下已有 mcp-demo.sqlite，说明此前跑在 SQLite 上、旧 JSON
     // 已被迁走，直接切到 MySQL 会静默以空库启动丢失数据。此处 fail-fast，要求先手动做
     // SQLite→MySQL 迁移（或确认不再需要旧数据后删除该文件）。
-    const sqliteFile = path.join(resolveDataDir(), 'mcp-demo.sqlite');
+    const sqliteFile = path.join(dataDir, 'mcp-demo.sqlite');
     if (fs.existsSync(sqliteFile)) {
       throw new Error(
         '检测到现有 SQLite 存储（mcp-demo.sqlite），STORAGE_DRIVER=mysql 无法自动迁移，启动中止。' +
@@ -689,24 +729,25 @@ export async function initDb(opts: Overrides = {}): Promise<void> {
 
     // 复用 resolveSequelizeOptions 构造 Sequelize 实例（含 MYSQL_URL 的 new Sequelize(uri, opts) 重载），
     // 避免对象式构造把 url 当普通字段导致连不上（PR #3 comment 2）。
-    const [arg, extra] = resolveSequelizeOptions('mysql');
-    sequelize = new Sequelize(arg as never, ...(extra ? [extra as Record<string, unknown>] : []));
+    const mysqlArgs = resolveSequelizeOptions('mysql');
+    sequelize = typeof mysqlArgs[0] === 'string' ? new Sequelize(mysqlArgs[0], mysqlArgs[1]) : new Sequelize(mysqlArgs[0]);
     defineModels(sequelize);
     await sequelize.authenticate();
     await sequelize.sync();
+    writeStoredDriver(dataDir, 'mysql');
     // 受保护的遗留数据导入：仅当各表为空时，才从 DATA_DIR 下的旧 JSON 导入，
     // 避免「指向 MySQL 却以空库静默启动」。注意 sqlite→mysql 的库内迁移不在此自动完成。
-    const migration = await migrateLegacyJson(resolveDataDir());
+    const migration = await migrateLegacyJson(dataDir);
     // 归档真正导入过的数据集；表非空而跳过的文件也移出 DATA_DIR（到 _skipped_for_review）并写迁移标记，
     // 后续启动忽略之，防止日后清空某表后重启又重放陈旧数据复活已删除的数据（PR #2 comment 8）。
-    archiveLegacyJson(resolveDataDir(), migration);
+    archiveLegacyJson(dataDir, migration);
     saves = 0;
     lastError = null;
     return;
   }
 
   // 默认：sqlite
-  const dir = resolveDataDir();
+  const dir = dataDir;
   storagePath = path.join(dir, 'mcp-demo.sqlite');
   await fs.promises.mkdir(dir, { recursive: true });
 
@@ -715,6 +756,7 @@ export async function initDb(opts: Overrides = {}): Promise<void> {
   defineModels(sequelize);
   await sequelize.authenticate();
   await sequelize.sync();
+  writeStoredDriver(dir, 'sqlite');
   // 写并发更好（热路径频繁落盘），且崩溃恢复更稳
   try {
     await sequelize.query('PRAGMA journal_mode=WAL');
