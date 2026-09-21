@@ -241,6 +241,19 @@ describe('submitRechargeTx', () => {
     expect(billing.getBalance('u2')).toBe(balanceAfterFirst);
     expect(recharge.listRecharges()).toHaveLength(1);
   });
+
+  it('换算点数超过持久化上限时拒绝入账且不写历史', async () => {
+    recharge.__resetForTest();
+    await recharge.setRechargeConfig({ ...BASE_CONFIG, rate: 3_000_000_000 });
+    const provider = makeProvider({
+      to: RECIPIENT,
+      value: 10n ** 18n,
+      receipt: { status: 1, logs: [] },
+    });
+    await expect(recharge.submitRechargeTx({ userId: 'u_over', txHash: TX }, { provider })).rejects.toThrow(/超过上限/);
+    expect(billing.getUserBilling('u_over')).toBeNull();
+    expect(recharge.listRecharges()).toHaveLength(0);
+  });
 });
 
 describe('listRecharges 筛选', () => {

@@ -313,9 +313,9 @@ function fromUserRow(r: Record<string, unknown>): User {
 function toBillingRow(userId: string, b: UserBilling): Record<string, unknown> {
   return {
     userId,
-    used: b.used | 0,
-    balance: b.balance | 0,
-    recharged: b.recharged | 0,
+    used: Math.trunc(Number(b.used) || 0),
+    balance: Math.trunc(Number(b.balance) || 0),
+    recharged: Math.trunc(Number(b.recharged) || 0),
     firstSeenAt: b.firstSeenAt,
     lastSeenAt: b.lastSeenAt,
   };

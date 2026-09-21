@@ -76,6 +76,7 @@ export interface Allowance {
 }
 
 const FILE = 'billing';
+const MAX_PERSISTED_POINTS = 2_147_483_647;
 
 let loaded = false;
 let state: Record<string, UserBilling> = {};
@@ -191,11 +192,20 @@ export function creditBalance(userId: string, points: number): UserBilling {
   ensureLoaded();
   if (!userId) throw new Error('creditBalance 需要已登录用户 id');
   const n = Number(points);
-  if (!Number.isFinite(n) || n <= 0) {
+  if (!Number.isFinite(n) || n <= 0 || !Number.isInteger(n)) {
     throw new Error(`充值点数必须为正数，收到：${String(points)}`);
   }
   const now = new Date().toISOString();
   const entry = state[userId] ?? emptyEntry(userId, now);
+  if (n > MAX_PERSISTED_POINTS) {
+    throw new Error(`充值点数超过上限（${MAX_PERSISTED_POINTS}），请调低金额或汇率后重试。`);
+  }
+  if (entry.balance + n > MAX_PERSISTED_POINTS) {
+    throw new Error(`充值后余额将超过上限（${MAX_PERSISTED_POINTS}），请联系管理员处理。`);
+  }
+  if (entry.recharged + n > MAX_PERSISTED_POINTS) {
+    throw new Error(`累计充值将超过上限（${MAX_PERSISTED_POINTS}），请联系管理员处理。`);
+  }
   entry.userId = userId;
   entry.balance += n;
   entry.recharged += n;
