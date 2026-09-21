@@ -116,6 +116,7 @@ describe('计费账本（billing）', () => {
     expect(() => creditBalance('', 10)).toThrow();
     expect(() => creditBalance('u-r2', 0)).toThrow();
     expect(() => creditBalance('u-r2', Number.NaN)).toThrow();
+    expect(() => creditBalance('u-r2', Number.MAX_SAFE_INTEGER + 1)).toThrow(/安全整数/);
     expect(getTotalBilling().rechargedTotal).toBe(0);
   });
 });

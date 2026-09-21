@@ -190,8 +190,8 @@ export function creditBalance(userId: string, points: number): UserBilling {
   ensureLoaded();
   if (!userId) throw new Error('creditBalance 需要已登录用户 id');
   const n = Number(points);
-  if (!Number.isFinite(n) || n <= 0 || !Number.isInteger(n)) {
-    throw new Error(`充值点数必须为正数，收到：${String(points)}`);
+  if (!Number.isFinite(n) || n <= 0 || !Number.isSafeInteger(n)) {
+    throw new Error(`充值点数必须为正的安全整数（<= ${Number.MAX_SAFE_INTEGER}），收到：${String(points)}`);
   }
   const now = new Date().toISOString();
   const entry = state[userId] ?? emptyEntry(userId, now);
