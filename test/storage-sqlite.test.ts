@@ -5,7 +5,7 @@
  * - 旧 JSON 数据在启动时自动导入（users / billing / stats / recharge / 充值设置 / GitHub 设置）
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as store from '../src/auth/store.js';
@@ -13,7 +13,7 @@ import * as billing from '../src/billing.js';
 import * as stats from '../src/stats.js';
 import * as recharge from '../src/recharge.js';
 import * as settings from '../src/settings.js';
-import { archiveLegacyJson, closeDb, configureDb, flushDb, initDb, saveUsers, scheduleDbWrite } from '../src/db.js';
+import { archiveLegacyJson, closeDb, configureDb, flushDb, initDb, migrateLegacyJson, saveUsers, scheduleDbWrite } from '../src/db.js';
 
 async function freshDb(): Promise<string> {
   const dir = mkdtempSync(join(tmpdir(), 'mcp-sqlite-'));
@@ -194,13 +194,13 @@ describe('archiveLegacyJson 只归档真正导入过的数据集', () => {
     writeFileSync(join(dir, 'settings.json'), '{}');
     writeFileSync(join(dir, 'stats.json'), '{}');
     // 仅 settings / stats 被导入过 → 只有它们被移走，users.json 保留（表非空被跳过的场景）
-    archiveLegacyJson(dir, ['settings', 'stats']);
+    archiveLegacyJson(dir, { imported: ['settings', 'stats'], skipped: [] });
     expect(existsSync(join(dir, 'users.json'))).toBe(true);
     expect(existsSync(join(dir, '_migrated_json', 'settings.json'))).toBe(true);
     expect(existsSync(join(dir, '_migrated_json', 'stats.json'))).toBe(true);
     // .bak 也一并处理
     writeFileSync(join(dir, 'recharge.json.bak'), '{}');
-    archiveLegacyJson(dir, ['recharge']);
+    archiveLegacyJson(dir, { imported: ['recharge'], skipped: [] });
     expect(existsSync(join(dir, '_migrated_json', 'recharge.json.bak'))).toBe(true);
     rmSync(dir, { recursive: true, force: true });
   });
@@ -213,6 +213,49 @@ describe('archiveLegacyJson 只归档真正导入过的数据集', () => {
     expect(existsSync(join(dir, 'users.json'))).toBe(false);
     expect(existsSync(join(dir, '_migrated_json', 'users.json'))).toBe(true);
     expect(existsSync(join(dir, '_migrated_json', 'billing.json'))).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('遗留 JSON 迁移标记（防清空表后重启复活，PR #2 comment 8）', () => {
+  it('表非空而跳过的遗留 JSON 被移出且标记，后续启动不再复活', async () => {
+    const dir = await freshDb();
+    store.__resetForTest();
+    // 预先造一个用户，使 users 表非空（模拟「该表已由其它途径填充」）
+    store.createUser({ username: 'existing', email: null, provider: 'local' });
+    await flushDb();
+    store.__resetForTest();
+    await store.reloadUsersFromDb();
+    expect(store.countUsers()).toBe(1);
+
+    // 放入一份遗留 users.json（含额外用户 legacy2），它应被跳过而非导入
+    writeFileSync(
+      join(dir, 'users.json'),
+      JSON.stringify({ users: [{ id: 'u2', username: 'legacy2', provider: 'local' }] }),
+    );
+
+    // 首次「启动」：迁移扫描 → users 表非空 → 跳过，返回 skipped
+    let res = await migrateLegacyJson(dir);
+    expect(res.skipped).toContain('users');
+    expect(res.imported).not.toContain('users');
+    // 归档：跳过的文件移出 DATA_DIR 到 _skipped_for_review，并写迁移标记
+    archiveLegacyJson(dir, res);
+    expect(existsSync(join(dir, 'users.json'))).toBe(false);
+    expect(existsSync(join(dir, '_migrated_json', '_skipped_for_review', 'users.json'))).toBe(true);
+    const status = JSON.parse(readFileSync(join(dir, '_migrated_json', '_status.json'), 'utf8'));
+    expect(status.users).toBe('skipped');
+
+    // 模拟「管理员删空该表」后再次启动：迁移读取状态标记，忽略已跳过的数据集，不再复活 legacy2
+    store.__resetForTest();
+    await saveUsers([]); // 清空 users 表
+    await flushDb();
+    res = await migrateLegacyJson(dir);
+    expect(res.imported).not.toContain('users');
+    expect(res.skipped).not.toContain('users'); // 已被状态标记为处理过，不再参与
+    store.__resetForTest();
+    await store.reloadUsersFromDb();
+    expect(store.countUsers()).toBe(0); // legacy2 未被复活
+
     rmSync(dir, { recursive: true, force: true });
   });
 });

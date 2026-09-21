@@ -447,13 +447,34 @@ export function configureDb(next: Overrides): void {
   overrides = { ...overrides, ...next };
 }
 
+type MigrationStatus = Record<string, 'imported' | 'skipped'>;
+
+/** 读取上次遗留 JSON 迁移的完成/跳过标记。已处理过的数据集不再重复读取旧 JSON，
+ * 避免「表被管理员清空后重启又读旧 JSON 复活已删除数据」（PR #2 comment 8）。 */
+function readMigrationStatus(dir: string): MigrationStatus {
+  try {
+    const p = path.join(dir, '_migrated_json', '_status.json');
+    if (!fs.existsSync(p)) return {};
+    const d = JSON.parse(fs.readFileSync(p, 'utf8'));
+    return d && typeof d === 'object' ? (d as MigrationStatus) : {};
+  } catch {
+    return {};
+  }
+}
+
 /**
  * 旧 JSON 数据自动导入：仅当对应表为空时才导入，保证幂等（重复启动不重复导入）。
- * 返回实际已导入的数据集 base 名（如 'users'），供 archiveLegacyJson 只归档真正导入过的文件，
- * 避免「表非空而跳过某文件、却仍把它移走」导致遗漏的用户/配置丢失。
+ * 返回实际导入的数据集（imported）与因表非空而跳过的数据集（skipped）。
+ * - imported 的文件会被归档移走；
+ * - skipped 的文件（表非空，旧 JSON 可能含额外用户/配置）也会被移出 DATA_DIR 到
+ *   `_migrated_json/_skipped_for_review`，并写入迁移标记，后续启动忽略之——
+ *   否则若管理员日后清空该表，重启会再次读这份旧 JSON 把已删除数据复活。
  */
-async function migrateLegacyJson(dir: string): Promise<string[]> {
+export async function migrateLegacyJson(dir: string): Promise<{ imported: string[]; skipped: string[] }> {
   const imported: string[] = [];
+  const skipped: string[] = [];
+  // 已处理过（导入或跳过）的数据集不再重复处理
+  const done = readMigrationStatus(dir);
   const readJson = (name: string): unknown => {
     try {
       const p = path.join(dir, name);
@@ -463,88 +484,146 @@ async function migrateLegacyJson(dir: string): Promise<string[]> {
       return undefined;
     }
   };
+  const consider = (base: string): boolean => !done[base];
+  const wasImported = (base: string): boolean => {
+    imported.push(base);
+    return true;
+  };
+  const wasSkipped = (base: string): boolean => {
+    skipped.push(base);
+    return true;
+  };
 
-  if ((await UserModel.count()) === 0) {
-    const data = readJson('users.json') as { users?: User[] } | undefined;
-    const users = (data?.users ?? []).filter((u) => u?.id && u?.username);
-    if (users.length) {
-      await UserModel.bulkCreate(users.map(toUserRow));
-      imported.push('users');
+  if (consider('users')) {
+    if ((await UserModel.count()) === 0) {
+      const data = readJson('users.json') as { users?: User[] } | undefined;
+      const users = (data?.users ?? []).filter((u) => u?.id && u?.username);
+      if (users.length) {
+        await UserModel.bulkCreate(users.map(toUserRow));
+        wasImported('users');
+      }
+    } else {
+      wasSkipped('users');
     }
   }
 
-  if ((await BillingModel.count()) === 0) {
-    const data = readJson('billing.json') as Record<string, UserBilling> | undefined;
-    const rows: Record<string, unknown>[] = [];
-    for (const [k, v] of Object.entries(data ?? {})) {
-      if (!v || typeof v !== 'object') continue;
-      rows.push(toBillingRow(k, v));
-    }
-    if (rows.length) {
-      await BillingModel.bulkCreate(rows);
-      imported.push('billing');
-    }
-  }
-
-  if ((await RechargeRecordModel.count()) === 0) {
-    const data = readJson('recharge.json') as RechargeRecord[] | undefined;
-    const rows = (Array.isArray(data) ? data : []).filter((r) => r && typeof r === 'object');
-    if (rows.length) {
-      await RechargeRecordModel.bulkCreate(rows.map(toRecordRow));
-      imported.push('recharge');
+  if (consider('billing')) {
+    if ((await BillingModel.count()) === 0) {
+      const data = readJson('billing.json') as Record<string, UserBilling> | undefined;
+      const rows: Record<string, unknown>[] = [];
+      for (const [k, v] of Object.entries(data ?? {})) {
+        if (!v || typeof v !== 'object') continue;
+        rows.push(toBillingRow(k, v));
+      }
+      if (rows.length) {
+        await BillingModel.bulkCreate(rows);
+        wasImported('billing');
+      }
+    } else {
+      wasSkipped('billing');
     }
   }
 
-  if ((await RechargeSettingModel.count()) === 0) {
-    const data = readJson('recharge-settings.json') as RechargeConfig | undefined;
-    if (data && data.recipient) {
-      await RechargeSettingModel.create(toSettingsRow(data));
-      imported.push('recharge-settings');
+  if (consider('recharge')) {
+    if ((await RechargeRecordModel.count()) === 0) {
+      const data = readJson('recharge.json') as RechargeRecord[] | undefined;
+      const rows = (Array.isArray(data) ? data : []).filter((r) => r && typeof r === 'object');
+      if (rows.length) {
+        await RechargeRecordModel.bulkCreate(rows.map(toRecordRow));
+        wasImported('recharge');
+      }
+    } else {
+      wasSkipped('recharge');
     }
   }
 
-  if ((await GithubSettingModel.count()) === 0) {
-    const data = readJson('settings.json') as GithubSettings | undefined;
-    if (data && (data.clientId !== undefined || data.clientSecret !== undefined)) {
-      await GithubSettingModel.create(toGithubRow(data));
-      imported.push('settings');
+  if (consider('recharge-settings')) {
+    if ((await RechargeSettingModel.count()) === 0) {
+      const data = readJson('recharge-settings.json') as RechargeConfig | undefined;
+      if (data && data.recipient) {
+        await RechargeSettingModel.create(toSettingsRow(data));
+        wasImported('recharge-settings');
+      }
+    } else {
+      wasSkipped('recharge-settings');
     }
   }
 
-  if ((await StatsModel.count()) === 0) {
-    const data = readJson('stats.json') as StatsSnapshot | undefined;
-    if (data && data.counters) {
-      await StatsModel.create(toStatsRow(data, (data.recent?.length ?? 0) % 200));
-      imported.push('stats');
+  if (consider('settings')) {
+    if ((await GithubSettingModel.count()) === 0) {
+      const data = readJson('settings.json') as GithubSettings | undefined;
+      if (data && (data.clientId !== undefined || data.clientSecret !== undefined)) {
+        await GithubSettingModel.create(toGithubRow(data));
+        wasImported('settings');
+      }
+    } else {
+      wasSkipped('settings');
     }
   }
 
-  return imported;
+  if (consider('stats')) {
+    if ((await StatsModel.count()) === 0) {
+      const data = readJson('stats.json') as StatsSnapshot | undefined;
+      if (data && data.counters) {
+        await StatsModel.create(toStatsRow(data, (data.recent?.length ?? 0) % 200));
+        wasImported('stats');
+      }
+    } else {
+      wasSkipped('stats');
+    }
+  }
+
+  return { imported, skipped };
 }
 
 /**
- * 把已迁移的遗留 JSON 移出 data/，保持目录干净。失败不阻塞。
- * - 不传 keys：移动全部（sqlite 新建库场景，所有表均为空且都已导入）；
- * - 传 keys：只移动真正导入过的数据集（mysql 场景：表非空而跳过的文件不被误删/误移）。
+ * 把已处理的遗留 JSON 移出 data/，保持目录干净。失败不阻塞。
+ * - 不传 result：移动全部（sqlite 新建库场景，所有表均为空且都已导入），并记录为 imported；
+ * - 传 result：imported 移入 `_migrated_json`，skipped 移入 `_migrated_json/_skipped_for_review`，
+ *   并写 `_migrated_json/_status.json` 记录每个数据集的 imported/skipped 标记，
+ *   供后续启动忽略已处理的数据集（PR #2 comment 8）。
  */
-export function archiveLegacyJson(dir: string, keys?: string[]): void {
+export function archiveLegacyJson(dir: string, result?: { imported: string[]; skipped: string[] }): void {
   const bases = ['users', 'billing', 'recharge', 'recharge-settings', 'settings', 'stats'];
-  const names: string[] = [];
-  for (const b of bases) {
-    if (keys && !keys.includes(b)) continue;
-    names.push(`${b}.json`);
-    names.push(`${b}.json.bak`);
-  }
-  const dest = path.join(dir, '_migrated_json');
-  for (const n of names) {
-    const src = path.join(dir, n);
-    if (!fs.existsSync(src)) continue;
-    try {
-      fs.mkdirSync(dest, { recursive: true });
-      fs.renameSync(src, path.join(dest, n));
-    } catch {
-      /* 忽略：迁移已成功，留着旧文件不影响 */
+  const status = readMigrationStatus(dir);
+  const move = (base: string, destDir: string): void => {
+    for (const n of [`${base}.json`, `${base}.json.bak`]) {
+      const src = path.join(dir, n);
+      if (!fs.existsSync(src)) continue;
+      try {
+        fs.mkdirSync(destDir, { recursive: true });
+        fs.renameSync(src, path.join(destDir, n));
+      } catch {
+        /* 忽略：迁移已成功，留着旧文件不影响 */
+      }
     }
+  };
+
+  if (!result) {
+    const dest = path.join(dir, '_migrated_json');
+    for (const b of bases) {
+      move(b, dest);
+      status[b] = 'imported';
+    }
+  } else {
+    const importedDir = path.join(dir, '_migrated_json');
+    const skippedDir = path.join(dir, '_migrated_json', '_skipped_for_review');
+    for (const b of result.imported) {
+      move(b, importedDir);
+      status[b] = 'imported';
+    }
+    for (const b of result.skipped) {
+      move(b, skippedDir);
+      status[b] = 'skipped';
+    }
+  }
+
+  try {
+    const dest = path.join(dir, '_migrated_json');
+    fs.mkdirSync(dest, { recursive: true });
+    fs.writeFileSync(path.join(dest, '_status.json'), JSON.stringify(status, null, 2));
+  } catch {
+    /* 忽略：标记写入失败不影响主流程 */
   }
 }
 
@@ -602,10 +681,10 @@ export async function initDb(opts: Overrides = {}): Promise<void> {
     await sequelize.sync();
     // 受保护的遗留数据导入：仅当各表为空时，才从 DATA_DIR 下的旧 JSON 导入，
     // 避免「指向 MySQL 却以空库静默启动」。注意 sqlite→mysql 的库内迁移不在此自动完成。
-    const imported = await migrateLegacyJson(resolveDataDir());
-    // 只归档真正导入过的数据集：表非空而跳过的文件（可能含额外用户/配置）保留原处待手动迁移，
-    // 防止日后清空某表后重启又重放陈旧数据。
-    archiveLegacyJson(resolveDataDir(), imported);
+    const migration = await migrateLegacyJson(resolveDataDir());
+    // 归档真正导入过的数据集；表非空而跳过的文件也移出 DATA_DIR（到 _skipped_for_review）并写迁移标记，
+    // 后续启动忽略之，防止日后清空某表后重启又重放陈旧数据复活已删除的数据（PR #2 comment 8）。
+    archiveLegacyJson(resolveDataDir(), migration);
     saves = 0;
     lastError = null;
     return;
@@ -629,8 +708,8 @@ export async function initDb(opts: Overrides = {}): Promise<void> {
   }
 
   if (fresh) {
-    await migrateLegacyJson(dir);
-    archiveLegacyJson(dir);
+    const migration = await migrateLegacyJson(dir);
+    archiveLegacyJson(dir, migration);
   }
   saves = 0;
   lastError = null;
