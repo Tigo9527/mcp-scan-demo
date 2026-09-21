@@ -10,6 +10,8 @@
  * - `MCP_DEMO_PERSIST=0` 或 `configureDb({ enabled: false })` 会关停 DB：模块退回纯内存态，
  *   测试期间即此模式（不落库、不连 sqlite），行为与旧 `enabled:false` 一致。
  * - 永不抛出：写库失败只记录 lastError，绝不因为落盘问题让服务崩溃。
+ * - 双方言：默认 `sqlite`；设 `STORAGE_DRIVER=mysql` 可切换为 MySQL（Sequelize 方言切换，
+ *   模型无需改动）。MySQL 连接优先读 `MYSQL_URL`，否则读 `MYSQL_HOST/PORT/USER/PASSWORD/DATABASE`。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -39,15 +41,114 @@ function resolveDataDir(): string {
   return overrides.dataDir ?? process.env.DATA_DIR ?? config.dataDir;
 }
 
-/** 人类可读的存储位置描述（sqlite 为文件路径）。 */
+// ---------------------------------------------------------------- 方言选择（sqlite / mysql）
+
+export type StorageDriver = 'sqlite' | 'mysql';
+
+/**
+ * 当前存储方言：默认 sqlite，可由 `STORAGE_DRIVER` 环境变量切换为 mysql。
+ * 非法值直接抛错（fail-fast），避免「本想用 MySQL 却悄悄落到本地 sqlite」导致数据错写。
+ */
+function resolveDriver(): StorageDriver {
+  const raw = process.env.STORAGE_DRIVER?.trim();
+  if (!raw) return 'sqlite';
+  const v = raw.toLowerCase();
+  if (v === 'sqlite') return 'sqlite';
+  if (v === 'mysql') return 'mysql';
+  throw new Error(
+    `STORAGE_DRIVER 取值非法: "${raw}"（仅支持 sqlite 或 mysql）。` +
+      `未设置时默认 sqlite；若本想用 MySQL，请检查拼写。`,
+  );
+}
+
+export interface MySqlOptions {
+  url?: string;
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database: string;
+}
+
+/** 解析 MySQL 连接参数：优先 `MYSQL_URL`（完整连接串），否则读各分项（带默认值）。 */
+export function resolveMysqlOptions(): MySqlOptions {
+  const url = process.env.MYSQL_URL?.trim() || undefined;
+  const rawPort = process.env.MYSQL_PORT?.trim();
+  let port = 3306;
+  if (rawPort !== undefined && rawPort !== '') {
+    const n = Number(rawPort);
+    // 仅当变量缺失/为空时用默认；非整数或越界（如 3306x / -1 / 70000）直接 fail-fast，
+    // 避免连到非预期端口（PR #3 comment 1）
+    if (!Number.isInteger(n) || n < 1 || n > 65535) {
+      throw new Error(`MYSQL_PORT 非法：必须是 1-65535 的整数，收到 "${rawPort}"`);
+    }
+    port = n;
+  }
+  return {
+    url,
+    host: process.env.MYSQL_HOST?.trim() || '127.0.0.1',
+    port,
+    user: process.env.MYSQL_USER?.trim() || 'root',
+    // 口令不做 trim：首尾空白可能是有效凭据的一部分，误删会导致认证失败。
+    password: process.env.MYSQL_PASSWORD ?? '',
+    database: process.env.MYSQL_DATABASE?.trim() || 'mcp_demo',
+  };
+}
+
+/**
+ * 把方言 / 连接参数转成 Sequelize 构造参数（`new Sequelize(...)` 的实参），便于复用与测试断言。
+ * 注意 Sequelize v6 的对象式构造不支持 `url` 字段，URI 必须用 `new Sequelize(uri, options)` 重载，
+ * 因此这里返回构造实参元组而非带 `url` 的对象（PR #3 comment 2）。
+ */
+export type SequelizeArgs = [string | Record<string, unknown>, Record<string, unknown>?];
+
+export function resolveSequelizeOptions(driver: StorageDriver): SequelizeArgs {
+  if (driver === 'mysql') {
+    const o = resolveMysqlOptions();
+    const opts: Record<string, unknown> = { dialect: 'mysql', logging: false };
+    if (o.url) return [o.url, opts];
+    return [
+      {
+        dialect: 'mysql',
+        host: o.host,
+        port: o.port,
+        username: o.user,
+        password: o.password,
+        database: o.database,
+        logging: false,
+      },
+    ];
+  }
+  return [{ dialect: 'sqlite', logging: false }];
+}
+
+/** 人类可读的存储位置描述（sqlite 为文件路径，mysql 为 host/db，不含口令）。 */
 function describeStorage(): string {
+  if (driverKind === 'mysql') {
+    const o = resolveMysqlOptions();
+    if (o.url) return describeMySqlUrl(o.url);
+    return `mysql://${o.host}:${o.port}/${o.database}`;
+  }
   return storagePath || resolveDataDir();
+}
+
+/** 从 MYSQL_URL 解析出不含口令的 redacted 描述（mysql://host:port/db）。 */
+function describeMySqlUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    const db = u.pathname.replace(/^\/+/, '');
+    const port = u.port || '3306';
+    return `mysql://${u.hostname}:${port}/${db}`;
+  } catch {
+    return 'mysql://(invalid-url)';
+  }
 }
 
 // ---------------------------------------------------------------- Sequelize 实例与模型
 
 let sequelize: Sequelize | null = null;
 let storagePath = '';
+let driverKind: StorageDriver = 'sqlite';
 let saves = 0;
 let lastError: string | null = null;
 
@@ -149,8 +250,8 @@ function defineModels(seq: Sequelize): void {
     {
       id: { type: DataTypes.INTEGER, primaryKey: true, defaultValue: 1 },
       since: { type: DataTypes.STRING, allowNull: true },
-      // 序列化后的统计 JSON 可能很大（byUser/recent 在 500 用户 / 90 天 / 200 条近期 上限下），
-      // 用 'long' 给足容量（SQLite 下等同于 TEXT，均足够容纳）。
+      // 序列化后的统计 JSON 可能超过 MySQL TEXT 的 64 KiB 上限（byUser/recent 在 500 用户 /
+      // 90 天 / 200 条近期 上限下会很大），故用 'long' → MySQL 的 LONGTEXT（SQLite 仍为 TEXT，均足够）。
       counters: { type: DataTypes.TEXT('long'), allowNull: true },
       byMethod: { type: DataTypes.TEXT('long'), allowNull: true },
       byTool: { type: DataTypes.TEXT('long'), allowNull: true },
@@ -556,11 +657,51 @@ export async function initDb(opts: Overrides = {}): Promise<void> {
   overrides = { ...overrides, ...opts };
   if (!isEnabled()) {
     await closeDb();
+    driverKind = resolveDriver();
     return;
   }
 
   await closeDb();
+  driverKind = resolveDriver();
 
+  if (driverKind === 'mysql') {
+    // 现有 SQLite 存储检测：若 DATA_DIR 下已有 mcp-demo.sqlite，说明此前跑在 SQLite 上、旧 JSON
+    // 已被迁走，直接切到 MySQL 会静默以空库启动丢失数据。此处 fail-fast，要求先手动做
+    // SQLite→MySQL 迁移（或确认不再需要旧数据后删除该文件）。
+    const sqliteFile = path.join(resolveDataDir(), 'mcp-demo.sqlite');
+    if (fs.existsSync(sqliteFile)) {
+      throw new Error(
+        '检测到现有 SQLite 存储（mcp-demo.sqlite），STORAGE_DRIVER=mysql 无法自动迁移，启动中止。' +
+          '请先手动完成 SQLite→MySQL 迁移，或在确认不再需要旧数据后删除该文件再启动。',
+      );
+    }
+    // 单实例提示：MySQL 后端沿用「内存态为热点缓存 + 整表替换写库」模型（与 SQLite 一致）。
+    // 多副本共用同一 MySQL 库时，整表替换会覆盖其它实例写入的数据，造成跨实例丢失；
+    // 因此 MySQL 仅作单实例持久化，请勿多副本共享同一数据库。
+    console.warn(
+      '[db] 使用 MySQL 后端：仅作单实例持久化（内存态为唯一权威、写库为整表替换），' +
+        '多副本共用同一 MySQL 库会造成跨实例数据覆盖，请勿多实例共享。',
+    );
+
+    // 复用 resolveSequelizeOptions 构造 Sequelize 实例（含 MYSQL_URL 的 new Sequelize(uri, opts) 重载），
+    // 避免对象式构造把 url 当普通字段导致连不上（PR #3 comment 2）。
+    const [arg, extra] = resolveSequelizeOptions('mysql');
+    sequelize = new Sequelize(arg as never, ...(extra ? [extra as Record<string, unknown>] : []));
+    defineModels(sequelize);
+    await sequelize.authenticate();
+    await sequelize.sync();
+    // 受保护的遗留数据导入：仅当各表为空时，才从 DATA_DIR 下的旧 JSON 导入，
+    // 避免「指向 MySQL 却以空库静默启动」。注意 sqlite→mysql 的库内迁移不在此自动完成。
+    const migration = await migrateLegacyJson(resolveDataDir());
+    // 归档真正导入过的数据集；表非空而跳过的文件也移出 DATA_DIR（到 _skipped_for_review）并写迁移标记，
+    // 后续启动忽略之，防止日后清空某表后重启又重放陈旧数据复活已删除的数据（PR #2 comment 8）。
+    archiveLegacyJson(resolveDataDir(), migration);
+    saves = 0;
+    lastError = null;
+    return;
+  }
+
+  // 默认：sqlite
   const dir = resolveDataDir();
   storagePath = path.join(dir, 'mcp-demo.sqlite');
   await fs.promises.mkdir(dir, { recursive: true });
@@ -784,7 +925,7 @@ export interface DbStatus {
 export function persistStatus(): DbStatus {
   return {
     enabled: dbEnabled(),
-    db: 'sqlite',
+    db: driverKind,
     storage: describeStorage(),
     writable: lastError === null,
     saves,
