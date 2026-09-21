@@ -93,26 +93,38 @@ describe('MySQL 存储选项解析（不连库）', () => {
     expect(o).toMatchObject({ host: '127.0.0.1', port: 3306, user: 'root', database: 'mcp_demo' });
   });
 
-  it('resolveSequelizeOptions(mysql) 用 URL 时不展开 host 分项', () => {
-    process.env.MYSQL_URL = 'mysql://u:p@db:3307/mydb';
-    const opt = resolveSequelizeOptions('mysql') as Record<string, unknown>;
-    expect(opt.dialect).toBe('mysql');
-    expect(opt.url).toBe('mysql://u:p@db:3307/mydb');
+  it('MYSQL_PORT 缺失/空用默认 3306，非法值（非整数/越界）fail-fast', () => {
+    delete process.env.MYSQL_PORT;
+    expect(resolveMysqlOptions().port).toBe(3306);
+    process.env.MYSQL_PORT = '';
+    expect(resolveMysqlOptions().port).toBe(3306);
+    for (const bad of ['3306x', '-1', '70000', 'abc', '3.5']) {
+      process.env.MYSQL_PORT = bad;
+      expect(() => resolveMysqlOptions()).toThrow(/MYSQL_PORT/);
+    }
   });
 
-  it('resolveSequelizeOptions(mysql) 用分项时展开 host/port/user/database', () => {
+  it('resolveSequelizeOptions(mysql) 用 URL 时返回 [uri, options] 重载参数', () => {
+    process.env.MYSQL_URL = 'mysql://u:p@db:3307/mydb';
+    const [arg, extra] = resolveSequelizeOptions('mysql');
+    expect(arg).toBe('mysql://u:p@db:3307/mydb');
+    expect(extra).toMatchObject({ dialect: 'mysql' });
+  });
+
+  it('resolveSequelizeOptions(mysql) 用分项时展开为连接选项对象', () => {
     delete process.env.MYSQL_URL;
     process.env.MYSQL_HOST = 'db.example.com';
     process.env.MYSQL_PORT = '3308';
     process.env.MYSQL_USER = 'app';
     process.env.MYSQL_PASSWORD = 'secret';
     process.env.MYSQL_DATABASE = 'mcp';
-    const opt = resolveSequelizeOptions('mysql') as Record<string, unknown>;
-    expect(opt.dialect).toBe('mysql');
-    expect(opt.host).toBe('db.example.com');
-    expect(opt.port).toBe(3308);
-    expect(opt.username).toBe('app');
-    expect(opt.database).toBe('mcp');
+    const [arg] = resolveSequelizeOptions('mysql');
+    const obj = arg as Record<string, unknown>;
+    expect(obj.dialect).toBe('mysql');
+    expect(obj.host).toBe('db.example.com');
+    expect(obj.port).toBe(3308);
+    expect(obj.username).toBe('app');
+    expect(obj.database).toBe('mcp');
   });
 
   it('STORAGE_DRIVER=mysql 在禁用模式下被 persistStatus 上报且不连库', async () => {

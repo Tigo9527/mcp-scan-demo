@@ -252,8 +252,11 @@ https://a8b79d8a477856f1e.app.workbuddy.link
   刚写入的行、再写入本进程的内存快照。因此 MySQL 仅适合**单实例**部署，请勿多副本共享同一数据库。
 - **SQLite→MySQL 不自动迁移**：若 `DATA_DIR` 下已存在 `mcp-demo.sqlite`（说明之前跑在 SQLite 上、旧 JSON 已迁走），
   直接设 `STORAGE_DRIVER=mysql` 会启动失败（fail-fast），避免静默以空库启动丢失数据。请先手动把 SQLite 数据迁到
-  MySQL，或确认不再需要旧数据后删除该 `.sqlite` 文件再启动。MySQL 启动时会把 `DATA_DIR` 下尚未导入的旧 JSON
-  按表为空才导入（且仅归档真正导入过的文件）。
+  MySQL，或确认不再需要旧数据后删除该 `.sqlite` 文件再启动。MySQL   启动时会把 `DATA_DIR` 下尚未导入的旧 JSON 按表为空才导入：
+  - 真正导入过的数据集，其文件移入 `DATA_DIR/_migrated_json/`；
+  - 表非空而被跳过的文件（可能含额外用户/配置），移入 `DATA_DIR/_migrated_json/_skipped_for_review/`
+    （待人工处理，**不会留在 `DATA_DIR`**），并写 `_migrated_json/_status.json` 记录每个数据集的
+    `imported` / `skipped` 标记，后续启动会忽略已处理的数据集，避免清空某表后重启又重放陈旧数据。
 - 已有 MySQL 表（早期 `TEXT` 列）如需更大的统计容量，请将 stats 相关列改为 `LONGTEXT`（`DataTypes.TEXT('long')`）。
 
 ### 钉钉 MCP 配置（不含 token，靠登录引导）

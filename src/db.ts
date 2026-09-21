@@ -73,10 +73,21 @@ export interface MySqlOptions {
 /** 解析 MySQL 连接参数：优先 `MYSQL_URL`（完整连接串），否则读各分项（带默认值）。 */
 export function resolveMysqlOptions(): MySqlOptions {
   const url = process.env.MYSQL_URL?.trim() || undefined;
+  const rawPort = process.env.MYSQL_PORT?.trim();
+  let port = 3306;
+  if (rawPort !== undefined && rawPort !== '') {
+    const n = Number(rawPort);
+    // 仅当变量缺失/为空时用默认；非整数或越界（如 3306x / -1 / 70000）直接 fail-fast，
+    // 避免连到非预期端口（PR #3 comment 1）
+    if (!Number.isInteger(n) || n < 1 || n > 65535) {
+      throw new Error(`MYSQL_PORT 非法：必须是 1-65535 的整数，收到 "${rawPort}"`);
+    }
+    port = n;
+  }
   return {
     url,
     host: process.env.MYSQL_HOST?.trim() || '127.0.0.1',
-    port: Number(process.env.MYSQL_PORT ?? '3306') || 3306,
+    port,
     user: process.env.MYSQL_USER?.trim() || 'root',
     // 口令不做 trim：首尾空白可能是有效凭据的一部分，误删会导致认证失败。
     password: process.env.MYSQL_PASSWORD ?? '',
@@ -84,22 +95,31 @@ export function resolveMysqlOptions(): MySqlOptions {
   };
 }
 
-/** 把解析出的方言 / 连接参数转成 Sequelize 构造选项（不建立连接），便于测试断言。 */
-export function resolveSequelizeOptions(driver: StorageDriver): Record<string, unknown> {
+/**
+ * 把方言 / 连接参数转成 Sequelize 构造参数（`new Sequelize(...)` 的实参），便于复用与测试断言。
+ * 注意 Sequelize v6 的对象式构造不支持 `url` 字段，URI 必须用 `new Sequelize(uri, options)` 重载，
+ * 因此这里返回构造实参元组而非带 `url` 的对象（PR #3 comment 2）。
+ */
+export type SequelizeArgs = [string | Record<string, unknown>, Record<string, unknown>?];
+
+export function resolveSequelizeOptions(driver: StorageDriver): SequelizeArgs {
   if (driver === 'mysql') {
     const o = resolveMysqlOptions();
-    if (o.url) return { dialect: 'mysql', url: o.url, logging: false };
-    return {
-      dialect: 'mysql',
-      host: o.host,
-      port: o.port,
-      username: o.user,
-      password: o.password,
-      database: o.database,
-      logging: false,
-    };
+    const opts: Record<string, unknown> = { dialect: 'mysql', logging: false };
+    if (o.url) return [o.url, opts];
+    return [
+      {
+        dialect: 'mysql',
+        host: o.host,
+        port: o.port,
+        username: o.user,
+        password: o.password,
+        database: o.database,
+        logging: false,
+      },
+    ];
   }
-  return { dialect: 'sqlite', logging: false };
+  return [{ dialect: 'sqlite', logging: false }];
 }
 
 /** 人类可读的存储位置描述（sqlite 为文件路径，mysql 为 host/db，不含口令）。 */
@@ -489,8 +509,10 @@ export async function migrateLegacyJson(dir: string): Promise<{ imported: string
     imported.push(base);
     return true;
   };
+  // 仅当遗留 JSON 实际存在时才标记 skipped：普通启动（表非空、无遗留文件）写入永久标记后，
+  // 日后同一 DATA_DIR 放入合法遗留文件用于空库替换会被忽略，反而丢数据（PR #3 comment 3）。
   const wasSkipped = (base: string): boolean => {
-    skipped.push(base);
+    if (fs.existsSync(path.join(dir, `${base}.json`))) skipped.push(base);
     return true;
   };
 
@@ -662,20 +684,10 @@ export async function initDb(opts: Overrides = {}): Promise<void> {
         '多副本共用同一 MySQL 库会造成跨实例数据覆盖，请勿多实例共享。',
     );
 
-    const o = resolveMysqlOptions();
-    if (o.url) {
-      sequelize = new Sequelize(o.url, { dialect: 'mysql', logging: false });
-    } else {
-      sequelize = new Sequelize({
-        dialect: 'mysql',
-        host: o.host,
-        port: o.port,
-        username: o.user,
-        password: o.password,
-        database: o.database,
-        logging: false,
-      });
-    }
+    // 复用 resolveSequelizeOptions 构造 Sequelize 实例（含 MYSQL_URL 的 new Sequelize(uri, opts) 重载），
+    // 避免对象式构造把 url 当普通字段导致连不上（PR #3 comment 2）。
+    const [arg, extra] = resolveSequelizeOptions('mysql');
+    sequelize = new Sequelize(arg as never, ...(extra ? [extra as Record<string, unknown>] : []));
     defineModels(sequelize);
     await sequelize.authenticate();
     await sequelize.sync();

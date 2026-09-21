@@ -258,10 +258,49 @@ describe('遗留 JSON 迁移标记（防清空表后重启复活，PR #2 comment
 
     rmSync(dir, { recursive: true, force: true });
   });
+
+  it('表非空但无遗留 JSON 时不标记 skipped（避免写永久标记误忽略后续导入，PR #3 comment 3）', async () => {
+    const dir = await freshDb();
+    store.__resetForTest();
+    store.createUser({ username: 'existing', email: null, provider: 'local' });
+    await flushDb();
+    store.__resetForTest();
+    await store.reloadUsersFromDb();
+    expect(store.countUsers()).toBe(1);
+
+    // 表非空、但 DATA_DIR 下没有 users.json → 不应标记为 skipped
+    expect(existsSync(join(dir, 'users.json'))).toBe(false);
+    const res = await migrateLegacyJson(dir);
+    expect(res.skipped).not.toContain('users');
+    expect(res.imported).not.toContain('users');
+
+    // 后续放入遗留 users.json 并清空该表（模拟空库替换），应能被正常导入而非被旧标记忽略
+    writeFileSync(join(dir, 'users.json'), JSON.stringify({ users: [{ id: 'u9', username: 'late', provider: 'local' }] }));
+    store.__resetForTest();
+    await saveUsers([]); // 清空 users 表
+    await flushDb();
+    const res2 = await migrateLegacyJson(dir);
+    expect(res2.imported).toContain('users'); // 未被错误标记忽略
+    store.__resetForTest();
+    await store.reloadUsersFromDb();
+    expect(store.countUsers()).toBe(1);
+    expect(store.listUsers().items[0]?.username).toBe('late');
+
+    rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 describe('同数据集写入串行化（防并发整表替换覆盖，PR #2 comment 7）', () => {
   const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  // 轮询直到条件成立或超时（避免固定 sleep 在慢 CI worker 上错过首个定时器触发，PR #3 comment 4）
+  const waitFor = async (fn: () => boolean, timeoutMs: number): Promise<boolean> => {
+    const t0 = Date.now();
+    while (!fn()) {
+      if (Date.now() - t0 > timeoutMs) return false;
+      await delay(10);
+    }
+    return true;
+  };
 
   it('定时器已触发在途写入时，flushDb 串行等待而非并行开启第二个同表事务', async () => {
     const dir = await freshDb();
@@ -278,9 +317,11 @@ describe('同数据集写入串行化（防并发整表替换覆盖，PR #2 comm
       active -= 1;
     };
 
-    // 排程第一个写入；防抖定时器（300ms）触发后 runNow 进入慢事务、在途
+    // 排程第一个写入；防抖定时器（300ms）触发后 runNow 进入慢事务、在途（active=1 可观测）
     scheduleDbWrite('users', slowWrite);
-    await delay(360); // 已越过 DEBOUNCE_MS，首个事务应在途（active=1）
+    // 等待「首个定时器已触发且事务在途」这一可观测状态，再排程第二个，确保串行化路径被真正触发
+    const started = await waitFor(() => active === 1, 2000);
+    expect(started).toBe(true);
 
     // 此刻再排程第二个并立即 flushDb：应等待在途的首个事务结束，再写第二个，不可并行
     store.createUser({ username: 'u_b', email: null, provider: 'local' });
