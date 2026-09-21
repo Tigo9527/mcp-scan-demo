@@ -195,9 +195,14 @@ export function creditBalance(userId: string, points: number): UserBilling {
   }
   const now = new Date().toISOString();
   const entry = state[userId] ?? emptyEntry(userId, now);
+  const nextBalance = entry.balance + n;
+  const nextRecharged = entry.recharged + n;
+  if (!Number.isSafeInteger(nextBalance) || !Number.isSafeInteger(nextRecharged)) {
+    throw new Error(`充值后余额或累计充值将超过安全整数上限（${Number.MAX_SAFE_INTEGER}），请联系管理员处理。`);
+  }
   entry.userId = userId;
-  entry.balance += n;
-  entry.recharged += n;
+  entry.balance = nextBalance;
+  entry.recharged = nextRecharged;
   entry.lastSeenAt = now;
   state[userId] = entry;
   markDirty();

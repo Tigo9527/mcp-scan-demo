@@ -119,4 +119,10 @@ describe('计费账本（billing）', () => {
     expect(() => creditBalance('u-r2', Number.MAX_SAFE_INTEGER + 1)).toThrow(/安全整数/);
     expect(getTotalBilling().rechargedTotal).toBe(0);
   });
+
+  it('creditBalance 防止累计字段越过安全整数上限', () => {
+    creditBalance('u-cap', Number.MAX_SAFE_INTEGER - config.billingFreeCredits);
+    expect(() => creditBalance('u-cap', 1)).toThrow(/超过安全整数上限/);
+    expect(getUserBilling('u-cap')?.balance).toBe(Number.MAX_SAFE_INTEGER);
+  });
 });
