@@ -283,6 +283,31 @@ describe('admin GitHub 设置', () => {
   });
 });
 
+describe('admin 充值设置', () => {
+  it('校验失败时保留本次提交的表单内容', async () => {
+    const cookie = await loginAsAdmin();
+    const submitted = {
+      recipient: 'not-an-address',
+      rpcUrl: 'https://rpc.example.test',
+      tokenAddress: '0x1111111111111111111111111111111111111111',
+      tokenName: 'Submitted Token',
+      tokenSymbol: 'SUB',
+      tokenDecimals: '6',
+      rate: '123.45',
+      chainId: '56',
+    };
+
+    const res = await adminForm('/admin/recharge-settings', cookie, submitted);
+    expect(res.status).toBe(400);
+    const html = await res.text();
+    expect(html).toContain('收款地址必须是 0x 开头的 40 位十六进制地址');
+    for (const [name, value] of Object.entries(submitted)) {
+      const field = html.match(new RegExp(`<input[^>]*name="${name}"[^>]*>`))?.[0] ?? '';
+      expect(field, `字段 ${name} 未回显`).toContain(`value="${value}"`);
+    }
+  });
+});
+
 describe('admin 统计接口', () => {
   it('/admin/api/stats 返回结构化统计', async () => {
     const cookie = await loginAsAdmin();
