@@ -70,8 +70,8 @@ export function verifyState(state: string | undefined): { ok: boolean; authorize
 }
 
 /** 生成 GitHub 授权跳转地址（state 用于防 CSRF）。 */
-export function getAuthorizationUrl(state: string): string {
-  const g = getGithub();
+export function getAuthorizationUrl(state: string, redirectUriFallback?: string): string {
+  const g = getGithub(redirectUriFallback);
   return client().authorizeURL({
     redirect_uri: g.redirectUri,
     scope: g.scope,
@@ -80,8 +80,8 @@ export function getAuthorizationUrl(state: string): string {
 }
 
 /** 用回调 code 换 token，并拉取 GitHub 用户、落地为本地账号。 */
-export async function exchangeAndLogin(code: string): Promise<OAuthResult> {
-  const g = getGithub();
+export async function exchangeAndLogin(code: string, redirectUriFallback?: string): Promise<OAuthResult> {
+  const g = getGithub(redirectUriFallback);
   const tokenResponse = await client().getToken({
     code,
     redirect_uri: g.redirectUri,

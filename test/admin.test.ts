@@ -7,12 +7,13 @@
  * 注意 vitest 按测试文件隔离模块注册表，所以本文件里的 store / settings / stats
  * 全局状态与其它测试文件互不干扰。
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import type { Server } from 'node:http';
 import { createApp } from '../src/web/app.js';
 import { configure } from '../src/db.js';
 import * as store from '../src/auth/store.js';
-import { __resetForTest as resetSettings, getGithub } from '../src/settings.js';
+import { __resetForTest as resetSettings, getGithub, setGithub } from '../src/settings.js';
+import * as recharge from '../src/recharge.js';
 
 const ADMIN_TOKEN = 'test-admin-token-xyz';
 
@@ -235,6 +236,15 @@ describe('admin 用户管理', () => {
 });
 
 describe('admin GitHub 设置', () => {
+  it('未设置回调地址时按当前 Web Host 自动生成回调地址', async () => {
+    setGithub({ clientId: 'test-client-id', clientSecret: 'test-client-secret', redirectUri: '' });
+
+    const res = await fetch(`${base}/auth/github`, { redirect: 'manual' });
+    expect(res.status).toBe(302);
+    const location = new URL(res.headers.get('location') ?? '');
+    expect(location.searchParams.get('redirect_uri')).toBe(`${base}/auth/github/callback`);
+  });
+
   it('保存后 isGitHubConfigured 立即为真（无需重启）', async () => {
     expect(getGithub().configured).toBe(false);
     const cookie = await loginAsAdmin();
@@ -284,6 +294,88 @@ describe('admin GitHub 设置', () => {
 });
 
 describe('admin 充值设置', () => {
+  it('可以导出当前充值设置 JSON', async () => {
+    recharge.__resetForTest();
+    await recharge.setRechargeConfig(
+      {
+        recipient: '0x1111111111111111111111111111111111111111',
+        rpcUrl: 'https://rpc.example.test',
+        tokenAddress: '',
+        rate: 10,
+        chainId: '0x38',
+      },
+      {
+        provider: {
+          call: async () => '0x',
+          getTransaction: async () => null,
+          getTransactionReceipt: async () => null,
+          getChainId: async () => '0x38',
+        },
+      },
+    );
+
+    const cookie = await loginAsAdmin();
+    const res = await adminGet('/admin/recharge-settings/export', cookie);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-disposition')).toContain('recharge-settings.json');
+    const exported = (await res.json()) as any;
+    expect(exported.schema).toBe('mcp-demo/recharge-settings');
+    expect(exported.version).toBe(1);
+    expect(exported.config).toMatchObject({
+      recipient: '0x1111111111111111111111111111111111111111',
+      rpcUrl: 'https://rpc.example.test',
+      rate: 10,
+      chainId: '0x38',
+    });
+  });
+
+  it('导入无效 JSON 时返回错误并保留原文', async () => {
+    const cookie = await loginAsAdmin();
+    const raw = 'not-json';
+    const res = await adminForm('/admin/recharge-settings/import', cookie, { configJson: raw });
+    expect(res.status).toBe(400);
+    const html = await res.text();
+    expect(html).toContain('导入失败');
+    expect(html).toContain('not-json');
+  });
+
+  it('导入导出的 JSON envelope 并交给充值配置校验保存', async () => {
+    recharge.__resetForTest();
+    const config = {
+      recipient: '0x1111111111111111111111111111111111111111',
+      rpcUrl: 'https://rpc.example.test',
+      tokenAddress: '',
+      rate: 10,
+      chainId: '0x38',
+    };
+    const spy = vi
+      .spyOn(recharge, 'setRechargeConfig')
+      .mockResolvedValue({ ok: true, config: { ...config } });
+    const cookie = await loginAsAdmin();
+    const raw = JSON.stringify({
+      schema: 'mcp-demo/recharge-settings',
+      version: 1,
+      config,
+    });
+
+    try {
+      const res = await adminForm('/admin/recharge-settings/import', cookie, { configJson: raw });
+      expect(res.status).toBe(302);
+      expect(spy).toHaveBeenCalledWith({
+        recipient: config.recipient,
+        rpcUrl: config.rpcUrl,
+        tokenAddress: '',
+        tokenName: '',
+        tokenSymbol: '',
+        tokenDecimals: undefined,
+        rate: 10,
+        chainId: '0x38',
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('校验失败时保留本次提交的表单内容', async () => {
     const cookie = await loginAsAdmin();
     const submitted = {

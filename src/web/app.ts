@@ -795,7 +795,8 @@ export function createApp() {
   // 让登录完成后能还原原始授权请求并回跳客户端。
   app.get('/auth/github', (req: Request, res: Response) => {
     const authorizeTicket = typeof req.query.authorize === 'string' ? req.query.authorize : undefined;
-    res.redirect(getAuthorizationUrl(createState(authorizeTicket)));
+    const redirectUri = `${deriveBase(req)}/auth/github/callback`;
+    res.redirect(getAuthorizationUrl(createState(authorizeTicket), redirectUri));
   });
 
   // GitHub OAuth：回调换令牌并落地用户
@@ -854,14 +855,14 @@ export function createApp() {
             scope: t.scope,
             resource: t.resource,
           };
-          const { user, token } = await exchangeAndLogin(code);
+          const { user, token } = await exchangeAndLogin(code, `${base}/auth/github/callback`);
           setUserTokenCookie(req, res, token);
           res.status(200).type('html').send(completeAuthorize(base, p, user));
           return;
         }
 
         // 无票据：保持原有「GitHub 登录成功」页（向后兼容独立 GitHub 登录场景）
-        const { user, token } = await exchangeAndLogin(code);
+        const { user, token } = await exchangeAndLogin(code, `${base}/auth/github/callback`);
         setUserTokenCookie(req, res, token);
         res.type('html').send(oauthSuccessHtml(user, token, base));
       } catch (err) {
