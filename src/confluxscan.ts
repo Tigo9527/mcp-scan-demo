@@ -113,10 +113,6 @@ export const listTransfersSchema = z.object({
     .nonnegative()
     .default(0)
     .describe('跳过的转账记录条数'),
-  transferType: z
-    .enum(['CFX', 'CRC20', 'CRC721', 'CRC1155'])
-    .default('CFX')
-    .describe('转账类型：CFX（原生币）/ CRC20 / CRC721 / CRC1155（代币）'),
 });
 
 export type ListCfxTransfersInput = z.input<typeof listCfxTransfersSchema>;
@@ -185,7 +181,7 @@ export async function listLatestTransactions(
   return request(url.toString());
 }
 
-/** 列出 ConfluxScan 全网（指定 transferType 的）最新转账记录。 */
+/** 列出 ConfluxScan 全网最新的 CFX 转账记录。 */
 export async function listTransfers(input: ListTransfersInput): Promise<ConfluxScanResponse> {
   const params = listTransfersSchema.parse(input);
   // 默认 testnet（ConfluxScan 的 v1/transfer 浏览器 API 在 testnet 子域最常用）；
@@ -195,7 +191,7 @@ export async function listTransfers(input: ListTransfersInput): Promise<ConfluxS
   const url = new URL('v1/transfer', baseUrl);
   url.searchParams.set('limit', String(params.limit));
   url.searchParams.set('skip', String(params.skip));
-  url.searchParams.set('transferType', params.transferType);
+  url.searchParams.set('transferType', 'CFX');
 
   return request(url.toString());
 }

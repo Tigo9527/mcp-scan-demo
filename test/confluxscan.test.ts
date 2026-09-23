@@ -133,7 +133,7 @@ describe('登录保护', () => {
 });
 
 describe('whole_chain_cfx_transfer_list（ConfluxScan 全网转账流 v1/transfer）', () => {
-  it('默认拼接 testnet.confluxscan.org/v1/transfer 并带 limit/skip/transferType', async () => {
+  it('不暴露 transferType，并固定查询 CFX 转账', async () => {
     fetchMock.mockImplementation(async () => okResponse({ code: 0, message: 'OK', data: { total: 0, list: [] } }));
     await confluxscan.listTransfers({});
     const url = fetchMock.mock.calls[0][0] as string;
@@ -141,15 +141,21 @@ describe('whole_chain_cfx_transfer_list（ConfluxScan 全网转账流 v1/transfe
     expect(url).toContain('limit=10');
     expect(url).toContain('skip=0');
     expect(url).toContain('transferType=CFX');
+    expect('transferType' in confluxscan.listTransfersSchema.shape).toBe(false);
   });
 
-  it('自定义 limit/skip/transferType 正确进入 query', async () => {
+  it('自定义 limit/skip 正确进入 query，且忽略外部传入的 transferType', async () => {
     fetchMock.mockImplementation(async () => okResponse({ code: 0, message: 'OK', data: { total: 0, list: [] } }));
-    await confluxscan.listTransfers({ limit: 25, skip: 5, transferType: 'CRC20' });
+    await confluxscan.listTransfers({
+      limit: 25,
+      skip: 5,
+      transferType: 'CRC20',
+    } as confluxscan.ListTransfersInput & { transferType: string });
     const url = fetchMock.mock.calls[0][0] as string;
     expect(url).toContain('limit=25');
     expect(url).toContain('skip=5');
-    expect(url).toContain('transferType=CRC20');
+    expect(url).toContain('transferType=CFX');
+    expect(url).not.toContain('transferType=CRC20');
   });
 
   it('HTTP 非 2xx 抛错', async () => {
