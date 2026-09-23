@@ -476,10 +476,35 @@ function chainDisplayName(chainId: string): string {
 function rechargeSettingsHtml(
   base: string,
   adminToken: string,
-  opts: { saved?: boolean; error?: string; warning?: string; message?: string } = {},
+  opts: {
+    saved?: boolean;
+    error?: string;
+    warning?: string;
+    message?: string;
+    form?: {
+      recipient: string;
+      rpcUrl: string;
+      tokenAddress: string;
+      tokenName: string;
+      tokenSymbol: string;
+      tokenDecimals: string;
+      rate: string;
+      chainId: string;
+    };
+  } = {},
 ): string {
   const cfg = recharge.getRechargeConfig();
   const c = cfg ?? { recipient: '', rpcUrl: '', rate: 0, tokenAddress: '', chainId: '' };
+  const form = opts.form ?? {
+    recipient: c.recipient,
+    rpcUrl: c.rpcUrl,
+    tokenAddress: c.tokenAddress,
+    tokenName: c.tokenName ?? '',
+    tokenSymbol: c.tokenSymbol ?? '',
+    tokenDecimals: c.tokenDecimals === undefined ? '' : String(c.tokenDecimals),
+    rate: c.rate ? String(c.rate) : '',
+    chainId: c.chainId,
+  };
   const isToken = Boolean(c.tokenAddress);
   /** decimals 缺失 = 入账会被拒绝，必须让管理员一眼看见 */
   const metaMissing = isToken && c.tokenDecimals === undefined;
@@ -532,31 +557,31 @@ ${isToken && c.tokenMetaError ? `<p class="muted">上次自动读取失败原因
 ${card(`
 <form method="post" action="${esc(adminHref('/admin/recharge-settings', adminToken))}">
 <label for="recipient">收款地址（0x…）</label>
-<input id="recipient" name="recipient" value="${esc(c.recipient)}" placeholder="0x 开头 40 位十六进制">
+<input id="recipient" name="recipient" value="${esc(form.recipient)}" placeholder="0x 开头 40 位十六进制">
 
 <label for="rpcUrl">RPC 地址</label>
-<input id="rpcUrl" name="rpcUrl" value="${esc(c.rpcUrl)}" placeholder="https://ethereum-rpc.publicnode.com">
+<input id="rpcUrl" name="rpcUrl" value="${esc(form.rpcUrl)}" placeholder="https://ethereum-rpc.publicnode.com">
 <p class="muted">保存时会用它读 ERC20 元数据、校验转账。节点不通也能保存（只是会告警），换一个可用的再点「重新读取元数据」即可。</p>
 
 <label for="tokenAddress">ERC20 合约地址（留空则收原生币）</label>
-<input id="tokenAddress" name="tokenAddress" value="${esc(c.tokenAddress)}" placeholder="留空 = 收取原生币">
+<input id="tokenAddress" name="tokenAddress" value="${esc(form.tokenAddress)}" placeholder="留空 = 收取原生币">
 <p class="muted">填写后保存时会自动读取链上的 name / symbol / decimals 并回显；读不到<b>也会保存</b>，只是会告警，并在 decimals 补全前拒绝入账。</p>
 
 <label for="tokenName">代币名称（可选，留空自动读）</label>
-<input id="tokenName" name="tokenName" value="${esc(c.tokenName ?? '')}" placeholder="如 Tether USD">
+<input id="tokenName" name="tokenName" value="${esc(form.tokenName)}" placeholder="如 Tether USD">
 
 <label for="tokenSymbol">代币符号（可选，留空自动读）</label>
-<input id="tokenSymbol" name="tokenSymbol" value="${esc(c.tokenSymbol ?? '')}" placeholder="如 USDT">
+<input id="tokenSymbol" name="tokenSymbol" value="${esc(form.tokenSymbol)}" placeholder="如 USDT">
 
 <label for="tokenDecimals">decimals（可选；自动读不到时必填）</label>
-<input id="tokenDecimals" name="tokenDecimals" type="number" min="0" max="36" step="1" value="${c.tokenDecimals === undefined ? '' : esc(String(c.tokenDecimals))}" placeholder="如 6 / 18">
+<input id="tokenDecimals" name="tokenDecimals" type="number" min="0" max="36" step="1" value="${esc(form.tokenDecimals)}" placeholder="如 6 / 18">
 <p class="muted">RPC 不通或合约非标准时可手工填这三项。<b>decimals 填错会算错金额</b>（USDT 是 6，多数代币是 18），不确定就换个可用 RPC 再点「重新读取元数据」。</p>
 
 <label for="rate">汇率（1 个代币兑换多少点数）</label>
-<input id="rate" name="rate" type="number" step="any" min="0" value="${c.rate ? esc(String(c.rate)) : ''}" placeholder="如 1000">
+<input id="rate" name="rate" type="number" step="any" min="0" value="${esc(form.rate)}" placeholder="如 1000">
 
 <label for="chainId">链 ID（选填，建议留空让它自动识别）</label>
-<input id="chainId" name="chainId" value="${esc(c.chainId)}" placeholder="如 56 或 0x38，留空则按 RPC 返回值填充">
+<input id="chainId" name="chainId" value="${esc(form.chainId)}" placeholder="如 56 或 0x38，留空则按 RPC 返回值填充">
 <p class="muted">用户在充值页转账前，前端会比对钱包的 <code>eth_chainId</code>，不一致就自动唤起切换网络（钱包里没这条链会请求添加，RPC 用上面填的地址）。<b>填错等于让用户把钱转到别的链上</b>，所以保存时一律以 RPC 实际返回的链 ID 为准，手填的不一致会被更正并提示。</p>
 
 <button class="btn" type="submit">保存</button>
@@ -829,26 +854,39 @@ export function createAdminRouter(): Router {
       const base = deriveBase(req);
       const body = (req.body ?? {}) as Record<string, unknown>;
       const str = (v: unknown) => String(v ?? '').trim();
-
-      const result = await recharge.setRechargeConfig({
+      const form = {
         recipient: str(body.recipient),
         rpcUrl: str(body.rpcUrl),
         tokenAddress: str(body.tokenAddress),
         tokenName: str(body.tokenName),
         tokenSymbol: str(body.tokenSymbol),
         tokenDecimals: str(body.tokenDecimals),
-        rate: Number(str(body.rate)),
+        rate: str(body.rate),
         chainId: str(body.chainId),
+      };
+
+      const result = await recharge.setRechargeConfig({
+        ...form,
+        rate: Number(form.rate),
       });
 
-      const target = new URL(adminHref('/admin/recharge-settings', token), base);
-      if (result.ok) {
-        target.searchParams.set('saved', '1');
-        if (result.warning) target.searchParams.set('warn', result.warning);
-        if (result.info) target.searchParams.set('msg', result.info);
-      } else {
-        target.searchParams.set('err', result.error);
+      if (!result.ok) {
+        res
+          .status(400)
+          .type('html')
+          .send(
+            rechargeSettingsHtml(base, token, {
+              error: result.error,
+              form,
+            }),
+          );
+        return;
       }
+
+      const target = new URL(adminHref('/admin/recharge-settings', token), base);
+      target.searchParams.set('saved', '1');
+      if (result.warning) target.searchParams.set('warn', result.warning);
+      if (result.info) target.searchParams.set('msg', result.info);
       res.redirect(302, target.toString());
     }),
   );
