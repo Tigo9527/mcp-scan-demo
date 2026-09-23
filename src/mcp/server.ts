@@ -316,7 +316,7 @@ export function createMcpServer(): McpServer {
 
   server.tool(
     'whole_chain_cfx_transfer_list',
-    '使用 ConfluxScan API 列出全网（指定 transferType 的）最新转账记录（公开只读数据，但本工具需要登录后调用）。transferType 可选 CFX（原生币）/ CRC20 / CRC721 / CRC1155。默认查 Conflux Core 测试网（testnet.confluxscan.org），可通过环境变量 CONFLUXSCAN_TRANSFER_API_URL 切到主网。',
+    '使用 ConfluxScan API 列出全网最新的 CFX 转账记录（公开只读数据，但本工具需要登录后调用）。默认查 Conflux Core 测试网（testnet.confluxscan.org），可通过环境变量 CONFLUXSCAN_TRANSFER_API_URL 切到主网。',
     confluxscan.listTransfersSchema.shape,
     async (input) => {
       const user = getCurrentUser();
