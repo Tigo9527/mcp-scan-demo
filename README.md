@@ -331,6 +331,7 @@ npm test
 | `list_cfx_transfers` | 列出某 Conflux Core 账户的原生 CFX 转账记录（ConfluxScan Open API） | 是（需登录） |
 | `list_latest_transactions` | 列出 Conflux Core 最新交易（ConfluxScan 浏览器 API） | 是（需登录） |
 | `whole_chain_cfx_transfer_list` | 列出全网最新的 CFX 转账记录（ConfluxScan v1/transfer，默认测试网） | 是（需登录） |
+| `whole_chain_cfx_holder_list` | 列出全网 CFX 持仓地址排行榜（ConfluxScan stat/top-cfx-holder，默认测试网） | 是（需登录） |
 
 > `/mcp` **默认要求登录**（`MCP_DEMO_REQUIRE_AUTH` 默认 `on`）：未携带有效令牌返回 401 +
 > `WWW-Authenticate`，由客户端走标准 OAuth 流程。设成 `off` 后恢复匿名握手，

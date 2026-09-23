@@ -15,9 +15,11 @@ import { z } from 'zod';
 
 /** ConfluxScan Open API 的统一返回外壳。 */
 export interface ConfluxScanResponse {
-  code: number;
+  code?: number;
+  status?: string;
   message: string;
   data: unknown;
+  result?: unknown;
 }
 
 export const listCfxTransfersSchema = z.object({
@@ -115,19 +117,40 @@ export const listTransfersSchema = z.object({
     .describe('跳过的转账记录条数'),
 });
 
+/** ConfluxScan「CFX 富豪榜」(stat/top-cfx-holder) 参数。 */
+export const listTopCfxHoldersSchema = z.object({
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .default(10)
+    .describe('返回的最大地址条数，1 ~ 100'),
+  skip: z
+    .number()
+    .int()
+    .nonnegative()
+    .default(0)
+    .describe('跳过的地址条数'),
+});
+
 export type ListCfxTransfersInput = z.input<typeof listCfxTransfersSchema>;
 export type ListLatestTransactionsInput = z.input<typeof listLatestTransactionsSchema>;
 export type ListTransfersInput = z.input<typeof listTransfersSchema>;
+export type ListTopCfxHoldersInput = z.input<typeof listTopCfxHoldersSchema>;
 
-/** 统一解析 ConfluxScan 响应：非 2xx 或业务 code !== 0 都抛错。 */
+/** 统一解析 ConfluxScan 响应：非 2xx 或业务状态失败都抛错。 */
 async function request(url: string): Promise<ConfluxScanResponse> {
   const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
   if (!response.ok) {
     throw new Error(`ConfluxScan 请求失败：HTTP ${response.status}`);
   }
   const json = (await response.json()) as ConfluxScanResponse;
-  if (json.code !== 0) {
+  if (json.code !== undefined && json.code !== 0) {
     throw new Error(`ConfluxScan API 错误 ${json.code}：${json.message}`);
+  }
+  if (json.status !== undefined && json.status !== '1') {
+    throw new Error(`ConfluxScan API 错误 ${json.status}：${json.message}`);
   }
   return json;
 }
@@ -192,6 +215,22 @@ export async function listTransfers(input: ListTransfersInput): Promise<ConfluxS
   url.searchParams.set('limit', String(params.limit));
   url.searchParams.set('skip', String(params.skip));
   url.searchParams.set('transferType', 'CFX');
+
+  return request(url.toString());
+}
+
+/** 列出 ConfluxScan 全网 CFX 持仓地址排行榜。 */
+export async function listTopCfxHolders(
+  input: ListTopCfxHoldersInput,
+): Promise<ConfluxScanResponse> {
+  const params = listTopCfxHoldersSchema.parse(input);
+  const apiBaseUrl =
+    process.env.CONFLUXSCAN_HOLDER_API_URL ?? 'https://testnet.confluxscan.org';
+  const baseUrl = apiBaseUrl.endsWith('/') ? apiBaseUrl : `${apiBaseUrl}/`;
+  const url = new URL('stat/top-cfx-holder', baseUrl);
+  url.searchParams.set('limit', String(params.limit));
+  url.searchParams.set('skip', String(params.skip));
+  url.searchParams.set('type', 'rank_address_by_total_cfx');
 
   return request(url.toString());
 }

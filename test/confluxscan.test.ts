@@ -178,3 +178,42 @@ describe('whole_chain_cfx_transfer_list（ConfluxScan 全网转账流 v1/transfe
     expect(PUBLIC_MCP_TOOLS.has('whole_chain_cfx_transfer_list')).toBe(false);
   });
 });
+
+describe('whole_chain_cfx_holder_list（ConfluxScan CFX 富豪榜）', () => {
+  it('不暴露 type，并固定查询 rank_address_by_total_cfx', async () => {
+    fetchMock.mockImplementation(async () =>
+      okResponse({
+        status: '1',
+        message: '',
+        result: { total: 0, list: [] },
+      }),
+    );
+    await confluxscan.listTopCfxHolders({});
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).toContain('testnet.confluxscan.org/stat/top-cfx-holder');
+    expect(url).toContain('limit=10');
+    expect(url).toContain('skip=0');
+    expect(url).toContain('type=rank_address_by_total_cfx');
+    expect('type' in confluxscan.listTopCfxHoldersSchema.shape).toBe(false);
+  });
+
+  it('自定义 limit/skip 正确进入 query，且忽略外部传入的 type', async () => {
+    fetchMock.mockImplementation(async () =>
+      okResponse({ status: '1', message: '', result: { total: 0, list: [] } }),
+    );
+    await confluxscan.listTopCfxHolders({
+      limit: 25,
+      skip: 5,
+      type: 'rank_address_by_cfx',
+    } as confluxscan.ListTopCfxHoldersInput & { type: string });
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).toContain('limit=25');
+    expect(url).toContain('skip=5');
+    expect(url).toContain('type=rank_address_by_total_cfx');
+    expect(url).not.toContain('type=rank_address_by_cfx');
+  });
+
+  it('whole_chain_cfx_holder_list 不在 PUBLIC_MCP_TOOLS 中（需登录后才能调用）', () => {
+    expect(PUBLIC_MCP_TOOLS.has('whole_chain_cfx_holder_list')).toBe(false);
+  });
+});
