@@ -92,6 +92,24 @@ const SCAN_CALLS = [
       params: { name: 'list_latest_transactions', arguments: { limit: 2 } },
     },
   },
+  {
+    name: 'whole_chain_cfx_transfer_list',
+    payload: {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'whole_chain_cfx_transfer_list', arguments: { limit: 2 } },
+    },
+  },
+  {
+    name: 'whole_chain_cfx_holder_list',
+    payload: {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'whole_chain_cfx_holder_list', arguments: { limit: 2 } },
+    },
+  },
 ];
 
 async function registerToken(username: string): Promise<string> {

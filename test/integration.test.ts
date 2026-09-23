@@ -344,7 +344,12 @@ describe('MCP demo server', () => {
 describe('ConfluxScan 工具必须登录后才能调用（防回归）', () => {
   // 这两个工具底层是公开只读的 ConfluxScan API，但调用入口必须登录（已从 PUBLIC_MCP_TOOLS 移除）。
   // 回归保护：防止被重新加回公开集合后，匿名客户端直接拿到链上数据。
-  const scanTools = ['list_cfx_transfers', 'list_latest_transactions'] as const;
+  const scanTools = [
+    'list_cfx_transfers',
+    'list_latest_transactions',
+    'whole_chain_cfx_transfer_list',
+    'whole_chain_cfx_holder_list',
+  ] as const;
 
   for (const name of scanTools) {
     it(`匿名 tools/call ${name} 默认模式返回 401（不泄露数据）`, async () => {
@@ -355,7 +360,11 @@ describe('ConfluxScan 工具必须登录后才能调用（防回归）', () => {
           jsonrpc: '2.0',
           id: 1,
           method: 'tools/call',
-          params: { name, arguments: { limit: 1 } },
+          params: {
+            name,
+            arguments:
+              name === 'list_cfx_transfers' ? { account: 'cfx:x', limit: 1 } : { limit: 1 },
+          },
         }),
       });
       expect(res.status).toBe(401);
