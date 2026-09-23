@@ -63,13 +63,17 @@ export function getRaw(): GithubSettings {
 }
 
 /** 合并后的生效值。 */
-export function getGithub(): EffectiveGithubSettings {
+export function getGithub(redirectUriFallback?: string): EffectiveGithubSettings {
   const s = ensure();
   const seed = config.githubSeed;
 
   const clientId = s.clientId ?? seed.clientId;
   const clientSecret = s.clientSecret ?? seed.clientSecret;
-  const redirectUri = s.redirectUri ?? seed.redirectUri;
+  const redirectUri =
+    s.redirectUri?.trim() ||
+    seed.redirectUri.trim() ||
+    redirectUriFallback?.trim() ||
+    `${config.publicBaseUrl}/auth/github/callback`;
   const scope = s.scope ?? seed.scope;
 
   const overridden =

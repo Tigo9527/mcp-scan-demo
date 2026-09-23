@@ -406,7 +406,7 @@ ${card(`
 }
 
 function settingsHtml(base: string, adminToken: string, saved?: boolean, error?: string): string {
-  const gh = getGithub();
+  const gh = getGithub(`${base}/auth/github/callback`);
   const raw = getRaw();
 
   return page({
@@ -491,6 +491,7 @@ function rechargeSettingsHtml(
       rate: string;
       chainId: string;
     };
+    importValue?: string;
   } = {},
 ): string {
   const cfg = recharge.getRechargeConfig();
@@ -551,6 +552,33 @@ ${isToken ? `
 <span class="muted">RPC 恢复 / 换过 RPC 后点这里重读 name / symbol / decimals，不用重填表单。</span>
 </form>` : ''}
 ${isToken && c.tokenMetaError ? `<p class="muted">上次自动读取失败原因：<b>${esc(c.tokenMetaError)}</b></p>` : ''}
+`)}
+
+${card(`
+<h3>导出 / 导入配置</h3>
+<p class="muted">导出的 JSON 包含收款地址、RPC、资产、汇率、链 ID 和已读取的代币元数据。RPC 地址可能含有服务商凭据，请只在可信环境中保存和传输。</p>
+<p><a class="btn alt" href="${esc(adminHref('/admin/recharge-settings/export', adminToken))}">导出充值设置 JSON</a></p>
+<form method="post" action="${esc(adminHref('/admin/recharge-settings/import', adminToken))}">
+<label for="configFile">选择 JSON 文件（也可以直接粘贴）</label>
+<input id="configFile" type="file" accept="application/json,.json">
+<label for="configJson">导入 JSON</label>
+<textarea id="configJson" name="configJson" rows="12" placeholder='粘贴导出的充值设置 JSON'>${esc(opts.importValue ?? '')}</textarea>
+<button class="btn" type="submit">导入并保存</button>
+</form>
+<script>
+(function(){
+  var file=document.getElementById('configFile');
+  var text=document.getElementById('configJson');
+  if(!file||!text)return;
+  file.addEventListener('change',function(){
+    var selected=file.files&&file.files[0];
+    if(!selected)return;
+    var reader=new FileReader();
+    reader.onload=function(){text.value=String(reader.result||'');};
+    reader.readAsText(selected);
+  });
+})();
+</script>
 `)}
 
 <h2>修改</h2>
@@ -833,10 +861,11 @@ export function createAdminRouter(): Router {
 
   router.get('/admin/recharge-settings', requireAdmin, (req: Request, res: Response) => {
     const token = resolveAdminToken(req) ?? '';
+    const base = deriveBase(req);
     const q = req.query as Record<string, unknown>;
     const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
     res.type('html').send(
-      rechargeSettingsHtml(deriveBase(req), token, {
+      rechargeSettingsHtml(base, token, {
         saved: str(q.saved) === '1',
         error: str(q.err),
         warning: str(q.warn),
@@ -887,6 +916,93 @@ export function createAdminRouter(): Router {
       target.searchParams.set('saved', '1');
       if (result.warning) target.searchParams.set('warn', result.warning);
       if (result.info) target.searchParams.set('msg', result.info);
+      res.redirect(302, target.toString());
+    }),
+  );
+
+  router.get('/admin/recharge-settings/export', requireAdmin, (req: Request, res: Response) => {
+    const cfg = recharge.getRechargeConfig();
+    if (!cfg) {
+      res.status(404).type('text/plain; charset=utf-8').send('还没有可导出的充值配置。');
+      return;
+    }
+    const exported = {
+      schema: 'mcp-demo/recharge-settings',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      config: {
+        recipient: cfg.recipient,
+        rpcUrl: cfg.rpcUrl,
+        rate: cfg.rate,
+        tokenAddress: cfg.tokenAddress,
+        chainId: cfg.chainId,
+        tokenName: cfg.tokenName ?? '',
+        tokenSymbol: cfg.tokenSymbol ?? '',
+        ...(cfg.tokenDecimals === undefined ? {} : { tokenDecimals: cfg.tokenDecimals }),
+      },
+    };
+    res
+      .status(200)
+      .type('application/json')
+      .setHeader('Content-Disposition', 'attachment; filename="recharge-settings.json"')
+      .send(JSON.stringify(exported, null, 2));
+  });
+
+  router.post(
+    '/admin/recharge-settings/import',
+    requireAdmin,
+    requireSameOrigin,
+    wrap(async (req: Request, res: Response) => {
+      const token = resolveAdminToken(req) ?? '';
+      const base = deriveBase(req);
+      const raw = String((req.body as Record<string, unknown> | undefined)?.configJson ?? '');
+      let input: Record<string, unknown>;
+      try {
+        const parsed: unknown = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          throw new Error('顶层必须是 JSON 对象。');
+        }
+        const envelope = parsed as Record<string, unknown>;
+        const configValue =
+          envelope.schema === 'mcp-demo/recharge-settings' && envelope.config
+            ? envelope.config
+            : parsed;
+        if (!configValue || typeof configValue !== 'object' || Array.isArray(configValue)) {
+          throw new Error('配置内容必须是 JSON 对象。');
+        }
+        input = configValue as Record<string, unknown>;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'JSON 格式无效。';
+        res
+          .status(400)
+          .type('html')
+          .send(rechargeSettingsHtml(base, token, { error: `导入失败：${message}`, importValue: raw }));
+        return;
+      }
+
+      const str = (v: unknown) => String(v ?? '').trim();
+      const result = await recharge.setRechargeConfig({
+        recipient: str(input.recipient),
+        rpcUrl: str(input.rpcUrl),
+        tokenAddress: str(input.tokenAddress),
+        tokenName: str(input.tokenName),
+        tokenSymbol: str(input.tokenSymbol),
+        tokenDecimals: input.tokenDecimals as string | number | undefined,
+        rate: Number(input.rate),
+        chainId: str(input.chainId),
+      });
+      if (!result.ok) {
+        res
+          .status(400)
+          .type('html')
+          .send(rechargeSettingsHtml(base, token, { error: `导入失败：${result.error}`, importValue: raw }));
+        return;
+      }
+
+      const target = new URL(adminHref('/admin/recharge-settings', token), base);
+      target.searchParams.set('saved', '1');
+      target.searchParams.set('msg', '充值设置已导入并保存。');
+      if (result.warning) target.searchParams.set('warn', result.warning);
       res.redirect(302, target.toString());
     }),
   );

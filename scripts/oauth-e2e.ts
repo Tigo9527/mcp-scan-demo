@@ -16,7 +16,7 @@ process.env.MCP_DEMO_REQUIRE_AUTH = 'on';
 process.env.PUBLIC_BASE_URL = `http://127.0.0.1:${PORT}`;
 
 const { createApp } = await import('../src/web/app.js');
-const { configure } = await import('../src/persist.js');
+const { configure } = await import('../src/db.js');
 const authManager = await import('../src/auth/manager.js');
 const { auth } = await import('@modelcontextprotocol/sdk/client/auth.js');
 const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
@@ -69,8 +69,11 @@ async function actAsUser(authorizationUrl: URL): Promise<string> {
     body: new URLSearchParams({ ...hidden, username: USERNAME, password: PASSWORD }).toString(),
     redirect: 'manual',
   });
-  if (res.status !== 302) throw new Error(`登录后返回 ${res.status}，期望 302`);
-  const code = new URL(res.headers.get('location')!).searchParams.get('code');
+  if (res.status !== 200) throw new Error(`登录后返回 ${res.status}，期望 200`);
+  const html = await res.text();
+  const callback = html.match(/id="cb-link"[^>]*href="([^"]+)"/)?.[1];
+  if (!callback) throw new Error('授权完成页里没有回调地址');
+  const code = new URL(decodeEntities(callback)).searchParams.get('code');
   if (!code) throw new Error('回调里没有 code');
   return code;
 }
