@@ -37,6 +37,7 @@ tbody tr:nth-child(even){background:#fcfcfd}
 .btn.alt{background:#24292f}
 .btn.danger{background:var(--err)}
 .btn.small{padding:5px 10px;font-size:.85em}
+[hidden]{display:none !important}
 input,select,textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font:inherit;margin:4px 0}
 label{display:block;margin-top:12px;font-weight:600;font-size:.92em}
 nav{display:flex;gap:16px;align-items:center;border-bottom:1px solid var(--line);

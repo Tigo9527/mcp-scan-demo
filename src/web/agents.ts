@@ -135,7 +135,7 @@ function safeTaskContent(source: string): string {
   return sanitizeHtml(source, {
     allowedTags: ['p', 'br', 'strong', 'em', 'u', 's', 'ul', 'ol', 'li', 'blockquote', 'img'],
     allowedAttributes: { img: ['src', 'alt', 'title', 'width', 'height'] },
-    allowedSchemes: ['data'],
+    allowedSchemes: ['http', 'https', 'mailto', 'data'],
     allowedSchemesByTag: { img: ['data'] },
   });
 }
@@ -215,7 +215,7 @@ window.pendingTaskAttachments=[];
 function addTaskFile(file){return new Promise((resolve,reject)=>{if(file.size>5*1024*1024){reject(new Error('单个附件不能超过 5MB'));return;}const reader=new FileReader();reader.onload=()=>{window.pendingTaskAttachments.push({name:file.name,type:file.type||'application/octet-stream',dataUrl:reader.result});resolve(reader.result);};reader.onerror=()=>reject(new Error('读取附件失败'));reader.readAsDataURL(file);});}
 function refreshAttachmentList(){document.getElementById('task-attachments').textContent=window.pendingTaskAttachments.length?('已添加 '+window.pendingTaskAttachments.length+' 个附件（提交后保存 1 天）'):'';}
 document.getElementById('task-files').addEventListener('change',async e=>{try{for(const file of e.target.files)await addTaskFile(file);refreshAttachmentList();}catch(err){status.textContent=err.message||'附件读取失败';}});
-document.getElementById('task-content').addEventListener('paste',async e=>{const items=[...(e.clipboardData?.items||[])];const images=items.filter(item=>item.kind==='file'&&item.type.startsWith('image/'));if(!images.length)return;e.preventDefault();for(const item of images){const file=item.getAsFile();if(!file)continue;try{const dataUrl=await addTaskFile(file);const img=document.createElement('img');img.src=dataUrl;img.alt=file.name;img.style.maxWidth='240px';img.style.display='block';document.getElementById('task-content').append(img);}catch(err){status.textContent=err.message||'图片读取失败';}}refreshAttachmentList();});
+document.getElementById('task-content').addEventListener('paste',async e=>{const items=[...(e.clipboardData?.items||[])];const images=items.filter(item=>item.kind==='file'&&item.type.startsWith('image/'));if(!images.length)return;e.preventDefault();for(const item of images){const file=item.getAsFile();if(!file)continue;try{const dataUrl=await addTaskFile(file);const editor=document.getElementById('task-content');const img=document.createElement('img');img.src=dataUrl;img.alt=file.name;img.style.maxWidth='240px';img.style.display='block';editor.append(img,document.createElement('br'));}catch(err){status.textContent=err.message||'图片读取失败';}}refreshAttachmentList();});
 async function copyGeneratedText(text){
   if(navigator.clipboard&&navigator.clipboard.writeText){
     try{await navigator.clipboard.writeText(text);return true;}catch(_err){}
@@ -321,12 +321,13 @@ export function createAgentRouter(): Router {
   }));
   router.post('/admin/api/agents/:id/tasks', adminOnly, requireSameOrigin, requireDb, wrap(async (req, res) => {
     if (!(await AgentModel.findByPk(req.params.id))) { res.status(404).json({ error: 'Agent 不存在' }); return; }
-    const content = cleanText(req.body?.content, 20_000);
+    const attachmentsInput = req.body?.attachments;
+    const content = cleanText(req.body?.content, 20_000) || (Array.isArray(attachmentsInput) && attachmentsInput.length ? '<p>（见附件）</p>' : null);
     if (!content) { res.status(400).json({ error: '任务内容必填且不超过 20000 字' }); return; }
     cleanupAttachments();
     const id = randomUUID(), tokenExpiresAt = new Date(Date.now() + TASK_TTL_MS).toISOString();
     let attachments: AttachmentMeta[];
-    try { attachments = writeAttachmentMeta(id, req.body?.attachments); } catch (err) { res.status(400).json({ error: err instanceof Error ? err.message : '附件无效' }); return; }
+    try { attachments = writeAttachmentMeta(id, attachmentsInput); } catch (err) { res.status(400).json({ error: err instanceof Error ? err.message : '附件无效' }); return; }
     await AgentTaskModel.create({ id, agentId: req.params.id, content: safeTaskContent(content), tokenExpiresAt, status: 'pending', result: null, reportedAt: null, reportSource: null, createdAt: new Date().toISOString() });
     const token = tokenFor(id, tokenExpiresAt);
     res.status(201).json({ taskId: id, url: `${linkBase(req)}/api/tasks/${token}`, expiresAt: tokenExpiresAt, attachments: attachments.map(({ name, type, size }) => ({ name, type, size })) });
