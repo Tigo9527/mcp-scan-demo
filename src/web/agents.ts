@@ -236,7 +236,7 @@ async function copyGeneratedText(text){
   document.body.removeChild(ta);return ok;
 }
 function shareText(url){return '请阅读这个任务，并按要求回报结果。\\n'+url;}
-const knownReported=new Set(), audioContext=window.AudioContext?new AudioContext():null;
+const knownReported=new Set(), expandedTaskLinks=new Set(), audioContext=window.AudioContext?new AudioContext():null;
 let taskListInitialized=false;
 function formatLocalTime(value){const date=new Date(value);return Number.isNaN(date.getTime())?value:date.toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'});}
 function playReportSound(){
@@ -253,6 +253,8 @@ async function loadTasks(){
   const tasks=await r.json();
   const hasNewReport=taskListInitialized&&tasks.some(t=>t.result!==null&&!knownReported.has(t.id));
   tasks.forEach(t=>{if(t.result!==null)knownReported.add(t.id);});
+  const taskIds=new Set(tasks.map(t=>t.id));
+  for(const id of expandedTaskLinks)if(!taskIds.has(id))expandedTaskLinks.delete(id);
   messages.replaceChildren();
   if(!tasks.length){messages.className='empty';messages.textContent='暂无对话。输入任务后生成链接。';taskListInitialized=true;return;}
   messages.className='';
@@ -275,7 +277,8 @@ async function loadTasks(){
     const title=document.createElement('span');title.className='cb-title';title.textContent='任务链接（请交给 CLI AI）';
     const copy=document.createElement('button');copy.type='button';copy.className='btn small copy';copy.textContent='复制';
     head.append(title,copy);const pre=document.createElement('pre');const code=document.createElement('code');code.textContent=shareText(t.url);pre.append(code);linkBox.append(head,pre);c.append(linkBox);
-    linkBox.hidden=true;linkToggle.addEventListener('click',()=>{linkBox.hidden=!linkBox.hidden;linkToggle.textContent=linkBox.hidden?'显示任务链接':'收起任务链接';});
+    linkBox.hidden=!expandedTaskLinks.has(t.id);linkToggle.textContent=linkBox.hidden?'显示任务链接':'收起任务链接';linkToggle.setAttribute('aria-expanded',String(!linkBox.hidden));
+    linkToggle.addEventListener('click',()=>{linkBox.hidden=!linkBox.hidden;if(linkBox.hidden)expandedTaskLinks.delete(t.id);else expandedTaskLinks.add(t.id);linkToggle.textContent=linkBox.hidden?'显示任务链接':'收起任务链接';linkToggle.setAttribute('aria-expanded',String(!linkBox.hidden));});
     if(t.attachments?.length){const files=document.createElement('div');files.className='attachment-list';for(const a of t.attachments){const item=document.createElement('a');item.href=a.url;item.target='_blank';item.rel='noopener';item.textContent=a.name+' ('+Math.round(a.size/1024)+' KB)';files.append(item);}c.append(files);}
     if(t.result!==null){const reply=document.createElement('div');reply.className='card';
       const who=document.createElement('strong');who.textContent='Agent 回报 · '+formatLocalTime(t.reportedAt);
