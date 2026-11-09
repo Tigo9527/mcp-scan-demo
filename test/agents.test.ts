@@ -50,15 +50,22 @@ describe('Admin AI 对话和任务链接', () => {
     expect(page.status).toBe(200);
     const html = await page.text();
     expect(html).toContain('生成任务链接');
-    expect(html).toContain('复制给 CLI AI');
+    expect(html).toContain('它应从这里获取任务，并按要求回报结果');
     expect(html).toContain('copyGeneratedText(data.url)');
 
     const taskResponse = await post(`${base}/admin/api/agents/${agent.id}/tasks`, { content: '检查代码' }, admin);
     expect(taskResponse.status).toBe(201);
     const { url, taskId }: any = await taskResponse.json();
-    const task: any = await (await fetch(url)).json();
-    expect(task.content).toBe('检查代码');
-    expect(task.report.url).toBe(`${url}/report`);
+    const taskList: any = await (await fetch(`${base}/admin/api/agents/${agent.id}/tasks`, { headers: admin })).json();
+    expect(taskList[0].url).toBe(url);
+    const editResponse = await fetch(`${base}/admin/api/tasks/${taskId}`, { method: 'PATCH', headers: { ...admin, 'Content-Type': 'application/json' }, body: JSON.stringify({ content: '检查更新后的代码' }) });
+    expect(editResponse.status).toBe(200);
+    const editedData: any = await editResponse.json();
+    expect(editedData.url).not.toBe(url);
+    const urlAfterEdit = editedData.url;
+    const task: any = await (await fetch(urlAfterEdit)).json();
+    expect(task.content).toBe('检查更新后的代码');
+    expect(task.report.url).toBe(`${urlAfterEdit}/report`);
     expect((await fetch(`${base}/api/tasks/not-valid`)).status).toBe(403);
     expect((await post(`${base}/api/tasks/not-valid/report`, { result: 'bad' })).status).toBe(403);
 

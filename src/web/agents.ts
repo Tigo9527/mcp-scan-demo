@@ -143,7 +143,7 @@ function conversationHtml(base: string, agent: Record<string, unknown>): string 
 <form id="create-task" class="card"><label for="task-content">任务内容</label>
 <textarea id="task-content" name="content" rows="6" maxlength="20000" required></textarea>
 <p><button class="btn" type="submit">生成任务链接</button></p><p id="task-status" role="status"></p>
-<div id="task-link" class="codeblock" hidden><div class="cb-head"><span class="cb-title">复制给 CLI AI</span><button type="button" class="btn small copy">复制</button></div><pre><code></code></pre></div>
+<p class="muted">生成后链接会自动复制。请把链接交给 CLI AI：它应从这里获取任务，并按要求回报结果。</p>
 </form>
 <script>
 const agentId=${JSON.stringify(String(agent.id))};
@@ -167,6 +167,15 @@ async function loadTasks(){
     const label=document.createElement('strong');label.textContent='你 · '+t.createdAt;
     const content=document.createElement('p');content.style.whiteSpace='pre-wrap';content.textContent=t.content;
     c.append(label,content);
+    const linkBox=document.createElement('div');linkBox.className='codeblock';
+    const head=document.createElement('div');head.className='cb-head';
+    const title=document.createElement('span');title.className='cb-title';title.textContent='任务链接（请交给 CLI AI）';
+    const copy=document.createElement('button');copy.type='button';copy.className='btn small copy';copy.textContent='复制';
+    head.append(title,copy);const pre=document.createElement('pre');const code=document.createElement('code');code.textContent=t.url;pre.append(code);linkBox.append(head,pre);c.append(linkBox);
+    const edit=document.createElement('form');edit.className='row';
+    const editInput=document.createElement('input');editInput.name='content';editInput.value=t.content;editInput.maxLength=20000;editInput.setAttribute('aria-label','编辑任务内容');
+    const editButton=document.createElement('button');editButton.type='submit';editButton.className='btn small alt';editButton.textContent='编辑并重新生成链接';
+    edit.append(editInput,editButton);edit.addEventListener('submit',async ev=>{ev.preventDefault();editButton.disabled=true;const rr=await fetch('/admin/api/tasks/'+encodeURIComponent(t.id),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:editInput.value})});const dd=await rr.json();editButton.disabled=false;if(!rr.ok){status.textContent=dd.error||'编辑失败';return;}status.textContent='任务已更新并重新生成链接。';await copyGeneratedText(dd.url);loadTasks();});c.append(edit);
     if(t.result!==null){const reply=document.createElement('div');reply.className='card';
       const who=document.createElement('strong');who.textContent='Agent 回报 · '+t.reportedAt;
       const body=document.createElement('div');body.innerHTML=t.resultHtml;
@@ -179,7 +188,7 @@ document.getElementById('create-task').addEventListener('submit',async e=>{
   const r=await fetch('/admin/api/agents/'+encodeURIComponent(agentId)+'/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content})});
   const data=await r.json();
   if(!r.ok){status.textContent=data.error||'生成失败';return;}
-  e.target.reset();const box=document.getElementById('task-link');box.hidden=false;box.querySelector('code').textContent=data.url;
+  e.target.reset();
   const copied=await copyGeneratedText(data.url);
   status.textContent=copied?'链接已生成并自动复制，有效期 7 天。链接持有人可读取任务并回报。':'链接已生成，但浏览器未能自动复制，请点击“复制”。';
   loadTasks();
@@ -218,7 +227,7 @@ export function createAgentRouter(): Router {
   router.get('/admin/api/agents/:id/tasks', adminOnly, requireDb, wrap(async (req, res) => {
     if (!(await AgentModel.findByPk(req.params.id))) { res.status(404).json({ error: 'Agent 不存在' }); return; }
     const tasks = await AgentTaskModel.findAll({ where: { agentId: req.params.id }, order: [['createdAt', 'ASC']] });
-    res.json(tasks.map(t => { const d = row(t); return { ...d, resultHtml: d.result === null ? null : safeMarkdown(String(d.result)) }; }));
+    res.json(tasks.map(t => { const d = row(t); const token = tokenFor(String(d.id), String(d.tokenExpiresAt)); return { ...d, url: `${linkBase(req)}/api/tasks/${token}`, resultHtml: d.result === null ? null : safeMarkdown(String(d.result)) }; }));
   }));
   router.post('/admin/api/agents/:id/tasks', adminOnly, requireSameOrigin, requireDb, wrap(async (req, res) => {
     if (!(await AgentModel.findByPk(req.params.id))) { res.status(404).json({ error: 'Agent 不存在' }); return; }
@@ -228,6 +237,17 @@ export function createAgentRouter(): Router {
     await AgentTaskModel.create({ id, agentId: req.params.id, content, tokenExpiresAt, status: 'pending', result: null, reportedAt: null, reportSource: null, createdAt: new Date().toISOString() });
     const token = tokenFor(id, tokenExpiresAt);
     res.status(201).json({ taskId: id, url: `${linkBase(req)}/api/tasks/${token}`, expiresAt: tokenExpiresAt });
+  }));
+
+  router.patch('/admin/api/tasks/:id', adminOnly, requireSameOrigin, requireDb, wrap(async (req, res) => {
+    const content = cleanText(req.body?.content, 20_000);
+    if (!content) { res.status(400).json({ error: '任务内容必填且不超过 20000 字' }); return; }
+    const task = await AgentTaskModel.findByPk(req.params.id);
+    if (!task) { res.status(404).json({ error: '任务不存在' }); return; }
+    const tokenExpiresAt = new Date(Date.now() + TASK_TTL_MS).toISOString();
+    await task.update({ content, tokenExpiresAt, status: 'pending', result: null, reportedAt: null, reportSource: null });
+    const url = `${linkBase(req)}/api/tasks/${tokenFor(req.params.id, tokenExpiresAt)}`;
+    res.json({ taskId: req.params.id, url, expiresAt: tokenExpiresAt });
   }));
 
   router.get('/api/tasks/:token', requireDb, wrap(async (req, res) => {
