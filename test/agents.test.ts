@@ -55,6 +55,8 @@ describe('Admin AI 对话和任务链接', () => {
     expect(html).toContain("content.contentEditable='true'");
     expect(html).toContain('保存并重新生成链接');
     expect(html).toContain('copyGeneratedText(shareText(data.url))');
+    expect(html).toContain('toLocaleString(undefined,{dateStyle:\'medium\',timeStyle:\'short\'})');
+    expect(html).toContain('playReportSound()');
 
     const taskResponse = await post(`${base}/admin/api/agents/${agent.id}/tasks`, { content: '检查代码' }, admin);
     expect(taskResponse.status).toBe(201);

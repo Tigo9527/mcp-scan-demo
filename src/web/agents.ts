@@ -157,11 +157,25 @@ async function copyGeneratedText(text){
   document.body.removeChild(ta);return ok;
 }
 function shareText(url){return '请阅读这个任务，并按要求回报结果。\\n'+url;}
+const knownReported=new Set(), audioContext=window.AudioContext?new AudioContext():null;
+let taskListInitialized=false;
+function formatLocalTime(value){const date=new Date(value);return Number.isNaN(date.getTime())?value:date.toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'});}
+function playReportSound(){
+  if(!audioContext)return;
+  try{const now=audioContext.currentTime, oscillator=audioContext.createOscillator(), gain=audioContext.createGain();
+    oscillator.type='sine';oscillator.frequency.setValueAtTime(880,now);oscillator.frequency.setValueAtTime(1175,now+0.12);
+    gain.gain.setValueAtTime(0.0001,now);gain.gain.exponentialRampToValueAtTime(0.16,now+0.02);gain.gain.exponentialRampToValueAtTime(0.0001,now+0.32);
+    oscillator.connect(gain);gain.connect(audioContext.destination);oscillator.start(now);oscillator.stop(now+0.34);
+  }catch(_err){}
+}
 async function loadTasks(){
   const r=await fetch('/admin/api/agents/'+encodeURIComponent(agentId)+'/tasks');
   if(!r.ok){messages.textContent='加载失败';return;}
-  const tasks=await r.json();messages.replaceChildren();
-  if(!tasks.length){messages.className='empty';messages.textContent='暂无对话。输入任务后生成链接。';return;}
+  const tasks=await r.json();
+  const hasNewReport=taskListInitialized&&tasks.some(t=>t.result!==null&&!knownReported.has(t.id));
+  tasks.forEach(t=>{if(t.result!==null)knownReported.add(t.id);});
+  messages.replaceChildren();
+  if(!tasks.length){messages.className='empty';messages.textContent='暂无对话。输入任务后生成链接。';taskListInitialized=true;return;}
   messages.className='';
   for(const t of tasks){const c=document.createElement('section');c.className='card';
     const label=document.createElement('strong');label.textContent='你 · '+t.createdAt;
@@ -182,11 +196,12 @@ async function loadTasks(){
     const copy=document.createElement('button');copy.type='button';copy.className='btn small copy';copy.textContent='复制';
     head.append(title,copy);const pre=document.createElement('pre');const code=document.createElement('code');code.textContent=shareText(t.url);pre.append(code);linkBox.append(head,pre);c.append(linkBox);
     if(t.result!==null){const reply=document.createElement('div');reply.className='card';
-      const who=document.createElement('strong');who.textContent='Agent 回报 · '+t.reportedAt;
+      const who=document.createElement('strong');who.textContent='Agent 回报 · '+formatLocalTime(t.reportedAt);
       const body=document.createElement('div');body.innerHTML=t.resultHtml;
       reply.append(who,body);c.append(reply);
     }else{const pending=document.createElement('p');pending.className='muted';pending.textContent='等待回报 · 链接有效期至 '+t.tokenExpiresAt;c.append(pending);}
     messages.append(c);}
+  taskListInitialized=true;if(hasNewReport)playReportSound();
 }
 document.getElementById('create-task').addEventListener('submit',async e=>{
   e.preventDefault();status.textContent='生成中…';const content=new FormData(e.target).get('content');
