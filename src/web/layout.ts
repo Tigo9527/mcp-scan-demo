@@ -92,6 +92,17 @@ nav a.active{opacity:1;font-weight:600;color:var(--acc)}
 .step{font-weight:600;margin:18px 0 6px}
 .step span{display:inline-block;min-width:24px;height:24px;line-height:24px;text-align:center;
   border-radius:999px;background:var(--acc);color:#fff;font-size:.85em;margin-right:8px}
+body.agent-conversation{--fg:#e8edf3;--muted:#9ba9b8;--line:#344150;--bg:#111923;--soft:#1d2935;--acc:#8ab4f8;--ok:#39785a;background:var(--bg)}
+.agent-conversation .card,.agent-conversation .task-reply{background:#17222d;border-color:var(--line)}
+.agent-conversation .task-reported{background:#151f29;border-color:#2b3744}
+.agent-conversation input,.agent-conversation textarea,.agent-conversation .rich-editor{background:#17222d;color:var(--fg);border-color:var(--line)}
+.agent-conversation .task-content.editing{background:#1b2c3d}
+.agent-conversation .subnav a:hover,.agent-conversation .btn.link-toggle:hover{background:#293847}
+.agent-conversation .subnav a.active{background:#17222d}
+.agent-conversation .btn.alt,.agent-conversation .btn.copy{background:#344150}
+.agent-conversation .btn.link-open{color:var(--acc)}
+.automation-controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:12px 0 2px}
+.automation-controls .btn{margin:0}
 `;
 
 /** HTML 转义。所有插值都必须过一遍，包括 href="...?token=${esc(x)}" 这类属性位置。 */
@@ -170,6 +181,7 @@ export interface PageOptions {
   adminToken?: string;
   /** Admin 子导航高亮项（仅 admin 页面传） */
   adminTab?: AdminTab;
+  bodyClass?: string;
 }
 
 /**
@@ -219,7 +231,7 @@ export function page(opts: PageOptions): string {
   return `<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(opts.title)}</title><style>${CSS}</style></head>
-<body>${nav}${subnav}${opts.body}${versionFooter()}${COPY_SCRIPT}</body></html>`;
+<body${opts.bodyClass ? ` class="${esc(opts.bodyClass)}"` : ''}>${nav}${subnav}${opts.body}${versionFooter()}${COPY_SCRIPT}</body></html>`;
 }
 
 /**

@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { marked } from 'marked';
 import sanitizeHtml from 'sanitize-html';
-import { AgentModel, AgentTaskModel, dbEnabled } from '../db.js';
+import { AgentModel, AgentTaskModel, AgentAutomationModel, dbEnabled } from '../db.js';
 import { config, getAdminToken, isLocalBaseUrl } from '../config.js';
 import { isAdminRequest } from './admin.js';
 import { deriveBase, requireSameOrigin, wrap } from './http.js';
@@ -18,6 +18,12 @@ const MAX_ATTACHMENTS = 5;
 const ATTACHMENT_TTL_MS = 24 * 60 * 60 * 1000;
 const ATTACHMENT_DIR = path.resolve(config.dataDir, 'agent-attachments');
 const reportAttempts = new Map<string, { count: number; until: number }>();
+type AutomationState = 'off' | 'starting' | 'on' | 'stopping';
+
+async function automationFor(agentId: string): Promise<{ state: AutomationState; controlTaskId: string | null }> {
+  const record = await AgentAutomationModel.findByPk(agentId);
+  return record ? { state: record.get('state') as AutomationState, controlTaskId: record.get('controlTaskId') as string | null } : { state: 'off', controlTaskId: null };
+}
 
 function taskKey(): Buffer {
   // 公网环境必须配置 ADMIN_TOKEN；把它纳入派生材料，避免 JWT_SECRET 遗留默认值时
@@ -220,12 +226,12 @@ loadAgents().catch(()=>{list.textContent='加载失败';});
 }
 
 function conversationHtml(base: string, agent: Record<string, unknown>): string {
-  return page({ title: `与 ${String(agent.name)} 对话`, base, active: 'admin', adminTab: 'agents', body: `
+  return page({ title: `与 ${String(agent.name)} 对话`, base, active: 'admin', adminTab: 'agents', bodyClass: 'agent-conversation', body: `
 <p><a href="/admin/agents">← Agent 列表</a></p><h1>${esc(agent.name)}</h1><p>${esc(agent.description)}</p>
-<p class="muted">AI Agent 自动轮询地址：<code>${esc(`${base}/api/agents/${agent.id}/tasks/poll`)}</code><br>请求头使用 <code>X-Agent-Token: ${esc(pollTokenFor(String(agent.id)))}</code>，只会返回此 Agent 的待处理任务。</p>
 <div id="messages" class="empty">加载中…</div>
 <form id="create-task" class="card"><label for="task-content">任务内容</label>
 <div id="task-content" class="rich-editor" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="输入任务，支持粘贴图片或选择附件"></div>
+<div class="automation-controls"><button id="automation-start" class="btn small" type="button">开启自动任务</button><button id="automation-stop" class="btn small alt" type="button" hidden>关闭自动任务</button><span id="automation-state" class="muted" role="status">读取自动任务状态…</span></div>
 <label for="task-files">附件（图片或文件，单个不超过 5MB，保存 1 天）</label><input id="task-files" type="file" multiple>
 <div id="task-attachments" class="muted"></div>
 <p><button class="btn" type="submit">生成任务链接</button></p><p id="task-status" role="status"></p>
@@ -233,6 +239,10 @@ function conversationHtml(base: string, agent: Record<string, unknown>): string 
 <script>
 const agentId=${JSON.stringify(String(agent.id))};
 const messages=document.getElementById('messages'),status=document.getElementById('task-status');
+const automationStart=document.getElementById('automation-start'),automationStop=document.getElementById('automation-stop'),automationState=document.getElementById('automation-state');
+async function loadAutomation(){const r=await fetch('/admin/api/agents/'+encodeURIComponent(agentId)+'/automation');if(!r.ok)return;const data=await r.json();const state=data.state;automationStart.hidden=state!=='off';automationStop.hidden=state==='off'||state==='stopping';automationState.textContent=({off:'未开启',starting:'等待 AI 启动并回报',on:'AI 已确认启动',stopping:'等待 AI 领取停止任务并回报'})[state]||'状态未知';}
+automationStart.addEventListener('click',async()=>{automationStart.disabled=true;try{const r=await fetch('/admin/api/agents/'+encodeURIComponent(agentId)+'/automation/start',{method:'POST'});const data=await r.json();if(!r.ok)throw new Error(data.error||'启动失败');const copied=await copyGeneratedText(shareText(data.url));automationState.textContent=copied?'启动指令已复制，请粘贴给 AI':'启动指令已创建，请复制任务链接交给 AI';await loadAutomation();}catch(error){automationState.textContent=error.message||'启动失败';}finally{automationStart.disabled=false;}});
+automationStop.addEventListener('click',async()=>{automationStop.disabled=true;try{const r=await fetch('/admin/api/agents/'+encodeURIComponent(agentId)+'/automation/stop',{method:'POST'});const data=await r.json();if(!r.ok)throw new Error(data.error||'停止失败');automationState.textContent='停止任务已创建，等待 AI 自动领取';await loadAutomation();}catch(error){automationState.textContent=error.message||'停止失败';}finally{automationStop.disabled=false;}});
 window.pendingTaskAttachments=[];
 function addTaskFile(file){return new Promise((resolve,reject)=>{if(file.size>5*1024*1024){reject(new Error('单个附件不能超过 5MB'));return;}const reader=new FileReader();reader.onload=()=>{window.pendingTaskAttachments.push({name:file.name,type:file.type||'application/octet-stream',dataUrl:reader.result});resolve(reader.result);};reader.onerror=()=>reject(new Error('读取附件失败'));reader.readAsDataURL(file);});}
 function refreshAttachmentList(){document.getElementById('task-attachments').textContent=window.pendingTaskAttachments.length?('已添加 '+window.pendingTaskAttachments.length+' 个附件（提交后保存 1 天）'):'';}
@@ -319,7 +329,7 @@ document.getElementById('create-task').addEventListener('submit',async e=>{
   status.textContent=copied?'链接已生成并自动复制，有效期 7 天。链接持有人可读取任务并回报。':'链接已生成，但浏览器未能自动复制，请点击“复制”。';
   loadTasks();
 });
-loadTasks().catch(()=>{messages.textContent='加载失败';});setInterval(()=>{if(!shouldDeferTaskRefresh())loadTasks().catch(()=>{});},5000);
+loadAutomation().catch(()=>{});loadTasks().catch(()=>{messages.textContent='加载失败';});setInterval(()=>{loadAutomation().catch(()=>{});if(!shouldDeferTaskRefresh())loadTasks().catch(()=>{});},5000);
 </script>` });
 }
 
@@ -355,12 +365,37 @@ export function createAgentRouter(): Router {
     const tasks = await AgentTaskModel.findAll({ where: { agentId: req.params.id }, order: [['createdAt', 'ASC']] });
     res.json(tasks.map(t => { const d = row(t); const token = tokenFor(String(d.id), String(d.tokenExpiresAt)); return { ...d, contentHtml: taskContentWithAttachmentUrls(String(d.content), String(d.id), token, req), attachments: attachmentMeta(String(d.id)).map(({ name, type, size, path: stored }) => ({ name, type, size, url: `${linkBase(req)}/admin/api/tasks/${d.id}/attachments/${encodeURIComponent(stored)}` })), url: `${linkBase(req)}/api/tasks/${token}`, resultHtml: d.result === null ? null : safeMarkdown(String(d.result)) }; }));
   }));
+  router.get('/admin/api/agents/:id/automation', adminOnly, requireDb, wrap(async (req, res) => {
+    if (!(await AgentModel.findByPk(req.params.id))) { res.status(404).json({ error: 'Agent 不存在' }); return; }
+    res.json(await automationFor(req.params.id));
+  }));
+  router.post('/admin/api/agents/:id/automation/start', adminOnly, requireSameOrigin, requireDb, wrap(async (req, res) => {
+    if (!(await AgentModel.findByPk(req.params.id))) { res.status(404).json({ error: 'Agent 不存在' }); return; }
+    const current = await automationFor(req.params.id);
+    if (current.state !== 'off') { res.status(409).json({ error: '自动任务已启动或正在启动' }); return; }
+    const id = randomUUID(), tokenExpiresAt = new Date(Date.now() + TASK_TTL_MS).toISOString();
+    const pollUrl = `${linkBase(req)}/api/agents/${req.params.id}/tasks/poll`;
+    const content = `启动此 Agent 的自动任务。请在你的运行环境创建定时任务，每 10 秒访问轮询地址 ${pollUrl}，请求头 X-Agent-Token: ${pollTokenFor(req.params.id)}。仅处理返回的该 Agent 任务，读取每条任务的 url，并按其 report.url 回报。首次定时任务成功运行后，请回报本任务：已启动自动轮询。以后遇到停止自动任务的任务，请先回报该停止任务，再关闭定时任务。`;
+    await AgentTaskModel.create({ id, agentId: req.params.id, content: safeTaskContent(content), tokenExpiresAt, status: 'pending', result: null, reportedAt: null, reportSource: null, createdAt: new Date().toISOString() });
+    await AgentAutomationModel.upsert({ agentId: req.params.id, state: 'starting', controlTaskId: id, updatedAt: new Date().toISOString() });
+    res.status(201).json({ state: 'starting', taskId: id, url: `${linkBase(req)}/api/tasks/${tokenFor(id, tokenExpiresAt)}` });
+  }));
+  router.post('/admin/api/agents/:id/automation/stop', adminOnly, requireSameOrigin, requireDb, wrap(async (req, res) => {
+    if (!(await AgentModel.findByPk(req.params.id))) { res.status(404).json({ error: 'Agent 不存在' }); return; }
+    const current = await automationFor(req.params.id);
+    if (current.state !== 'on' && current.state !== 'starting') { res.status(409).json({ error: '自动任务尚未启动或正在停止' }); return; }
+    const id = randomUUID(), tokenExpiresAt = new Date(Date.now() + TASK_TTL_MS).toISOString();
+    await AgentTaskModel.create({ id, agentId: req.params.id, content: '停止自动任务：请先回报本任务“已停止自动轮询”，然后关闭此 Agent 的定时轮询任务。不要停止其它 Agent 的轮询。', tokenExpiresAt, status: 'pending', result: null, reportedAt: null, reportSource: null, createdAt: new Date().toISOString() });
+    await AgentAutomationModel.upsert({ agentId: req.params.id, state: 'stopping', controlTaskId: id, updatedAt: new Date().toISOString() });
+    res.status(201).json({ state: 'stopping', taskId: id });
+  }));
   router.get('/api/agents/:id/tasks/poll', requireDb, wrap(async (req, res) => {
     if (!pollTokenMatches(req, req.params.id)) { res.status(401).json({ error: 'Agent 轮询凭证无效' }); return; }
     const agent = await AgentModel.findByPk(req.params.id);
     if (!agent) { res.status(404).json({ error: 'Agent 不存在' }); return; }
     const tasks = await AgentTaskModel.findAll({ where: { agentId: req.params.id, status: 'pending' }, order: [['createdAt', 'ASC']] });
-    res.json({ agent: { id: agent.get('id'), name: agent.get('name') }, tasks: tasks.map(t => row(t)).filter(d => Date.parse(String(d.tokenExpiresAt)) > Date.now()).map(d => { const token = tokenFor(String(d.id), String(d.tokenExpiresAt)); return { taskId: d.id, url: `${linkBase(req)}/api/tasks/${token}`, createdAt: d.createdAt, expiresAt: d.tokenExpiresAt }; }) });
+    const automation = await automationFor(req.params.id);
+    res.json({ agent: { id: agent.get('id'), name: agent.get('name') }, tasks: tasks.map(t => row(t)).filter(d => Date.parse(String(d.tokenExpiresAt)) > Date.now()).map(d => { const token = tokenFor(String(d.id), String(d.tokenExpiresAt)); return { taskId: d.id, url: `${linkBase(req)}/api/tasks/${token}`, createdAt: d.createdAt, expiresAt: d.tokenExpiresAt, control: automation.controlTaskId === d.id ? automation.state : null }; }) });
   }));
   router.post('/admin/api/agents/:id/tasks', adminOnly, requireSameOrigin, requireDb, wrap(async (req, res) => {
     if (!(await AgentModel.findByPk(req.params.id))) { res.status(404).json({ error: 'Agent 不存在' }); return; }
@@ -422,6 +457,11 @@ export function createAgentRouter(): Router {
       const current = await AgentTaskModel.findByPk(String(task.id));
       if (current?.get('result') === result) { res.json({ ok: true, taskId: task.id, idempotent: true }); return; }
       res.status(409).json({ error: '任务已有不同回报' }); return;
+    }
+    const automation = await automationFor(String(task.agentId));
+    if (automation.controlTaskId === task.id) {
+      const next = automation.state === 'starting' ? 'on' : automation.state === 'stopping' ? 'off' : null;
+      if (next) await AgentAutomationModel.update({ state: next, controlTaskId: null, updatedAt: reportedAt }, { where: { agentId: task.agentId, controlTaskId: task.id, state: automation.state } });
     }
     res.json({ ok: true, taskId: task.id, reportedAt });
   }));

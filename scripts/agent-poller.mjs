@@ -32,6 +32,18 @@ async function poll() {
     if (attempted.get(task.taskId) > Date.now()) continue;
     const url = new URL(task.url);
     if (url.origin !== parsed.origin || !url.pathname.startsWith('/api/tasks/')) continue;
+    if (task.control === 'stopping') {
+      const detail = await fetch(task.url, { signal: AbortSignal.timeout(10000) });
+      if (!detail.ok) throw new Error(`停止任务读取失败：HTTP ${detail.status}`);
+      const stopTask = await detail.json();
+      const reportUrl = new URL(stopTask.report?.url || '');
+      if (reportUrl.origin !== parsed.origin || reportUrl.pathname !== `${url.pathname}/report`) throw new Error('停止任务回报地址无效');
+      const report = await fetch(reportUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ result: '已停止自动轮询' }), signal: AbortSignal.timeout(10000) });
+      if (!report.ok) throw new Error(`停止任务回报失败：HTTP ${report.status}`);
+      console.log(`已停止 Agent ${data.agent.id} 的自动轮询`);
+      running = false;
+      break;
+    }
     attempted.set(task.taskId, Date.now() + 60000);
     console.log(`处理任务 ${task.taskId}`);
     const prompt = `请阅读这个任务，并按任务返回的 report.url 提交结果。任务 URL：${task.url}`;

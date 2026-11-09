@@ -211,6 +211,7 @@ export class GithubSettingModel extends Model {}
 export class StatsModel extends Model {}
 export class AgentModel extends Model {}
 export class AgentTaskModel extends Model {}
+export class AgentAutomationModel extends Model {}
 
 function defineModels(seq: Sequelize): void {
   UserModel.init(
@@ -332,6 +333,16 @@ function defineModels(seq: Sequelize): void {
       createdAt: { type: DataTypes.STRING, allowNull: false },
     },
     { sequelize: seq, timestamps: false, modelName: 'agentTask', tableName: 'agent_tasks', indexes: [{ fields: ['agentId', 'createdAt'] }] },
+  );
+
+  AgentAutomationModel.init(
+    {
+      agentId: { type: DataTypes.STRING, primaryKey: true },
+      state: { type: DataTypes.STRING, allowNull: false },
+      controlTaskId: { type: DataTypes.STRING, allowNull: true },
+      updatedAt: { type: DataTypes.STRING, allowNull: false },
+    },
+    { sequelize: seq, timestamps: false, modelName: 'agentAutomation', tableName: 'agent_automation' },
   );
 }
 

@@ -150,6 +150,11 @@ npm start            # 启动后控制台会打印可访问 URL，含 /admin 与
 执行并向任务提供的回报地址提交结果。轮询凭证仅允许访问所属 Agent 的待处理任务索引，
 不要转发给其他 Agent；公网必须使用 HTTPS。重启轮询器后仍可从未回报任务继续处理。
 
+Admin 对话页的任务编辑框下提供“开启自动任务”和“关闭自动任务”。首次开启会创建启动任务并
+自动复制链接，需手工交给 AI 一次；AI 完成启动任务并回报后，状态显示为“已确认启动”。关闭
+会创建停止任务，已经运行的轮询器会自动领取、回报并退出，无需再手工粘贴链接。状态保存在
+数据库中，页面刷新后仍可见。对话页使用暗色主题。
+
 新增的 `agents`、`agent_tasks` 表由启动期 `initDb()` 的 Sequelize `sync()` 自动创建，
 无需手动迁移。Markdown 使用 `marked` 渲染并经 `sanitize-html` 清理。
 管理页面与 `/admin/api/agents`、`/admin/api/agents/:id/tasks` 需要 Admin Cookie 或

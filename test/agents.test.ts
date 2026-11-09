@@ -72,7 +72,9 @@ describe('Admin AI 对话和任务链接', () => {
     expect(html).toContain('toLocaleString(undefined,{dateStyle:\'medium\',timeStyle:\'short\'})');
     expect(html).toContain("label.textContent='你 · '+formatLocalTime(t.createdAt)");
     expect(html).toContain('formatLocalTime(t.tokenExpiresAt)');
-    expect(html).toContain('AI Agent 自动轮询地址');
+    expect(html).toContain('开启自动任务');
+    expect(html).toContain('关闭自动任务');
+    expect(html).toContain('class="agent-conversation"');
     expect(html).toContain('playReportSound()');
 
     const taskResponse = await post(`${base}/admin/api/agents/${agent.id}/tasks`, { content: '检查代码' }, admin);
@@ -86,6 +88,26 @@ describe('Admin AI 对话和任务链接', () => {
     expect((await fetch(pollUrl)).status).toBe(401);
     const polled: any = await (await fetch(pollUrl, { headers: { 'X-Agent-Token': pollToken } })).json();
     expect(polled.tasks.some((entry: any) => entry.taskId === taskId)).toBe(true);
+    const automationUrl = `${base}/admin/api/agents/${agent.id}/automation`;
+    expect((await (await fetch(automationUrl, { headers: admin })).json() as any).state).toBe('off');
+    const startResponse = await post(`${automationUrl}/start`, {}, admin);
+    expect(startResponse.status).toBe(201);
+    const startTask: any = await startResponse.json();
+    expect((await (await fetch(automationUrl, { headers: admin })).json() as any).state).toBe('starting');
+    expect((await post(`${automationUrl}/start`, {}, admin)).status).toBe(409);
+    const startData: any = await (await fetch(startTask.url)).json();
+    expect(startData.content).toContain('X-Agent-Token');
+    expect((await post(startData.report.url, { result: '已启动自动轮询' })).status).toBe(200);
+    expect((await (await fetch(automationUrl, { headers: admin })).json() as any).state).toBe('on');
+    const stopResponse = await post(`${automationUrl}/stop`, {}, admin);
+    expect(stopResponse.status).toBe(201);
+    const stopTask: any = await stopResponse.json();
+    expect((await (await fetch(automationUrl, { headers: admin })).json() as any).state).toBe('stopping');
+    const stopPolled: any = await (await fetch(pollUrl, { headers: { 'X-Agent-Token': pollToken } })).json();
+    expect(stopPolled.tasks.some((entry: any) => entry.taskId === stopTask.taskId)).toBe(true);
+    const stopData: any = await (await fetch(stopPolled.tasks.find((entry: any) => entry.taskId === stopTask.taskId).url)).json();
+    expect((await post(stopData.report.url, { result: '已停止自动轮询' })).status).toBe(200);
+    expect((await (await fetch(automationUrl, { headers: admin })).json() as any).state).toBe('off');
     const editResponse = await fetch(`${base}/admin/api/tasks/${taskId}`, { method: 'PATCH', headers: { ...admin, 'Content-Type': 'application/json' }, body: JSON.stringify({ content: '检查更新后的代码' }) });
     expect(editResponse.status).toBe(200);
     const editedData: any = await editResponse.json();
