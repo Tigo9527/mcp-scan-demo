@@ -51,6 +51,7 @@ describe('Admin AI 对话和任务链接', () => {
     const html = await page.text();
     expect(html).toContain('生成任务链接');
     expect(html).toContain('复制给 CLI AI');
+    expect(html).toContain('copyGeneratedText(data.url)');
 
     const taskResponse = await post(`${base}/admin/api/agents/${agent.id}/tasks`, { content: '检查代码' }, admin);
     expect(taskResponse.status).toBe(201);

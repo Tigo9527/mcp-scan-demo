@@ -148,6 +148,15 @@ function conversationHtml(base: string, agent: Record<string, unknown>): string 
 <script>
 const agentId=${JSON.stringify(String(agent.id))};
 const messages=document.getElementById('messages'),status=document.getElementById('task-status');
+async function copyGeneratedText(text){
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    try{await navigator.clipboard.writeText(text);return true;}catch(_err){}
+  }
+  const ta=document.createElement('textarea');ta.value=text;ta.setAttribute('readonly','');
+  ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();
+  let ok=false;try{ok=document.execCommand('copy');}catch(_err){ok=false;}
+  document.body.removeChild(ta);return ok;
+}
 async function loadTasks(){
   const r=await fetch('/admin/api/agents/'+encodeURIComponent(agentId)+'/tasks');
   if(!r.ok){messages.textContent='加载失败';return;}
@@ -168,8 +177,12 @@ async function loadTasks(){
 document.getElementById('create-task').addEventListener('submit',async e=>{
   e.preventDefault();status.textContent='生成中…';const content=new FormData(e.target).get('content');
   const r=await fetch('/admin/api/agents/'+encodeURIComponent(agentId)+'/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content})});
-  const data=await r.json();status.textContent=r.ok?'链接已生成，有效期 7 天。链接持有人可读取任务并回报。':data.error||'生成失败';
-  if(r.ok){e.target.reset();const box=document.getElementById('task-link');box.hidden=false;box.querySelector('code').textContent=data.url;loadTasks();}
+  const data=await r.json();
+  if(!r.ok){status.textContent=data.error||'生成失败';return;}
+  e.target.reset();const box=document.getElementById('task-link');box.hidden=false;box.querySelector('code').textContent=data.url;
+  const copied=await copyGeneratedText(data.url);
+  status.textContent=copied?'链接已生成并自动复制，有效期 7 天。链接持有人可读取任务并回报。':'链接已生成，但浏览器未能自动复制，请点击“复制”。';
+  loadTasks();
 });
 loadTasks().catch(()=>{messages.textContent='加载失败';});setInterval(()=>loadTasks().catch(()=>{}),5000);
 </script>` });
