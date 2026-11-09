@@ -74,6 +74,8 @@ describe('Admin AI 对话和任务链接', () => {
     expect(html).toContain('formatLocalTime(t.tokenExpiresAt)');
     expect(html).toContain('开启自动任务');
     expect(html).toContain('关闭自动任务');
+    expect(html).toContain('仅看未回报');
+    expect(html).toContain('onlyUnreported');
     expect(html).toContain('class="agent-conversation"');
     expect(html).toContain('playReportSound()');
 

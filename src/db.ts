@@ -340,6 +340,7 @@ function defineModels(seq: Sequelize): void {
       agentId: { type: DataTypes.STRING, primaryKey: true },
       state: { type: DataTypes.STRING, allowNull: false },
       controlTaskId: { type: DataTypes.STRING, allowNull: true },
+      taskSince: { type: DataTypes.STRING, allowNull: true },
       updatedAt: { type: DataTypes.STRING, allowNull: false },
     },
     { sequelize: seq, timestamps: false, modelName: 'agentAutomation', tableName: 'agent_automation' },
