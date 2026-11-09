@@ -256,7 +256,7 @@ async function loadTasks(){
   messages.replaceChildren();
   if(!tasks.length){messages.className='empty';messages.textContent='暂无对话。输入任务后生成链接。';taskListInitialized=true;return;}
   messages.className='';
-  for(const t of tasks){const c=document.createElement('section');c.className='card';
+  for(const t of tasks){const c=document.createElement('section');c.className=t.result!==null?'card task-reported':'card';
     const label=document.createElement('strong');label.textContent='你 · '+t.createdAt;
     const content=document.createElement('div');content.className='task-content';content.contentEditable='false';if(t.contentHtml)content.innerHTML=t.contentHtml;else content.textContent=t.content;
     c.append(label,content);

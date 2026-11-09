@@ -57,6 +57,8 @@ describe('Admin AI 对话和任务链接', () => {
     expect(html).toContain('copyGeneratedText(shareText(data.url))');
     expect(html).toContain('显示任务链接');
     expect(html).toContain('linkBox.hidden=true');
+    expect(html).toContain("c.className=t.result!==null?'card task-reported':'card'");
+    expect(html).toContain('.btn.link-toggle{background:var(--soft);color:var(--muted);border:1px solid var(--line)}');
     expect(html).toContain('contenteditable="true"');
     expect(html).toContain('task-files');
     expect(html).toContain('clipboardData');
