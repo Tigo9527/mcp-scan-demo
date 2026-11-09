@@ -67,7 +67,9 @@ function row(model: AgentModel | AgentTaskModel): Record<string, unknown> {
 }
 
 function safeMarkdown(source: string): string {
-  const html = marked.parse(source, { async: false }) as string;
+  // Agent 回报通常来自终端输出，单个换行也应在网页中保留；否则 Markdown
+  // 会按规范把它折叠为空格，导致 console 与对话页显示不一致。
+  const html = marked.parse(source, { async: false, breaks: true, gfm: true }) as string;
   return sanitizeHtml(html, {
     allowedTags: [...sanitizeHtml.defaults.allowedTags, 'h1', 'h2', 'h3'],
     allowedAttributes: { a: ['href', 'title', 'rel', 'target'] },

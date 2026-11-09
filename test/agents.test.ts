@@ -61,7 +61,7 @@ describe('Admin AI 对话和任务链接', () => {
     expect((await fetch(`${base}/api/tasks/not-valid`)).status).toBe(403);
     expect((await post(`${base}/api/tasks/not-valid/report`, { result: 'bad' })).status).toBe(403);
 
-    const report = '**完成** <script>alert(1)</script> [链接](javascript:alert(1))';
+    const report = '**完成** <script>alert(1)</script>\n第二行 [链接](javascript:alert(1))';
     expect((await post(task.report.url, { result: report })).status).toBe(200);
     const repeat = await post(task.report.url, { result: report });
     expect(((await repeat.json()) as any).idempotent).toBe(true);
@@ -71,6 +71,7 @@ describe('Admin AI 对话和任务链接', () => {
     expect(messages[0].id).toBe(taskId);
     expect(messages[0].status).toBe('reported');
     expect(messages[0].resultHtml).toContain('<strong>完成</strong>');
+    expect(messages[0].resultHtml).toContain('<br />');
     expect(messages[0].resultHtml).not.toContain('<script>');
     expect(messages[0].resultHtml).not.toContain('href="javascript:');
     expect((await fetch(`${base}/admin/api/agents/${agent.id}/tasks`)).status).toBe(403);
