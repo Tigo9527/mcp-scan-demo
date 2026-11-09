@@ -84,6 +84,7 @@ async function ensureAgentAutomationColumns(): Promise<void> {
   if (!columns.taskSince) {
     await sequelize.getQueryInterface().addColumn('agent_automation', 'taskSince', { type: DataTypes.STRING, allowNull: true });
   }
+  await sequelize.query('UPDATE agent_automation SET taskSince = (SELECT createdAt FROM agent_tasks WHERE agent_tasks.id = agent_automation.controlTaskId) WHERE taskSince IS NULL AND controlTaskId IS NOT NULL');
 }
 
 /**
