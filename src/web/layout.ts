@@ -67,6 +67,8 @@ nav a.active{opacity:1;font-weight:600;color:var(--acc)}
 .version-footer{margin-top:32px;padding-top:12px;border-top:1px solid var(--line);
   color:var(--muted);font-size:.85em}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.task-content{padding:8px;border:1px solid transparent;border-radius:8px;min-height:32px}
+.task-content.editing{border-color:var(--acc);background:#f8fbff;outline:2px solid rgba(9,105,218,.12)}
 .codeblock{border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:12px 0}
 .codeblock .cb-head{display:flex;align-items:center;gap:8px;background:var(--soft);
   padding:8px 12px;border-bottom:1px solid var(--line);font-size:.9em}

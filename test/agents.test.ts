@@ -51,6 +51,8 @@ describe('Admin AI 对话和任务链接', () => {
     const html = await page.text();
     expect(html).toContain('生成任务链接');
     expect(html).toContain('它应从这里获取任务，并按要求回报结果');
+    expect(html).toContain("content.contentEditable='true'");
+    expect(html).toContain('保存并重新生成链接');
     expect(html).toContain('copyGeneratedText(data.url)');
 
     const taskResponse = await post(`${base}/admin/api/agents/${agent.id}/tasks`, { content: '检查代码' }, admin);
