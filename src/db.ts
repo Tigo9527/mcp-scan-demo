@@ -209,6 +209,8 @@ export class RechargeSettingModel extends Model {}
 export class RechargeRecordModel extends Model {}
 export class GithubSettingModel extends Model {}
 export class StatsModel extends Model {}
+export class AgentModel extends Model {}
+export class AgentTaskModel extends Model {}
 
 function defineModels(seq: Sequelize): void {
   UserModel.init(
@@ -304,6 +306,32 @@ function defineModels(seq: Sequelize): void {
       recentIdx: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
     },
     { sequelize: seq, timestamps: false, modelName: 'stats', tableName: 'stats' },
+  );
+
+  AgentModel.init(
+    {
+      id: { type: DataTypes.STRING, primaryKey: true },
+      name: { type: DataTypes.STRING(100), allowNull: false },
+      description: { type: DataTypes.TEXT, allowNull: false, defaultValue: '' },
+      createdBy: { type: DataTypes.STRING, allowNull: false },
+      createdAt: { type: DataTypes.STRING, allowNull: false },
+    },
+    { sequelize: seq, timestamps: false, modelName: 'agent', tableName: 'agents' },
+  );
+
+  AgentTaskModel.init(
+    {
+      id: { type: DataTypes.STRING, primaryKey: true },
+      agentId: { type: DataTypes.STRING, allowNull: false },
+      content: { type: DataTypes.TEXT('long'), allowNull: false },
+      tokenExpiresAt: { type: DataTypes.STRING, allowNull: false },
+      status: { type: DataTypes.STRING, allowNull: false },
+      result: { type: DataTypes.TEXT('long'), allowNull: true },
+      reportedAt: { type: DataTypes.STRING, allowNull: true },
+      reportSource: { type: DataTypes.STRING, allowNull: true },
+      createdAt: { type: DataTypes.STRING, allowNull: false },
+    },
+    { sequelize: seq, timestamps: false, modelName: 'agentTask', tableName: 'agent_tasks', indexes: [{ fields: ['agentId', 'createdAt'] }] },
   );
 }
 

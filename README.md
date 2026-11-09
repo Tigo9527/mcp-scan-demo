@@ -137,6 +137,32 @@ npm start            # 启动后控制台会打印可访问 URL，含 /admin 与
 - 功能：用户列表（搜索 / 详情 / 签发新令牌 / 删除）、GitHub OAuth 参数在线设置、
   调用统计总览（总计卡片 + 工具 Top + 调用方 Top + 最近 14 天 + 最近调用）。
 
+### AI 对话与任务链接（Admin）
+
+在 `/admin/agents` 创建 Agent，进入对话页填写任务并生成链接。把链接交给 CLI AI，
+它会收到任务内容和回报接口说明。页面每 5 秒刷新一次回报，结果按 Markdown 显示。
+链接有效期 7 天，持有链接的人可读取该任务并回报；首次回报生效，相同内容重复提交幂等，
+不同内容返回 409。请只把链接发给受信任的执行方。轮换 `ADMIN_TOKEN` 后，已生成的链接失效。
+
+新增的 `agents`、`agent_tasks` 表由启动期 `initDb()` 的 Sequelize `sync()` 自动创建，
+无需手动迁移。Markdown 使用 `marked` 渲染并经 `sanitize-html` 清理。
+管理页面与 `/admin/api/agents`、`/admin/api/agents/:id/tasks` 需要 Admin Cookie 或
+`X-Admin-Token`；CLI 的 `/api/tasks/:token` 和 `/api/tasks/:token/report` 只接受链接中的限时凭证。
+
+本地用 curl 模拟一次完整流程（将 `ADMIN_TOKEN` 换成当前配置的值）：
+
+```bash
+BASE=http://localhost:3000
+ADMIN_TOKEN=dev-admin-change-me
+AGENT_ID=$(curl -sS -X POST "$BASE/admin/api/agents" -H "X-Admin-Token: $ADMIN_TOKEN" -H 'Content-Type: application/json' -d '{"name":"Review Bot"}' | node -pe 'JSON.parse(require("fs").readFileSync(0,"utf8")).id')
+TASK_URL=$(curl -sS -X POST "$BASE/admin/api/agents/$AGENT_ID/tasks" -H "X-Admin-Token: $ADMIN_TOKEN" -H 'Content-Type: application/json' -d '{"content":"检查这段代码"}' | node -pe 'JSON.parse(require("fs").readFileSync(0,"utf8")).url')
+curl -sS "$TASK_URL"
+curl -sS -X POST "$TASK_URL/report" -H 'Content-Type: application/json' -d '{"result":"## 已完成\n检查通过。"}'
+```
+
+本地验证：`npm run build && npm test`；`test/agents.test.ts` 覆盖 Admin 权限、
+任务读取与回报、过期凭证、跨站写入及 Markdown XSS 清理。
+
 ### 用户 Profile
 
 - 登录后访问 `/profile` 查看自己的资料、按工具/按天的个人统计，并复制 MCP 客户端配置（登录态由会话 Cookie 保持，无需拼 `?token=`）。

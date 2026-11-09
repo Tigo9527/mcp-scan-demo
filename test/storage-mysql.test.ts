@@ -136,24 +136,36 @@ describe('MySQL 存储选项解析（不连库）', () => {
   });
 
   it('STORAGE_DRIVER=mysql 在禁用模式下被 persistStatus 上报且不连库', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcp-mysql-options-'));
+    process.env.DATA_DIR = dir; // 不依赖开发机 data/ 下可能已有的 sqlite 后端标记
     process.env.STORAGE_DRIVER = 'mysql';
     process.env.MCP_DEMO_PERSIST = '0'; // 纯内存：不建立任何连接
-    await initDb({ enabled: false });
-    const ps = persistStatus();
-    expect(ps.enabled).toBe(false);
-    expect(ps.db).toBe('mysql');
-    expect(ps.storage).toContain('mysql://');
+    try {
+      await initDb({ enabled: false });
+      const ps = persistStatus();
+      expect(ps.enabled).toBe(false);
+      expect(ps.db).toBe('mysql');
+      expect(ps.storage).toContain('mysql://');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('MYSQL_URL 设置时 persistStatus 上报 redacted 的 host/db（不含口令）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcp-mysql-options-'));
+    process.env.DATA_DIR = dir;
     process.env.STORAGE_DRIVER = 'mysql';
     process.env.MYSQL_URL = 'mysql://u:p@db.example.com:3307/mydb';
     process.env.MCP_DEMO_PERSIST = '0'; // 不连库
-    await initDb({ enabled: false });
-    const ps = persistStatus();
-    expect(ps.db).toBe('mysql');
-    expect(ps.storage).toBe('mysql://db.example.com:3307/mydb');
-    expect(ps.storage).not.toContain('u:p'); // 口令不得出现在状态里
+    try {
+      await initDb({ enabled: false });
+      const ps = persistStatus();
+      expect(ps.db).toBe('mysql');
+      expect(ps.storage).toBe('mysql://db.example.com:3307/mydb');
+      expect(ps.storage).not.toContain('u:p'); // 口令不得出现在状态里
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('STORAGE_DRIVER 非法值时 initDb 抛错（fail-fast，避免误落 sqlite）', async () => {

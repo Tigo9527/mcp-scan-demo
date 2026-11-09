@@ -37,7 +37,7 @@ tbody tr:nth-child(even){background:#fcfcfd}
 .btn.alt{background:#24292f}
 .btn.danger{background:var(--err)}
 .btn.small{padding:5px 10px;font-size:.85em}
-input,select{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font:inherit;margin:4px 0}
+input,select,textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font:inherit;margin:4px 0}
 label{display:block;margin-top:12px;font-weight:600;font-size:.92em}
 nav{display:flex;gap:16px;align-items:center;border-bottom:1px solid var(--line);
   padding:12px 16px;margin:0 -16px 8px;flex-wrap:wrap}
@@ -132,11 +132,12 @@ document.addEventListener('click',function(e){
 </script>`;
 
 /** Admin 的二级页签。给了 `adminTab` 才会在页面顶部渲染 Admin 子导航。 */
-export type AdminTab = 'dashboard' | 'users' | 'github' | 'recharge-settings' | 'recharge';
+export type AdminTab = 'dashboard' | 'users' | 'agents' | 'github' | 'recharge-settings' | 'recharge';
 
 const ADMIN_TABS: Array<{ key: AdminTab; path: string; label: string }> = [
   { key: 'dashboard', path: '/admin', label: '仪表盘' },
   { key: 'users', path: '/admin/users', label: '用户管理' },
+  { key: 'agents', path: '/admin/agents', label: 'AI 对话' },
   { key: 'github', path: '/admin/settings', label: 'GitHub 设置' },
   { key: 'recharge-settings', path: '/admin/recharge-settings', label: '充值设置' },
   { key: 'recharge', path: '/admin/recharge', label: '充值记录' },

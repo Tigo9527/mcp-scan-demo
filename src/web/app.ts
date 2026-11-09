@@ -51,6 +51,7 @@ import { requireAuthForMcp, isBillingEnforced } from '../config.js';
 import * as billing from '../billing.js';
 import { knownChainNames } from '../recharge.js';
 import { createAdminRouter } from './admin.js';
+import { createAgentRouter } from './agents.js';
 import { createProfileRouter } from './profile.js';
 import { createRechargeRouter } from './recharge.js';
 import { createAuthorizeRouter, completeAuthorize, type AuthorizeParams, type AuthorizeTicket } from '../oauth/authorize.js';
@@ -881,6 +882,7 @@ export function createApp() {
 
   // Admin 管理端
   app.use(createAdminRouter());
+  app.use(createAgentRouter());
 
   // ---- 授权发现（MCP Authorization Discovery）----
   // 客户端收到 401 后会读 WWW-Authenticate 里的 resource_metadata，再按 RFC 8414 找授权服务器。

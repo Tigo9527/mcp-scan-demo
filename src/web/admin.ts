@@ -73,6 +73,13 @@ function blockedByDefaultToken(req: Request): boolean {
   return presented === undefined || safeEqual(presented, getAdminToken());
 }
 
+/** JSON 管理接口复用同一套 Admin Cookie / X-Admin-Token 校验。 */
+export function isAdminRequest(req: Request): boolean {
+  if (blockedByDefaultToken(req)) return false;
+  const token = resolveAdminToken(req);
+  return !!token && safeEqual(token, getAdminToken());
+}
+
 const failures = new Map<string, { count: number; firstAt: number }>();
 
 function clientKey(req: Request): string {
