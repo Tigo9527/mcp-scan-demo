@@ -264,7 +264,8 @@ async function loadTasks(){
     const editButton=document.createElement('button');editButton.type='button';editButton.className='btn small alt';editButton.textContent='编辑';
     const saveButton=document.createElement('button');saveButton.type='button';saveButton.className='btn small';saveButton.textContent='保存并重新生成链接';saveButton.hidden=true;
     const cancelButton=document.createElement('button');cancelButton.type='button';cancelButton.className='btn small alt';cancelButton.textContent='取消';cancelButton.hidden=true;
-    editActions.append(editButton,saveButton,cancelButton);c.append(editActions);
+    const linkToggle=document.createElement('button');linkToggle.type='button';linkToggle.className='btn small link-toggle';linkToggle.textContent='显示任务链接';
+    editActions.append(editButton,saveButton,cancelButton,linkToggle);c.append(editActions);
     let originalContent=t.content;
     editButton.addEventListener('click',()=>{originalContent=content.innerHTML;content.contentEditable='true';content.classList.add('editing');editButton.hidden=true;saveButton.hidden=false;cancelButton.hidden=t.result!==null;content.focus();});
     cancelButton.addEventListener('click',()=>{content.innerHTML=originalContent;content.contentEditable='false';content.classList.remove('editing');editButton.hidden=false;saveButton.hidden=true;cancelButton.hidden=true;});
@@ -274,6 +275,7 @@ async function loadTasks(){
     const title=document.createElement('span');title.className='cb-title';title.textContent='任务链接（请交给 CLI AI）';
     const copy=document.createElement('button');copy.type='button';copy.className='btn small copy';copy.textContent='复制';
     head.append(title,copy);const pre=document.createElement('pre');const code=document.createElement('code');code.textContent=shareText(t.url);pre.append(code);linkBox.append(head,pre);c.append(linkBox);
+    linkBox.hidden=true;linkToggle.addEventListener('click',()=>{linkBox.hidden=!linkBox.hidden;linkToggle.textContent=linkBox.hidden?'显示任务链接':'收起任务链接';});
     if(t.attachments?.length){const files=document.createElement('div');files.className='attachment-list';for(const a of t.attachments){const item=document.createElement('a');item.href=a.url;item.target='_blank';item.rel='noopener';item.textContent=a.name+' ('+Math.round(a.size/1024)+' KB)';files.append(item);}c.append(files);}
     if(t.result!==null){const reply=document.createElement('div');reply.className='card';
       const who=document.createElement('strong');who.textContent='Agent 回报 · '+formatLocalTime(t.reportedAt);

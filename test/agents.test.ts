@@ -55,6 +55,8 @@ describe('Admin AI 对话和任务链接', () => {
     expect(html).toContain("content.contentEditable='true'");
     expect(html).toContain('保存并重新生成链接');
     expect(html).toContain('copyGeneratedText(shareText(data.url))');
+    expect(html).toContain('显示任务链接');
+    expect(html).toContain('linkBox.hidden=true');
     expect(html).toContain('contenteditable="true"');
     expect(html).toContain('task-files');
     expect(html).toContain('clipboardData');
