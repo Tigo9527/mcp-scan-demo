@@ -156,7 +156,7 @@ async function copyGeneratedText(text){
   let ok=false;try{ok=document.execCommand('copy');}catch(_err){ok=false;}
   document.body.removeChild(ta);return ok;
 }
-function shareText(url){return '请阅读这个任务，并按要求回报结果。\n'+url;}
+function shareText(url){return '请阅读这个任务，并按要求回报结果。\\n'+url;}
 async function loadTasks(){
   const r=await fetch('/admin/api/agents/'+encodeURIComponent(agentId)+'/tasks');
   if(!r.ok){messages.textContent='加载失败';return;}
