@@ -78,6 +78,14 @@ function writeStoredDriver(dir: string, driver: StorageDriver): void {
   fs.writeFileSync(p, `${driver}\n`);
 }
 
+async function ensureAgentAutomationColumns(): Promise<void> {
+  if (!sequelize) return;
+  const columns = await sequelize.getQueryInterface().describeTable('agent_automation');
+  if (!columns.taskSince) {
+    await sequelize.getQueryInterface().addColumn('agent_automation', 'taskSince', { type: DataTypes.STRING, allowNull: true });
+  }
+}
+
 /**
  * 当前存储方言：默认 sqlite，可由 `STORAGE_DRIVER` 环境变量切换为 mysql。
  * 非法值直接抛错（fail-fast），避免「本想用 MySQL 却悄悄落到本地 sqlite」导致数据错写。
@@ -774,6 +782,7 @@ export async function initDb(opts: Overrides = {}): Promise<void> {
     defineModels(sequelize);
     await sequelize.authenticate();
     await sequelize.sync();
+    await ensureAgentAutomationColumns();
     writeStoredDriver(dataDir, 'mysql');
     // 受保护的遗留数据导入：仅当各表为空时，才从 DATA_DIR 下的旧 JSON 导入，
     // 避免「指向 MySQL 却以空库静默启动」。注意 sqlite→mysql 的库内迁移不在此自动完成。
@@ -796,6 +805,7 @@ export async function initDb(opts: Overrides = {}): Promise<void> {
   defineModels(sequelize);
   await sequelize.authenticate();
   await sequelize.sync();
+  await ensureAgentAutomationColumns();
   writeStoredDriver(dir, 'sqlite');
   // 写并发更好（热路径频繁落盘），且崩溃恢复更稳
   try {
