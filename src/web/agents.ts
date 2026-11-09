@@ -143,7 +143,6 @@ function conversationHtml(base: string, agent: Record<string, unknown>): string 
 <form id="create-task" class="card"><label for="task-content">任务内容</label>
 <textarea id="task-content" name="content" rows="6" maxlength="20000" required></textarea>
 <p><button class="btn" type="submit">生成任务链接</button></p><p id="task-status" role="status"></p>
-<p class="muted">生成后链接会自动复制。请把链接交给 CLI AI：它应从这里获取任务，并按要求回报结果。</p>
 </form>
 <script>
 const agentId=${JSON.stringify(String(agent.id))};
@@ -157,6 +156,7 @@ async function copyGeneratedText(text){
   let ok=false;try{ok=document.execCommand('copy');}catch(_err){ok=false;}
   document.body.removeChild(ta);return ok;
 }
+function shareText(url){return '请阅读这个任务，并按要求回报结果。\n'+url;}
 async function loadTasks(){
   const r=await fetch('/admin/api/agents/'+encodeURIComponent(agentId)+'/tasks');
   if(!r.ok){messages.textContent='加载失败';return;}
@@ -175,12 +175,12 @@ async function loadTasks(){
     let originalContent=t.content;
     editButton.addEventListener('click',()=>{originalContent=content.textContent||'';content.contentEditable='true';content.classList.add('editing');editButton.hidden=true;saveButton.hidden=false;cancelButton.hidden=false;content.focus();});
     cancelButton.addEventListener('click',()=>{content.textContent=originalContent;content.contentEditable='false';content.classList.remove('editing');editButton.hidden=false;saveButton.hidden=true;cancelButton.hidden=true;});
-    saveButton.addEventListener('click',async()=>{const next=(content.textContent||'').trim();if(!next){status.textContent='任务内容不能为空';return;}saveButton.disabled=true;const rr=await fetch('/admin/api/tasks/'+encodeURIComponent(t.id),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:next})});const dd=await rr.json();saveButton.disabled=false;if(!rr.ok){status.textContent=dd.error||'编辑失败';return;}status.textContent='任务已更新并重新生成链接。';await copyGeneratedText(dd.url);loadTasks();});
+    saveButton.addEventListener('click',async()=>{const next=(content.textContent||'').trim();if(!next){status.textContent='任务内容不能为空';return;}saveButton.disabled=true;const rr=await fetch('/admin/api/tasks/'+encodeURIComponent(t.id),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:next})});const dd=await rr.json();saveButton.disabled=false;if(!rr.ok){status.textContent=dd.error||'编辑失败';return;}status.textContent='任务已更新并重新生成链接。';await copyGeneratedText(shareText(dd.url));loadTasks();});
     const linkBox=document.createElement('div');linkBox.className='codeblock';
     const head=document.createElement('div');head.className='cb-head';
     const title=document.createElement('span');title.className='cb-title';title.textContent='任务链接（请交给 CLI AI）';
     const copy=document.createElement('button');copy.type='button';copy.className='btn small copy';copy.textContent='复制';
-    head.append(title,copy);const pre=document.createElement('pre');const code=document.createElement('code');code.textContent=t.url;pre.append(code);linkBox.append(head,pre);c.append(linkBox);
+    head.append(title,copy);const pre=document.createElement('pre');const code=document.createElement('code');code.textContent=shareText(t.url);pre.append(code);linkBox.append(head,pre);c.append(linkBox);
     if(t.result!==null){const reply=document.createElement('div');reply.className='card';
       const who=document.createElement('strong');who.textContent='Agent 回报 · '+t.reportedAt;
       const body=document.createElement('div');body.innerHTML=t.resultHtml;
@@ -194,7 +194,7 @@ document.getElementById('create-task').addEventListener('submit',async e=>{
   const data=await r.json();
   if(!r.ok){status.textContent=data.error||'生成失败';return;}
   e.target.reset();
-  const copied=await copyGeneratedText(data.url);
+  const copied=await copyGeneratedText(shareText(data.url));
   status.textContent=copied?'链接已生成并自动复制，有效期 7 天。链接持有人可读取任务并回报。':'链接已生成，但浏览器未能自动复制，请点击“复制”。';
   loadTasks();
 });
