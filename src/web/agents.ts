@@ -236,8 +236,14 @@ async function copyGeneratedText(text){
   document.body.removeChild(ta);return ok;
 }
 function shareText(url){return '请阅读这个任务，并按要求回报结果。\\n'+url;}
-const knownReported=new Set(), expandedTaskLinks=new Set(), audioContext=window.AudioContext?new AudioContext():null;
+const knownReported=new Set(), expandedTaskLinks=new Set(), expandedTaskReplies=new Set(), audioContext=window.AudioContext?new AudioContext():null;
 let taskListInitialized=false;
+function shouldDeferTaskRefresh(){
+  const active=document.activeElement;
+  if(active&&((active instanceof HTMLElement&&active.isContentEditable)||active.tagName==='INPUT'||active.tagName==='TEXTAREA'))return true;
+  const selection=window.getSelection();
+  return !!selection&&selection.rangeCount>0&&!selection.isCollapsed&&selection.toString().trim().length>0;
+}
 function formatLocalTime(value){const date=new Date(value);return Number.isNaN(date.getTime())?value:date.toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'});}
 function playReportSound(){
   if(!audioContext)return;
@@ -251,6 +257,7 @@ async function loadTasks(){
   const r=await fetch('/admin/api/agents/'+encodeURIComponent(agentId)+'/tasks');
   if(!r.ok){messages.textContent='加载失败';return;}
   const tasks=await r.json();
+  if(!taskListInitialized){const latest=tasks.slice().reverse().find(t=>t.result!==null);if(latest)expandedTaskReplies.add(latest.id);}
   const hasNewReport=taskListInitialized&&tasks.some(t=>t.result!==null&&!knownReported.has(t.id));
   tasks.forEach(t=>{if(t.result!==null)knownReported.add(t.id);});
   const taskIds=new Set(tasks.map(t=>t.id));
@@ -281,10 +288,10 @@ async function loadTasks(){
     linkBox.hidden=!expandedTaskLinks.has(t.id);linkToggle.textContent=linkBox.hidden?'显示任务链接':'收起任务链接';linkToggle.setAttribute('aria-expanded',String(!linkBox.hidden));
     linkToggle.addEventListener('click',()=>{linkBox.hidden=!linkBox.hidden;if(linkBox.hidden)expandedTaskLinks.delete(t.id);else expandedTaskLinks.add(t.id);linkToggle.textContent=linkBox.hidden?'显示任务链接':'收起任务链接';linkToggle.setAttribute('aria-expanded',String(!linkBox.hidden));});
     if(t.attachments?.length){const files=document.createElement('div');files.className='attachment-list';for(const a of t.attachments){const item=document.createElement('a');item.href=a.url;item.target='_blank';item.rel='noopener';item.textContent=a.name+' ('+Math.round(a.size/1024)+' KB)';files.append(item);}c.append(files);}
-    if(t.result!==null){const reply=document.createElement('details');reply.className='task-reply';
+    if(t.result!==null){const reply=document.createElement('details');reply.className='task-reply';reply.open=expandedTaskReplies.has(t.id);
       const who=document.createElement('summary');who.textContent='Agent 回报 · '+formatLocalTime(t.reportedAt);
       const body=document.createElement('div');body.className='task-reply-body';body.innerHTML=t.resultHtml;
-      reply.append(who,body);c.append(reply);
+      reply.addEventListener('toggle',()=>{if(reply.open)expandedTaskReplies.add(t.id);else expandedTaskReplies.delete(t.id);});reply.append(who,body);c.append(reply);
     }else{const pending=document.createElement('p');pending.className='muted';pending.textContent='等待回报 · 链接有效期至 '+formatLocalTime(t.tokenExpiresAt);c.append(pending);}
     messages.append(c);}
   taskListInitialized=true;if(hasNewReport)playReportSound();
@@ -299,7 +306,7 @@ document.getElementById('create-task').addEventListener('submit',async e=>{
   status.textContent=copied?'链接已生成并自动复制，有效期 7 天。链接持有人可读取任务并回报。':'链接已生成，但浏览器未能自动复制，请点击“复制”。';
   loadTasks();
 });
-loadTasks().catch(()=>{messages.textContent='加载失败';});setInterval(()=>loadTasks().catch(()=>{}),5000);
+loadTasks().catch(()=>{messages.textContent='加载失败';});setInterval(()=>{if(!shouldDeferTaskRefresh())loadTasks().catch(()=>{});},5000);
 </script>` });
 }
 
