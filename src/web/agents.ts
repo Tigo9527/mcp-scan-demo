@@ -135,9 +135,18 @@ function safeTaskContent(source: string): string {
   return sanitizeHtml(source, {
     allowedTags: ['p', 'br', 'strong', 'em', 'u', 's', 'ul', 'ol', 'li', 'blockquote', 'img'],
     allowedAttributes: { img: ['src', 'alt', 'title', 'width', 'height'] },
-    allowedSchemes: ['http', 'https', 'mailto', 'data'],
-    allowedSchemesByTag: { img: ['data'] },
+    allowedSchemes: ['http', 'https', 'mailto', 'data', 'attachment'],
+    allowedSchemesByTag: { img: ['data', 'attachment', 'http', 'https'] },
   });
+}
+function taskContentWithAttachmentUrls(source: string, taskId: string, token: string, req: Request): string {
+  let html = safeTaskContent(source);
+  const attachments = attachmentMeta(taskId);
+  html = html.replace(/src=["']attachment:\/\/(\d+)["']/gi, (_all, index) => {
+    const item = attachments[Number(index)];
+    return item ? `src="${linkBase(req)}/api/tasks/${token}/attachments/${encodeURIComponent(item.path)}"` : 'src=""';
+  });
+  return html;
 }
 
 async function taskFromToken(token: string): Promise<Record<string, unknown> | null> {
@@ -214,6 +223,7 @@ const messages=document.getElementById('messages'),status=document.getElementByI
 window.pendingTaskAttachments=[];
 function addTaskFile(file){return new Promise((resolve,reject)=>{if(file.size>5*1024*1024){reject(new Error('单个附件不能超过 5MB'));return;}const reader=new FileReader();reader.onload=()=>{window.pendingTaskAttachments.push({name:file.name,type:file.type||'application/octet-stream',dataUrl:reader.result});resolve(reader.result);};reader.onerror=()=>reject(new Error('读取附件失败'));reader.readAsDataURL(file);});}
 function refreshAttachmentList(){document.getElementById('task-attachments').textContent=window.pendingTaskAttachments.length?('已添加 '+window.pendingTaskAttachments.length+' 个附件（提交后保存 1 天）'):'';}
+function prepareTaskContent(){const clone=document.getElementById('task-content').cloneNode(true);const images=[...clone.querySelectorAll('img')];images.forEach(img=>{const index=window.pendingTaskAttachments.findIndex(a=>a.dataUrl===img.getAttribute('src'));if(index>=0)img.setAttribute('src','attachment://'+index);else img.removeAttribute('src');});return clone.innerHTML;}
 document.getElementById('task-files').addEventListener('change',async e=>{try{for(const file of e.target.files)await addTaskFile(file);refreshAttachmentList();}catch(err){status.textContent=err.message||'附件读取失败';}});
 document.getElementById('task-content').addEventListener('paste',async e=>{const items=[...(e.clipboardData?.items||[])];const images=items.filter(item=>item.kind==='file'&&item.type.startsWith('image/'));if(!images.length)return;e.preventDefault();for(const item of images){const file=item.getAsFile();if(!file)continue;try{const dataUrl=await addTaskFile(file);const editor=document.getElementById('task-content');const img=document.createElement('img');img.src=dataUrl;img.alt=file.name;img.style.maxWidth='240px';img.style.display='block';editor.append(img,document.createElement('br'));}catch(err){status.textContent=err.message||'图片读取失败';}}refreshAttachmentList();});
 async function copyGeneratedText(text){
@@ -274,7 +284,7 @@ async function loadTasks(){
   taskListInitialized=true;if(hasNewReport)playReportSound();
 }
 document.getElementById('create-task').addEventListener('submit',async e=>{
-  e.preventDefault();status.textContent='生成中…';const content=document.getElementById('task-content').innerHTML;const attachments=window.pendingTaskAttachments||[];
+  e.preventDefault();status.textContent='生成中…';const content=prepareTaskContent();const attachments=window.pendingTaskAttachments||[];
   const r=await fetch('/admin/api/agents/'+encodeURIComponent(agentId)+'/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content,attachments})});
   const data=await r.json();
   if(!r.ok){status.textContent=data.error||'生成失败';return;}
@@ -317,7 +327,7 @@ export function createAgentRouter(): Router {
   router.get('/admin/api/agents/:id/tasks', adminOnly, requireDb, wrap(async (req, res) => {
     if (!(await AgentModel.findByPk(req.params.id))) { res.status(404).json({ error: 'Agent 不存在' }); return; }
     const tasks = await AgentTaskModel.findAll({ where: { agentId: req.params.id }, order: [['createdAt', 'ASC']] });
-    res.json(tasks.map(t => { const d = row(t); const token = tokenFor(String(d.id), String(d.tokenExpiresAt)); return { ...d, contentHtml: safeTaskContent(String(d.content)), attachments: attachmentMeta(String(d.id)).map(({ name, type, size, path: stored }) => ({ name, type, size, url: `${linkBase(req)}/admin/api/tasks/${d.id}/attachments/${encodeURIComponent(stored)}` })), url: `${linkBase(req)}/api/tasks/${token}`, resultHtml: d.result === null ? null : safeMarkdown(String(d.result)) }; }));
+    res.json(tasks.map(t => { const d = row(t); const token = tokenFor(String(d.id), String(d.tokenExpiresAt)); return { ...d, contentHtml: taskContentWithAttachmentUrls(String(d.content), String(d.id), token, req), attachments: attachmentMeta(String(d.id)).map(({ name, type, size, path: stored }) => ({ name, type, size, url: `${linkBase(req)}/admin/api/tasks/${d.id}/attachments/${encodeURIComponent(stored)}` })), url: `${linkBase(req)}/api/tasks/${token}`, resultHtml: d.result === null ? null : safeMarkdown(String(d.result)) }; }));
   }));
   router.post('/admin/api/agents/:id/tasks', adminOnly, requireSameOrigin, requireDb, wrap(async (req, res) => {
     if (!(await AgentModel.findByPk(req.params.id))) { res.status(404).json({ error: 'Agent 不存在' }); return; }
@@ -358,7 +368,7 @@ export function createAgentRouter(): Router {
     if (!agent) { res.status(404).json({ error: 'Agent 不存在' }); return; }
     const url = `${linkBase(req)}/api/tasks/${req.params.token}/report`;
     const attachments = attachmentMeta(String(task.id)).map(({ name, type, size, path: stored }) => ({ name, type, size, url: `${linkBase(req)}/api/tasks/${req.params.token}/attachments/${encodeURIComponent(stored)}` }));
-    res.json({ taskId: task.id, agent: { id: agent.get('id'), name: agent.get('name'), description: agent.get('description') }, content: task.content, attachments, status: task.status, expiresAt: task.tokenExpiresAt, report: { url, method: 'POST', contentType: 'application/json', body: { result: 'Markdown 格式的任务结果' }, rule: '首次回报生效；相同内容重复提交幂等，不同内容返回 409。凭证已包含在 URL 中，7 天后失效。' } });
+    res.json({ taskId: task.id, agent: { id: agent.get('id'), name: agent.get('name'), description: agent.get('description') }, content: taskContentWithAttachmentUrls(String(task.content), String(task.id), req.params.token, req), attachments, status: task.status, expiresAt: task.tokenExpiresAt, report: { url, method: 'POST', contentType: 'application/json', body: { result: 'Markdown 格式的任务结果' }, rule: '首次回报生效；相同内容重复提交幂等，不同内容返回 409。凭证已包含在 URL 中，7 天后失效。' } });
   }));
   router.get('/api/tasks/:token/attachments/:file', requireDb, wrap(async (req, res) => {
     const task = await taskFromToken(req.params.token);
