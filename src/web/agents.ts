@@ -259,7 +259,7 @@ async function loadTasks(){
   if(!tasks.length){messages.className='empty';messages.textContent='暂无对话。输入任务后生成链接。';taskListInitialized=true;return;}
   messages.className='';
   for(const t of tasks){const c=document.createElement('section');c.className=t.result!==null?'card task-reported':'card';
-    const label=document.createElement('strong');label.textContent='你 · '+t.createdAt;
+    const label=document.createElement('strong');label.textContent='你 · '+formatLocalTime(t.createdAt);
     const content=document.createElement('div');content.className='task-content';content.contentEditable='false';if(t.contentHtml)content.innerHTML=t.contentHtml;else content.textContent=t.content;
     c.append(label,content);
     const editActions=document.createElement('div');editActions.className='row';
@@ -285,7 +285,7 @@ async function loadTasks(){
       const who=document.createElement('summary');who.textContent='Agent 回报 · '+formatLocalTime(t.reportedAt);
       const body=document.createElement('div');body.className='task-reply-body';body.innerHTML=t.resultHtml;
       reply.append(who,body);c.append(reply);
-    }else{const pending=document.createElement('p');pending.className='muted';pending.textContent='等待回报 · 链接有效期至 '+t.tokenExpiresAt;c.append(pending);}
+    }else{const pending=document.createElement('p');pending.className='muted';pending.textContent='等待回报 · 链接有效期至 '+formatLocalTime(t.tokenExpiresAt);c.append(pending);}
     messages.append(c);}
   taskListInitialized=true;if(hasNewReport)playReportSound();
 }

@@ -67,6 +67,8 @@ describe('Admin AI 对话和任务链接', () => {
     expect(html).toContain('clipboardData');
     expect(html).toContain('cancelButton.hidden=t.result!==null');
     expect(html).toContain('toLocaleString(undefined,{dateStyle:\'medium\',timeStyle:\'short\'})');
+    expect(html).toContain("label.textContent='你 · '+formatLocalTime(t.createdAt)");
+    expect(html).toContain('formatLocalTime(t.tokenExpiresAt)');
     expect(html).toContain('playReportSound()');
 
     const taskResponse = await post(`${base}/admin/api/agents/${agent.id}/tasks`, { content: '检查代码' }, admin);
