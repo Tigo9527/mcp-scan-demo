@@ -73,6 +73,11 @@ nav a.active{opacity:1;font-weight:600;color:var(--acc)}
 .task-reported{background:#fbfcfd;border-color:#edf0f2}
 .btn.link-toggle{background:var(--soft);color:var(--muted);border:1px solid var(--line)}
 .btn.link-toggle:hover{background:#eaeef2;opacity:1}
+.btn.link-open{background:transparent;color:var(--acc);border:1px solid var(--line)}
+.btn.link-open:hover{background:#f0f6ff;opacity:1}
+.task-reply{margin-top:12px;border:1px solid var(--line);border-radius:10px;background:#fbfcfd}
+.task-reply summary{padding:10px 12px;cursor:pointer;color:var(--muted);font-weight:600}
+.task-reply-body{padding:0 12px 12px}
 .rich-editor{min-height:130px;padding:10px;border:1px solid var(--line);border-radius:8px;white-space:pre-wrap}
 .rich-editor:empty:before{content:attr(data-placeholder);color:var(--muted)}
 .rich-editor img{max-width:240px;max-height:180px;display:block;margin:6px 0;border-radius:6px}

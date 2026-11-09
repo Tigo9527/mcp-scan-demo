@@ -58,6 +58,8 @@ describe('Admin AI 对话和任务链接', () => {
     expect(html).toContain('显示任务链接');
     expect(html).toContain('linkBox.hidden=!expandedTaskLinks.has(t.id)');
     expect(html).toContain('expandedTaskLinks.add(t.id)');
+    expect(html).toContain("openLink.textContent='查看任务'");
+    expect(html).toContain("reply.className='task-reply'");
     expect(html).toContain("c.className=t.result!==null?'card task-reported':'card'");
     expect(html).toContain('.btn.link-toggle{background:var(--soft);color:var(--muted);border:1px solid var(--line)}');
     expect(html).toContain('contenteditable="true"');

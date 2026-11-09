@@ -275,14 +275,15 @@ async function loadTasks(){
     const linkBox=document.createElement('div');linkBox.className='codeblock';
     const head=document.createElement('div');head.className='cb-head';
     const title=document.createElement('span');title.className='cb-title';title.textContent='任务链接（请交给 CLI AI）';
+    const openLink=document.createElement('a');openLink.className='btn small link-open';openLink.href=t.url;openLink.target='_blank';openLink.rel='noopener';openLink.textContent='查看任务';
     const copy=document.createElement('button');copy.type='button';copy.className='btn small copy';copy.textContent='复制';
-    head.append(title,copy);const pre=document.createElement('pre');const code=document.createElement('code');code.textContent=shareText(t.url);pre.append(code);linkBox.append(head,pre);c.append(linkBox);
+    head.append(title,openLink,copy);const pre=document.createElement('pre');const code=document.createElement('code');code.textContent=shareText(t.url);pre.append(code);linkBox.append(head,pre);c.append(linkBox);
     linkBox.hidden=!expandedTaskLinks.has(t.id);linkToggle.textContent=linkBox.hidden?'显示任务链接':'收起任务链接';linkToggle.setAttribute('aria-expanded',String(!linkBox.hidden));
     linkToggle.addEventListener('click',()=>{linkBox.hidden=!linkBox.hidden;if(linkBox.hidden)expandedTaskLinks.delete(t.id);else expandedTaskLinks.add(t.id);linkToggle.textContent=linkBox.hidden?'显示任务链接':'收起任务链接';linkToggle.setAttribute('aria-expanded',String(!linkBox.hidden));});
     if(t.attachments?.length){const files=document.createElement('div');files.className='attachment-list';for(const a of t.attachments){const item=document.createElement('a');item.href=a.url;item.target='_blank';item.rel='noopener';item.textContent=a.name+' ('+Math.round(a.size/1024)+' KB)';files.append(item);}c.append(files);}
-    if(t.result!==null){const reply=document.createElement('div');reply.className='card';
-      const who=document.createElement('strong');who.textContent='Agent 回报 · '+formatLocalTime(t.reportedAt);
-      const body=document.createElement('div');body.innerHTML=t.resultHtml;
+    if(t.result!==null){const reply=document.createElement('details');reply.className='task-reply';
+      const who=document.createElement('summary');who.textContent='Agent 回报 · '+formatLocalTime(t.reportedAt);
+      const body=document.createElement('div');body.className='task-reply-body';body.innerHTML=t.resultHtml;
       reply.append(who,body);c.append(reply);
     }else{const pending=document.createElement('p');pending.className='muted';pending.textContent='等待回报 · 链接有效期至 '+t.tokenExpiresAt;c.append(pending);}
     messages.append(c);}
