@@ -72,6 +72,7 @@ describe('Admin AI 对话和任务链接', () => {
     expect(html).toContain('toLocaleString(undefined,{dateStyle:\'medium\',timeStyle:\'short\'})');
     expect(html).toContain("label.textContent='你 · '+formatLocalTime(t.createdAt)");
     expect(html).toContain('formatLocalTime(t.tokenExpiresAt)');
+    expect(html).toContain('AI Agent 自动轮询地址');
     expect(html).toContain('playReportSound()');
 
     const taskResponse = await post(`${base}/admin/api/agents/${agent.id}/tasks`, { content: '检查代码' }, admin);
@@ -79,6 +80,12 @@ describe('Admin AI 对话和任务链接', () => {
     const { url, taskId }: any = await taskResponse.json();
     const taskList: any = await (await fetch(`${base}/admin/api/agents/${agent.id}/tasks`, { headers: admin })).json();
     expect(taskList[0].url).toBe(url);
+    const pollUrl = `${base}/api/agents/${agent.id}/tasks/poll`;
+    const pollAgents: any[] = (await (await fetch(`${base}/admin/api/agents`, { headers: admin })).json()) as any[];
+    const pollToken = pollAgents.find((a: any) => a.id === agent.id).pollToken;
+    expect((await fetch(pollUrl)).status).toBe(401);
+    const polled: any = await (await fetch(pollUrl, { headers: { 'X-Agent-Token': pollToken } })).json();
+    expect(polled.tasks.some((entry: any) => entry.taskId === taskId)).toBe(true);
     const editResponse = await fetch(`${base}/admin/api/tasks/${taskId}`, { method: 'PATCH', headers: { ...admin, 'Content-Type': 'application/json' }, body: JSON.stringify({ content: '检查更新后的代码' }) });
     expect(editResponse.status).toBe(200);
     const editedData: any = await editResponse.json();

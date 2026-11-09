@@ -42,6 +42,18 @@ function tokenFor(id: string, expiresAt: string): string {
   return `${payload}.${sig}`;
 }
 
+function pollTokenFor(agentId: string): string {
+  return createHmac('sha256', taskKey()).update(`poll.${agentId}`).digest('base64url');
+}
+
+function pollTokenMatches(req: Request, agentId: string): boolean {
+  const supplied = String(req.headers['x-agent-token'] || '');
+  if (!/^[A-Za-z0-9_-]{43}$/.test(supplied)) return false;
+  const expected = Buffer.from(pollTokenFor(agentId));
+  const actual = Buffer.from(supplied);
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
 function tokenParts(token: string): { id: string; expiresAt: string } | null {
   const match = /^([0-9a-f-]{36})\.(\d{13})\.([A-Za-z0-9_-]{43})$/.exec(token);
   if (!match) return null;
@@ -210,6 +222,7 @@ loadAgents().catch(()=>{list.textContent='加载失败';});
 function conversationHtml(base: string, agent: Record<string, unknown>): string {
   return page({ title: `与 ${String(agent.name)} 对话`, base, active: 'admin', adminTab: 'agents', body: `
 <p><a href="/admin/agents">← Agent 列表</a></p><h1>${esc(agent.name)}</h1><p>${esc(agent.description)}</p>
+<p class="muted">AI Agent 自动轮询地址：<code>${esc(`${base}/api/agents/${agent.id}/tasks/poll`)}</code><br>请求头使用 <code>X-Agent-Token: ${esc(pollTokenFor(String(agent.id)))}</code>，只会返回此 Agent 的待处理任务。</p>
 <div id="messages" class="empty">加载中…</div>
 <form id="create-task" class="card"><label for="task-content">任务内容</label>
 <div id="task-content" class="rich-editor" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="输入任务，支持粘贴图片或选择附件"></div>
@@ -312,7 +325,7 @@ loadTasks().catch(()=>{messages.textContent='加载失败';});setInterval(()=>{i
 
 export function createAgentRouter(): Router {
   const router = Router();
-  router.use(['/admin/agents', '/admin/api/agents', '/api/tasks'], (_req, res, next) => {
+  router.use(['/admin/agents', '/admin/api/agents', '/api/tasks', '/api/agents'], (_req, res, next) => {
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Cache-Control', 'no-store');
     next();
@@ -327,7 +340,7 @@ export function createAgentRouter(): Router {
 
   router.get('/admin/api/agents', adminOnly, requireDb, wrap(async (_req, res) => {
     const agents = await AgentModel.findAll({ order: [['createdAt', 'DESC']] });
-    res.json(agents.map(row));
+    res.json(agents.map(a => ({ ...row(a), pollUrl: `${deriveBase(_req)}/api/agents/${a.get('id')}/tasks/poll`, pollToken: pollTokenFor(String(a.get('id'))) })));
   }));
   router.post('/admin/api/agents', adminOnly, requireSameOrigin, requireDb, wrap(async (req, res) => {
     const name = cleanText(req.body?.name, 100);
@@ -341,6 +354,13 @@ export function createAgentRouter(): Router {
     if (!(await AgentModel.findByPk(req.params.id))) { res.status(404).json({ error: 'Agent 不存在' }); return; }
     const tasks = await AgentTaskModel.findAll({ where: { agentId: req.params.id }, order: [['createdAt', 'ASC']] });
     res.json(tasks.map(t => { const d = row(t); const token = tokenFor(String(d.id), String(d.tokenExpiresAt)); return { ...d, contentHtml: taskContentWithAttachmentUrls(String(d.content), String(d.id), token, req), attachments: attachmentMeta(String(d.id)).map(({ name, type, size, path: stored }) => ({ name, type, size, url: `${linkBase(req)}/admin/api/tasks/${d.id}/attachments/${encodeURIComponent(stored)}` })), url: `${linkBase(req)}/api/tasks/${token}`, resultHtml: d.result === null ? null : safeMarkdown(String(d.result)) }; }));
+  }));
+  router.get('/api/agents/:id/tasks/poll', requireDb, wrap(async (req, res) => {
+    if (!pollTokenMatches(req, req.params.id)) { res.status(401).json({ error: 'Agent 轮询凭证无效' }); return; }
+    const agent = await AgentModel.findByPk(req.params.id);
+    if (!agent) { res.status(404).json({ error: 'Agent 不存在' }); return; }
+    const tasks = await AgentTaskModel.findAll({ where: { agentId: req.params.id, status: 'pending' }, order: [['createdAt', 'ASC']] });
+    res.json({ agent: { id: agent.get('id'), name: agent.get('name') }, tasks: tasks.map(t => row(t)).filter(d => Date.parse(String(d.tokenExpiresAt)) > Date.now()).map(d => { const token = tokenFor(String(d.id), String(d.tokenExpiresAt)); return { taskId: d.id, url: `${linkBase(req)}/api/tasks/${token}`, createdAt: d.createdAt, expiresAt: d.tokenExpiresAt }; }) });
   }));
   router.post('/admin/api/agents/:id/tasks', adminOnly, requireSameOrigin, requireDb, wrap(async (req, res) => {
     if (!(await AgentModel.findByPk(req.params.id))) { res.status(404).json({ error: 'Agent 不存在' }); return; }

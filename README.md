@@ -144,6 +144,12 @@ npm start            # 启动后控制台会打印可访问 URL，含 /admin 与
 链接有效期 7 天，持有链接的人可读取该任务并回报；首次回报生效，相同内容重复提交幂等，
 不同内容返回 409。请只把链接发给受信任的执行方。轮换 `ADMIN_TOKEN` 后，已生成的链接失效。
 
+若要让 CLI AI 自动领取新任务，在该 Agent 的对话页复制“AI Agent 自动轮询地址”和
+`X-Agent-Token`，在执行机设置 `AGENT_POLL_URL`、`AGENT_POLL_TOKEN` 后运行
+`npm run agent:poll`。轮询器每 10 秒只查询该 Agent 的待处理任务，逐条调用 Codex 读取任务、
+执行并向任务提供的回报地址提交结果。轮询凭证仅允许访问所属 Agent 的待处理任务索引，
+不要转发给其他 Agent；公网必须使用 HTTPS。重启轮询器后仍可从未回报任务继续处理。
+
 新增的 `agents`、`agent_tasks` 表由启动期 `initDb()` 的 Sequelize `sync()` 自动创建，
 无需手动迁移。Markdown 使用 `marked` 渲染并经 `sanitize-html` 清理。
 管理页面与 `/admin/api/agents`、`/admin/api/agents/:id/tasks` 需要 Admin Cookie 或
