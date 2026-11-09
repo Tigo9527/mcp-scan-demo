@@ -653,7 +653,8 @@ ${card(`<b>访问令牌（Bearer）：</b><br><code>${esc(token)}</code>`)}
 
 export function createApp() {
   const app = express();
-  app.use(express.json());
+  // 任务附件以 base64 JSON 上传；上限由任务路由再按单文件/总数校验。
+  app.use(express.json({ limit: '20mb' }));
 
   // 表单解析只挂在 admin 与 oauth 下（/mcp 用的是 application/json），缩小影响面
   app.use('/admin', express.urlencoded({ extended: false, limit: '32kb' }));

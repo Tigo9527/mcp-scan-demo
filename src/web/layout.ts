@@ -69,6 +69,10 @@ nav a.active{opacity:1;font-weight:600;color:var(--acc)}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .task-content{padding:8px;border:1px solid transparent;border-radius:8px;min-height:32px}
 .task-content.editing{border-color:var(--acc);background:#f8fbff;outline:2px solid rgba(9,105,218,.12)}
+.rich-editor{min-height:130px;padding:10px;border:1px solid var(--line);border-radius:8px;white-space:pre-wrap}
+.rich-editor:empty:before{content:attr(data-placeholder);color:var(--muted)}
+.rich-editor img{max-width:240px;max-height:180px;display:block;margin:6px 0;border-radius:6px}
+.attachment-list{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;font-size:.9em}
 .codeblock{border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:12px 0}
 .codeblock .cb-head{display:flex;align-items:center;gap:8px;background:var(--soft);
   padding:8px 12px;border-bottom:1px solid var(--line);font-size:.9em}

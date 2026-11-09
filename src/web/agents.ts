@@ -1,6 +1,8 @@
 /** Admin AI 对话与限时任务链接。任务数据直接写入现有 Sequelize 数据库。 */
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import { createHmac, hkdfSync, randomUUID, timingSafeEqual } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { marked } from 'marked';
 import sanitizeHtml from 'sanitize-html';
 import { AgentModel, AgentTaskModel, dbEnabled } from '../db.js';
@@ -11,6 +13,10 @@ import { esc, page } from './layout.js';
 
 const TASK_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_REPORT = 50_000;
+const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+const MAX_ATTACHMENTS = 5;
+const ATTACHMENT_TTL_MS = 24 * 60 * 60 * 1000;
+const ATTACHMENT_DIR = path.resolve(config.dataDir, 'agent-attachments');
 const reportAttempts = new Map<string, { count: number; until: number }>();
 
 function taskKey(): Buffer {
@@ -54,6 +60,54 @@ function cleanText(value: unknown, limit: number): string | null {
   return text && text.length <= limit ? text : null;
 }
 
+type AttachmentMeta = { name: string; type: string; size: number; path: string; createdAt: string };
+function cleanAttachmentName(name: unknown): string { return String(name || 'attachment').replace(/[^\w.()\-\u4e00-\u9fff ]/g, '_').slice(0, 120) || 'attachment'; }
+function cleanupAttachments(): void {
+  try {
+    if (!fs.existsSync(ATTACHMENT_DIR)) return;
+    const cutoff = Date.now() - ATTACHMENT_TTL_MS;
+    for (const name of fs.readdirSync(ATTACHMENT_DIR)) {
+      const file = path.join(ATTACHMENT_DIR, name);
+      try { if (fs.statSync(file).mtimeMs < cutoff) fs.rmSync(file); } catch { /* 单个过期文件失败不影响其它任务 */ }
+    }
+  } catch { /* 磁盘清理失败不影响任务接口 */ }
+}
+function saveAttachments(taskId: string, raw: unknown): AttachmentMeta[] {
+  if (!Array.isArray(raw) || raw.length === 0) return [];
+  if (raw.length > MAX_ATTACHMENTS) throw new Error(`附件最多 ${MAX_ATTACHMENTS} 个`);
+  fs.mkdirSync(ATTACHMENT_DIR, { recursive: true });
+  const saved: AttachmentMeta[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') throw new Error('附件格式无效');
+    const input = item as { name?: unknown; type?: unknown; dataUrl?: unknown };
+    const match = typeof input.dataUrl === 'string' ? /^data:([^;,]+);base64,([A-Za-z0-9+/=]+)$/.exec(input.dataUrl) : null;
+    if (!match) throw new Error('附件必须是 base64 data URL');
+    const buffer = Buffer.from(match[2], 'base64');
+    if (!buffer.length || buffer.length > MAX_ATTACHMENT_BYTES) throw new Error('单个附件不能超过 5MB');
+    const stored = `${taskId}-${randomUUID()}.bin`;
+    fs.writeFileSync(path.join(ATTACHMENT_DIR, stored), buffer, { flag: 'wx' });
+    saved.push({ name: cleanAttachmentName(input.name), type: match[1], size: buffer.length, path: stored, createdAt: new Date().toISOString() });
+  }
+  return saved;
+}
+function attachmentMeta(taskId: string): AttachmentMeta[] {
+  const file = path.join(ATTACHMENT_DIR, `${taskId}.json`);
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')) as AttachmentMeta[]; } catch { return []; }
+}
+function writeAttachmentMeta(taskId: string, raw: unknown): AttachmentMeta[] {
+  const list = saveAttachments(taskId, raw);
+  fs.mkdirSync(ATTACHMENT_DIR, { recursive: true });
+  fs.writeFileSync(path.join(ATTACHMENT_DIR, `${taskId}.json`), JSON.stringify(list));
+  return list;
+}
+function deleteAttachmentMeta(taskId: string): void {
+  for (const a of attachmentMeta(taskId)) { try { fs.rmSync(path.join(ATTACHMENT_DIR, a.path), { force: true }); } catch {} }
+  try { fs.rmSync(path.join(ATTACHMENT_DIR, `${taskId}.json`), { force: true }); } catch {}
+}
+cleanupAttachments();
+const attachmentCleanupTimer = setInterval(cleanupAttachments, 60 * 60 * 1000);
+attachmentCleanupTimer.unref();
+
 function linkBase(req: Request): string {
   // 公网链接以部署配置为准，避免 Host / X-Forwarded-Host 污染任务与回报地址。
   const configured = config.publicBaseUrl.trim();
@@ -75,6 +129,14 @@ function safeMarkdown(source: string): string {
     allowedAttributes: { a: ['href', 'title', 'rel', 'target'] },
     allowedSchemes: ['http', 'https', 'mailto'],
     transformTags: { a: (_tag, attrs) => ({ tagName: 'a', attribs: { ...attrs, rel: 'noopener noreferrer nofollow', target: '_blank' } }) },
+  });
+}
+function safeTaskContent(source: string): string {
+  return sanitizeHtml(source, {
+    allowedTags: ['p', 'br', 'strong', 'em', 'u', 's', 'ul', 'ol', 'li', 'blockquote', 'img'],
+    allowedAttributes: { img: ['src', 'alt', 'title', 'width', 'height'] },
+    allowedSchemes: ['data'],
+    allowedSchemesByTag: { img: ['data'] },
   });
 }
 
@@ -141,12 +203,19 @@ function conversationHtml(base: string, agent: Record<string, unknown>): string 
 <p><a href="/admin/agents">← Agent 列表</a></p><h1>${esc(agent.name)}</h1><p>${esc(agent.description)}</p>
 <div id="messages" class="empty">加载中…</div>
 <form id="create-task" class="card"><label for="task-content">任务内容</label>
-<textarea id="task-content" name="content" rows="6" maxlength="20000" required></textarea>
+<div id="task-content" class="rich-editor" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="输入任务，支持粘贴图片或选择附件"></div>
+<label for="task-files">附件（图片或文件，单个不超过 5MB，保存 1 天）</label><input id="task-files" type="file" multiple>
+<div id="task-attachments" class="muted"></div>
 <p><button class="btn" type="submit">生成任务链接</button></p><p id="task-status" role="status"></p>
 </form>
 <script>
 const agentId=${JSON.stringify(String(agent.id))};
 const messages=document.getElementById('messages'),status=document.getElementById('task-status');
+window.pendingTaskAttachments=[];
+function addTaskFile(file){return new Promise((resolve,reject)=>{if(file.size>5*1024*1024){reject(new Error('单个附件不能超过 5MB'));return;}const reader=new FileReader();reader.onload=()=>{window.pendingTaskAttachments.push({name:file.name,type:file.type||'application/octet-stream',dataUrl:reader.result});resolve(reader.result);};reader.onerror=()=>reject(new Error('读取附件失败'));reader.readAsDataURL(file);});}
+function refreshAttachmentList(){document.getElementById('task-attachments').textContent=window.pendingTaskAttachments.length?('已添加 '+window.pendingTaskAttachments.length+' 个附件（提交后保存 1 天）'):'';}
+document.getElementById('task-files').addEventListener('change',async e=>{try{for(const file of e.target.files)await addTaskFile(file);refreshAttachmentList();}catch(err){status.textContent=err.message||'附件读取失败';}});
+document.getElementById('task-content').addEventListener('paste',async e=>{const items=[...(e.clipboardData?.items||[])];const images=items.filter(item=>item.kind==='file'&&item.type.startsWith('image/'));if(!images.length)return;e.preventDefault();for(const item of images){const file=item.getAsFile();if(!file)continue;try{const dataUrl=await addTaskFile(file);const img=document.createElement('img');img.src=dataUrl;img.alt=file.name;img.style.maxWidth='240px';img.style.display='block';document.getElementById('task-content').append(img);}catch(err){status.textContent=err.message||'图片读取失败';}}refreshAttachmentList();});
 async function copyGeneratedText(text){
   if(navigator.clipboard&&navigator.clipboard.writeText){
     try{await navigator.clipboard.writeText(text);return true;}catch(_err){}
@@ -179,7 +248,7 @@ async function loadTasks(){
   messages.className='';
   for(const t of tasks){const c=document.createElement('section');c.className='card';
     const label=document.createElement('strong');label.textContent='你 · '+t.createdAt;
-    const content=document.createElement('p');content.className='task-content';content.style.whiteSpace='pre-wrap';content.contentEditable='false';content.textContent=t.content;
+    const content=document.createElement('div');content.className='task-content';content.contentEditable='false';if(t.contentHtml)content.innerHTML=t.contentHtml;else content.textContent=t.content;
     c.append(label,content);
     const editActions=document.createElement('div');editActions.className='row';
     const editButton=document.createElement('button');editButton.type='button';editButton.className='btn small alt';editButton.textContent='编辑';
@@ -187,14 +256,15 @@ async function loadTasks(){
     const cancelButton=document.createElement('button');cancelButton.type='button';cancelButton.className='btn small alt';cancelButton.textContent='取消';cancelButton.hidden=true;
     editActions.append(editButton,saveButton,cancelButton);c.append(editActions);
     let originalContent=t.content;
-    editButton.addEventListener('click',()=>{originalContent=content.textContent||'';content.contentEditable='true';content.classList.add('editing');editButton.hidden=true;saveButton.hidden=false;cancelButton.hidden=false;content.focus();});
-    cancelButton.addEventListener('click',()=>{content.textContent=originalContent;content.contentEditable='false';content.classList.remove('editing');editButton.hidden=false;saveButton.hidden=true;cancelButton.hidden=true;});
-    saveButton.addEventListener('click',async()=>{const next=(content.textContent||'').trim();if(!next){status.textContent='任务内容不能为空';return;}saveButton.disabled=true;const rr=await fetch('/admin/api/tasks/'+encodeURIComponent(t.id),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:next})});const dd=await rr.json();saveButton.disabled=false;if(!rr.ok){status.textContent=dd.error||'编辑失败';return;}status.textContent='任务已更新并重新生成链接。';await copyGeneratedText(shareText(dd.url));loadTasks();});
+    editButton.addEventListener('click',()=>{originalContent=content.innerHTML;content.contentEditable='true';content.classList.add('editing');editButton.hidden=true;saveButton.hidden=false;cancelButton.hidden=t.result!==null;content.focus();});
+    cancelButton.addEventListener('click',()=>{content.innerHTML=originalContent;content.contentEditable='false';content.classList.remove('editing');editButton.hidden=false;saveButton.hidden=true;cancelButton.hidden=true;});
+    saveButton.addEventListener('click',async()=>{const next=(content.innerHTML||'').trim();if(!next){status.textContent='任务内容不能为空';return;}saveButton.disabled=true;const rr=await fetch('/admin/api/tasks/'+encodeURIComponent(t.id),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:next})});const dd=await rr.json();saveButton.disabled=false;if(!rr.ok){status.textContent=dd.error||'编辑失败';return;}status.textContent='任务已更新并重新生成链接。';await copyGeneratedText(shareText(dd.url));loadTasks();});
     const linkBox=document.createElement('div');linkBox.className='codeblock';
     const head=document.createElement('div');head.className='cb-head';
     const title=document.createElement('span');title.className='cb-title';title.textContent='任务链接（请交给 CLI AI）';
     const copy=document.createElement('button');copy.type='button';copy.className='btn small copy';copy.textContent='复制';
     head.append(title,copy);const pre=document.createElement('pre');const code=document.createElement('code');code.textContent=shareText(t.url);pre.append(code);linkBox.append(head,pre);c.append(linkBox);
+    if(t.attachments?.length){const files=document.createElement('div');files.className='attachment-list';for(const a of t.attachments){const item=document.createElement('a');item.href=a.url;item.target='_blank';item.rel='noopener';item.textContent=a.name+' ('+Math.round(a.size/1024)+' KB)';files.append(item);}c.append(files);}
     if(t.result!==null){const reply=document.createElement('div');reply.className='card';
       const who=document.createElement('strong');who.textContent='Agent 回报 · '+formatLocalTime(t.reportedAt);
       const body=document.createElement('div');body.innerHTML=t.resultHtml;
@@ -204,11 +274,11 @@ async function loadTasks(){
   taskListInitialized=true;if(hasNewReport)playReportSound();
 }
 document.getElementById('create-task').addEventListener('submit',async e=>{
-  e.preventDefault();status.textContent='生成中…';const content=new FormData(e.target).get('content');
-  const r=await fetch('/admin/api/agents/'+encodeURIComponent(agentId)+'/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content})});
+  e.preventDefault();status.textContent='生成中…';const content=document.getElementById('task-content').innerHTML;const attachments=window.pendingTaskAttachments||[];
+  const r=await fetch('/admin/api/agents/'+encodeURIComponent(agentId)+'/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content,attachments})});
   const data=await r.json();
   if(!r.ok){status.textContent=data.error||'生成失败';return;}
-  e.target.reset();
+  document.getElementById('task-content').innerHTML='';document.getElementById('task-files').value='';window.pendingTaskAttachments=[];refreshAttachmentList();
   const copied=await copyGeneratedText(shareText(data.url));
   status.textContent=copied?'链接已生成并自动复制，有效期 7 天。链接持有人可读取任务并回报。':'链接已生成，但浏览器未能自动复制，请点击“复制”。';
   loadTasks();
@@ -247,16 +317,19 @@ export function createAgentRouter(): Router {
   router.get('/admin/api/agents/:id/tasks', adminOnly, requireDb, wrap(async (req, res) => {
     if (!(await AgentModel.findByPk(req.params.id))) { res.status(404).json({ error: 'Agent 不存在' }); return; }
     const tasks = await AgentTaskModel.findAll({ where: { agentId: req.params.id }, order: [['createdAt', 'ASC']] });
-    res.json(tasks.map(t => { const d = row(t); const token = tokenFor(String(d.id), String(d.tokenExpiresAt)); return { ...d, url: `${linkBase(req)}/api/tasks/${token}`, resultHtml: d.result === null ? null : safeMarkdown(String(d.result)) }; }));
+    res.json(tasks.map(t => { const d = row(t); const token = tokenFor(String(d.id), String(d.tokenExpiresAt)); return { ...d, contentHtml: safeTaskContent(String(d.content)), attachments: attachmentMeta(String(d.id)).map(({ name, type, size, path: stored }) => ({ name, type, size, url: `${linkBase(req)}/admin/api/tasks/${d.id}/attachments/${encodeURIComponent(stored)}` })), url: `${linkBase(req)}/api/tasks/${token}`, resultHtml: d.result === null ? null : safeMarkdown(String(d.result)) }; }));
   }));
   router.post('/admin/api/agents/:id/tasks', adminOnly, requireSameOrigin, requireDb, wrap(async (req, res) => {
     if (!(await AgentModel.findByPk(req.params.id))) { res.status(404).json({ error: 'Agent 不存在' }); return; }
     const content = cleanText(req.body?.content, 20_000);
     if (!content) { res.status(400).json({ error: '任务内容必填且不超过 20000 字' }); return; }
+    cleanupAttachments();
     const id = randomUUID(), tokenExpiresAt = new Date(Date.now() + TASK_TTL_MS).toISOString();
-    await AgentTaskModel.create({ id, agentId: req.params.id, content, tokenExpiresAt, status: 'pending', result: null, reportedAt: null, reportSource: null, createdAt: new Date().toISOString() });
+    let attachments: AttachmentMeta[];
+    try { attachments = writeAttachmentMeta(id, req.body?.attachments); } catch (err) { res.status(400).json({ error: err instanceof Error ? err.message : '附件无效' }); return; }
+    await AgentTaskModel.create({ id, agentId: req.params.id, content: safeTaskContent(content), tokenExpiresAt, status: 'pending', result: null, reportedAt: null, reportSource: null, createdAt: new Date().toISOString() });
     const token = tokenFor(id, tokenExpiresAt);
-    res.status(201).json({ taskId: id, url: `${linkBase(req)}/api/tasks/${token}`, expiresAt: tokenExpiresAt });
+    res.status(201).json({ taskId: id, url: `${linkBase(req)}/api/tasks/${token}`, expiresAt: tokenExpiresAt, attachments: attachments.map(({ name, type, size }) => ({ name, type, size })) });
   }));
 
   router.patch('/admin/api/tasks/:id', adminOnly, requireSameOrigin, requireDb, wrap(async (req, res) => {
@@ -265,10 +338,17 @@ export function createAgentRouter(): Router {
     const task = await AgentTaskModel.findByPk(req.params.id);
     if (!task) { res.status(404).json({ error: '任务不存在' }); return; }
     const tokenExpiresAt = new Date(Date.now() + TASK_TTL_MS).toISOString();
-    await task.update({ content, tokenExpiresAt, status: 'pending', result: null, reportedAt: null, reportSource: null });
+    deleteAttachmentMeta(req.params.id);
+    await task.update({ content: safeTaskContent(content), tokenExpiresAt, status: 'pending', result: null, reportedAt: null, reportSource: null });
     const url = `${linkBase(req)}/api/tasks/${tokenFor(req.params.id, tokenExpiresAt)}`;
     res.json({ taskId: req.params.id, url, expiresAt: tokenExpiresAt });
   }));
+
+  router.get('/admin/api/tasks/:id/attachments/:file', adminOnly, requireDb, (req, res) => {
+    const meta = attachmentMeta(req.params.id).find(a => a.path === req.params.file);
+    if (!meta) { res.status(404).json({ error: '附件不存在或已过期' }); return; }
+    res.type(meta.type).sendFile(path.join(ATTACHMENT_DIR, meta.path));
+  });
 
   router.get('/api/tasks/:token', requireDb, wrap(async (req, res) => {
     const task = await taskFromToken(req.params.token);
@@ -276,7 +356,15 @@ export function createAgentRouter(): Router {
     const agent = await AgentModel.findByPk(String(task.agentId));
     if (!agent) { res.status(404).json({ error: 'Agent 不存在' }); return; }
     const url = `${linkBase(req)}/api/tasks/${req.params.token}/report`;
-    res.json({ taskId: task.id, agent: { id: agent.get('id'), name: agent.get('name'), description: agent.get('description') }, content: task.content, status: task.status, expiresAt: task.tokenExpiresAt, report: { url, method: 'POST', contentType: 'application/json', body: { result: 'Markdown 格式的任务结果' }, rule: '首次回报生效；相同内容重复提交幂等，不同内容返回 409。凭证已包含在 URL 中，7 天后失效。' } });
+    const attachments = attachmentMeta(String(task.id)).map(({ name, type, size, path: stored }) => ({ name, type, size, url: `${linkBase(req)}/api/tasks/${req.params.token}/attachments/${encodeURIComponent(stored)}` }));
+    res.json({ taskId: task.id, agent: { id: agent.get('id'), name: agent.get('name'), description: agent.get('description') }, content: task.content, attachments, status: task.status, expiresAt: task.tokenExpiresAt, report: { url, method: 'POST', contentType: 'application/json', body: { result: 'Markdown 格式的任务结果' }, rule: '首次回报生效；相同内容重复提交幂等，不同内容返回 409。凭证已包含在 URL 中，7 天后失效。' } });
+  }));
+  router.get('/api/tasks/:token/attachments/:file', requireDb, wrap(async (req, res) => {
+    const task = await taskFromToken(req.params.token);
+    if (!task) { res.status(403).json({ error: '任务凭证无效或已过期' }); return; }
+    const meta = attachmentMeta(String(task.id)).find(a => a.path === req.params.file);
+    if (!meta) { res.status(404).json({ error: '附件不存在或已过期' }); return; }
+    res.type(meta.type).sendFile(path.join(ATTACHMENT_DIR, meta.path));
   }));
   router.post('/api/tasks/:token/report', requireSameOrigin, requireDb, wrap(async (req, res) => {
     if (rateLimited(req)) { res.status(429).json({ error: '回报过于频繁' }); return; }
