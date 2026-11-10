@@ -69,6 +69,8 @@ nav a.active{opacity:1;font-weight:600;color:var(--acc)}
   color:var(--muted);font-size:.85em}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .task-content{padding:8px;border:1px solid transparent;border-radius:8px;min-height:32px}
+.task-anchor{margin-left:6px;color:var(--muted);font-weight:400;opacity:.65}
+.task-anchor:hover{opacity:1;text-decoration:none}
 .task-content.editing{border-color:var(--acc);background:#f8fbff;outline:2px solid rgba(9,105,218,.12)}
 .task-reported{background:#fbfcfd;border-color:#edf0f2}
 .btn.link-toggle{background:var(--soft);color:var(--muted);border:1px solid var(--line)}

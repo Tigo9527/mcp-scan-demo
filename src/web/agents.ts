@@ -261,7 +261,7 @@ async function copyGeneratedText(text){
 }
 function shareText(url){return '请阅读这个任务，并按要求回报结果。\\n'+url;}
 const knownReported=new Set(), expandedTaskLinks=new Set(), expandedTaskReplies=new Set(), audioContext=window.AudioContext?new AudioContext():null;
-let taskListInitialized=false;
+let taskListInitialized=false, initialTaskScrollPending=true;
 function shouldDeferTaskRefresh(){
   const active=document.activeElement;
   if(active&&((active instanceof HTMLElement&&active.isContentEditable)||active.tagName==='INPUT'||active.tagName==='TEXTAREA'))return true;
@@ -292,8 +292,8 @@ async function loadTasks(){
   messages.replaceChildren();
   if(!visibleTasks.length){messages.className='empty';messages.textContent=onlyUnreported?'暂无未回报任务':'暂无对话。输入任务后生成链接。';taskListInitialized=true;return;}
   messages.className='';
-  for(const t of visibleTasks){const c=document.createElement('section');c.className=t.result!==null?'card task-reported':'card';
-    const label=document.createElement('strong');label.textContent='你 · '+formatLocalTime(t.createdAt);
+  for(const t of visibleTasks){const c=document.createElement('section');c.className=t.result!==null?'card task-reported':'card';c.id='task-'+t.id;
+    const label=document.createElement('strong');label.textContent='你 · '+formatLocalTime(t.createdAt);const anchor=document.createElement('a');anchor.className='task-anchor';anchor.href='#'+c.id;anchor.title='复制任务锚点';anchor.setAttribute('aria-label','任务锚点');anchor.textContent='¶';label.append(' ',anchor);
     const menu=document.createElement('details');menu.className='task-menu';const menuButton=document.createElement('summary');menuButton.title='任务菜单';menuButton.textContent='⋯';const deleteButton=document.createElement('button');deleteButton.type='button';deleteButton.className='text-link danger-link';deleteButton.textContent='删除';deleteButton.addEventListener('click',async()=>{if(!window.confirm('确定删除这个任务？删除后无法恢复。'))return;deleteButton.disabled=true;const rr=await fetch('/admin/api/tasks/'+encodeURIComponent(t.id),{method:'DELETE'});if(!rr.ok){deleteButton.disabled=false;status.textContent='删除失败';return;}menu.open=false;status.textContent='任务已删除';loadTasks();});menu.append(menuButton,deleteButton);c.append(menu);
     const content=document.createElement('div');content.className='task-content';content.contentEditable='false';if(t.contentHtml)content.innerHTML=t.contentHtml;else content.textContent=t.content;
     c.append(label,content);
@@ -323,7 +323,9 @@ async function loadTasks(){
       reply.addEventListener('toggle',()=>{if(reply.open)expandedTaskReplies.add(t.id);else expandedTaskReplies.delete(t.id);});reply.append(who,body);c.append(reply);
     }else{const pending=document.createElement('p');pending.className='muted';pending.textContent='等待回报 · 链接有效期至 '+formatLocalTime(t.tokenExpiresAt);c.append(pending);}
     messages.append(c);}
-  taskListInitialized=true;if(hasNewReport)playReportSound();
+  taskListInitialized=true;
+  if(initialTaskScrollPending){initialTaskScrollPending=false;requestAnimationFrame(()=>{const target=messages.lastElementChild;if(target)target.scrollIntoView({behavior:'auto',block:'start'});});}
+  if(hasNewReport)playReportSound();
 }
 document.getElementById('create-task').addEventListener('submit',async e=>{
   e.preventDefault();status.textContent='生成中…';const content=prepareTaskContent();const attachments=window.pendingTaskAttachments||[];

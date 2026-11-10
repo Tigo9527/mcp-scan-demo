@@ -82,6 +82,10 @@ describe('Admin AI 对话和任务链接', () => {
     expect(html).toContain('onlyUnreported');
     expect(html).toContain('class="agent-conversation"');
     expect(html).toContain('playReportSound()');
+    expect(html).toContain("c.id='task-'+t.id");
+    expect(html).toContain("anchor.href='#'+c.id");
+    expect(html).toContain('initialTaskScrollPending');
+    expect(html).toContain('scrollIntoView({behavior:\'auto\',block:\'start\'})');
 
     const taskResponse = await post(`${base}/admin/api/agents/${agent.id}/tasks`, { content: '检查代码' }, admin);
     expect(taskResponse.status).toBe(201);
