@@ -16,6 +16,7 @@ import { isGitHubConfigured } from '../auth/github.js';
 import { bar, badge, card, esc, fmtTime, notice, page, statCard, table } from './layout.js';
 import { config } from '../config.js';
 import * as billing from '../billing.js';
+import * as userStore from '../auth/store.js';
 
 function noTokenHtml(base: string): string {
   return page({
@@ -50,6 +51,8 @@ export function createProfileRouter(): Router {
     }
 
     const token = resolveUserToken(req, { allowCookie: true }) ?? '';
+    const storedUser = userStore.getUser(user.id);
+    const pageUser = { ...user, aiChatEnabled: storedUser?.aiChatEnabled === true };
     // 老链接上还挂着 ?token= 时，顺手转成会话 Cookie（已有 Cookie 就不覆盖，避免顶掉登录态）
     adoptTokenFromUrl(req, res, token);
     const stat = getUserStats(user.id);
@@ -148,7 +151,7 @@ ${card(
 <p style="margin-top:24px"><a href="${esc(base)}/">← 返回首页</a> · <a href="${esc(base)}/logout">退出登录</a></p>
 `;
 
-    res.type('html').send(page({ title: `Profile · ${user.username}`, base, active: 'profile', body }));
+    res.type('html').send(page({ title: `Profile · ${user.username}`, base, active: 'profile', user: pageUser, body }));
   });
 
   return router;

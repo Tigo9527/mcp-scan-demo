@@ -6,6 +6,7 @@
  * 这里统一收口：所有页面共用同一份 CSS，并且**所有插值一律 esc()**（含属性位置）。
  */
 import { serverInfo } from '../version.js';
+import type { User } from '../auth/store.js';
 const CSS = `
 :root{--fg:#1a1a1a;--muted:#6b7280;--line:#e5e7eb;--bg:#fff;--soft:#f6f8fa;--acc:#0969da;--ok:#1f883d;--warn:#bf8700;--err:#cf222e}
 *{box-sizing:border-box}
@@ -212,6 +213,7 @@ export interface PageOptions {
   /** Admin 子导航高亮项（仅 admin 页面传） */
   adminTab?: AdminTab;
   bodyClass?: string;
+  user?: User | null;
 }
 
 /**
@@ -236,6 +238,7 @@ export function page(opts: PageOptions): string {
     { href: `${base}/recharge`, key: 'recharge', label: '充值' },
     { href: adminHref('/admin', opts.adminToken), key: 'admin', label: 'Admin 管理端' },
   ];
+  if (opts.user?.aiChatEnabled) navLinks.splice(5, 0, { href: '/agents', key: 'admin', label: 'AI 对话' });
 
   const nav = `<nav><span class="brand">MCP Demo</span>${navLinks
     .map(

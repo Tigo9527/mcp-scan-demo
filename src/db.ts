@@ -87,6 +87,22 @@ async function ensureAgentAutomationColumns(): Promise<void> {
   await sequelize.query('UPDATE agent_automation SET taskSince = (SELECT createdAt FROM agent_tasks WHERE agent_tasks.id = agent_automation.controlTaskId) WHERE taskSince IS NULL AND controlTaskId IS NOT NULL');
 }
 
+async function ensureAgentTaskColumns(): Promise<void> {
+  if (!sequelize) return;
+  const qi = sequelize.getQueryInterface();
+  const columns = await qi.describeTable('agent_tasks');
+  if (!columns.createdBy) await qi.addColumn('agent_tasks', 'createdBy', { type: DataTypes.STRING, allowNull: true });
+}
+
+async function ensureUserPermissionColumns(): Promise<void> {
+  if (!sequelize) return;
+  const qi = sequelize.getQueryInterface();
+  const columns = await qi.describeTable('users');
+  if (!columns.aiChatEnabled) {
+    await qi.addColumn('users', 'aiChatEnabled', { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false });
+  }
+}
+
 /**
  * 当前存储方言：默认 sqlite，可由 `STORAGE_DRIVER` 环境变量切换为 mysql。
  * 非法值直接抛错（fail-fast），避免「本想用 MySQL 却悄悄落到本地 sqlite」导致数据错写。
@@ -236,6 +252,7 @@ function defineModels(seq: Sequelize): void {
       createdAt: { type: DataTypes.STRING, allowNull: true },
       lastSeenAt: { type: DataTypes.STRING, allowNull: true },
       clientInfo: { type: DataTypes.TEXT, allowNull: true },
+      aiChatEnabled: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
     },
     { sequelize: seq, timestamps: false, modelName: 'user', tableName: 'users' },
   );
@@ -340,6 +357,7 @@ function defineModels(seq: Sequelize): void {
       reportedAt: { type: DataTypes.STRING, allowNull: true },
       reportSource: { type: DataTypes.STRING, allowNull: true },
       createdAt: { type: DataTypes.STRING, allowNull: false },
+      createdBy: { type: DataTypes.STRING, allowNull: true },
     },
     { sequelize: seq, timestamps: false, modelName: 'agentTask', tableName: 'agent_tasks', indexes: [{ fields: ['agentId', 'createdAt'] }] },
   );
@@ -371,6 +389,7 @@ function toUserRow(u: User): Record<string, unknown> {
     createdAt: u.createdAt,
     lastSeenAt: u.lastSeenAt ?? null,
     clientInfo: JSON.stringify(u.clientInfo ?? null),
+    aiChatEnabled: u.aiChatEnabled === true,
   };
 }
 
@@ -395,6 +414,7 @@ function fromUserRow(r: Record<string, unknown>): User {
     createdAt: String(r.createdAt ?? ''),
     lastSeenAt: (r.lastSeenAt as string | null) ?? undefined,
     clientInfo: clientInfo ?? undefined,
+    aiChatEnabled: r.aiChatEnabled === true || r.aiChatEnabled === 1 || r.aiChatEnabled === '1',
   };
 }
 
@@ -784,6 +804,8 @@ export async function initDb(opts: Overrides = {}): Promise<void> {
     await sequelize.authenticate();
     await sequelize.sync();
     await ensureAgentAutomationColumns();
+    await ensureUserPermissionColumns();
+    await ensureAgentTaskColumns();
     writeStoredDriver(dataDir, 'mysql');
     // 受保护的遗留数据导入：仅当各表为空时，才从 DATA_DIR 下的旧 JSON 导入，
     // 避免「指向 MySQL 却以空库静默启动」。注意 sqlite→mysql 的库内迁移不在此自动完成。
@@ -807,6 +829,8 @@ export async function initDb(opts: Overrides = {}): Promise<void> {
   await sequelize.authenticate();
   await sequelize.sync();
   await ensureAgentAutomationColumns();
+  await ensureUserPermissionColumns();
+  await ensureAgentTaskColumns();
   writeStoredDriver(dir, 'sqlite');
   // 写并发更好（热路径频繁落盘），且崩溃恢复更稳
   try {

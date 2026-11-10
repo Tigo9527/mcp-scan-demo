@@ -33,6 +33,8 @@ export interface User {
   clientInfo?: { name?: string; version?: string; lastSeenAt: string };
   /** 内部字段：最近一次物化所用的 JWT iat（秒），用于保证数据单向前进 */
   tokenIat?: number;
+  /** Admin 授予后可使用 Web AI 对话页。默认关闭。 */
+  aiChatEnabled?: boolean;
 }
 
 export interface UpsertByIdResult {
@@ -101,6 +103,7 @@ export function createUser(input: {
   githubToken?: string;
   passwordHash?: string;
   walletAddress?: string;
+  aiChatEnabled?: boolean;
 }): User {
   ensureLoaded();
   const user: User = {
@@ -112,6 +115,7 @@ export function createUser(input: {
     githubToken: input.githubToken,
     passwordHash: input.passwordHash,
     walletAddress: input.walletAddress,
+    aiChatEnabled: input.aiChatEnabled === true,
     createdAt: new Date().toISOString(),
     lastSeenAt: new Date().toISOString(),
   };
@@ -119,6 +123,20 @@ export function createUser(input: {
   indexBestEffort(user);
   markDirty();
   return user;
+}
+
+export function setAiChatEnabled(id: string, enabled: boolean): boolean {
+  ensureLoaded();
+  const user = byId.get(id);
+  if (!user) return false;
+  user.aiChatEnabled = enabled;
+  markDirty();
+  return true;
+}
+
+export function canUseAiChat(user: User | null | undefined): boolean {
+  if (!user) return false;
+  return byId.get(user.id)?.aiChatEnabled === true;
 }
 
 export function getUser(id: string): User | undefined {

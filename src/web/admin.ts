@@ -305,6 +305,7 @@ function usersHtml(base: string, adminToken: string, query: string): string {
       esc(fmtTime(u.createdAt)),
       esc(fmtTime(u.lastSeenAt)),
       `${stat?.calls ?? 0} / ${toolSum}`,
+      u.aiChatEnabled ? badge('已授权', 'ok') : badge('未授权'),
       `<a class="btn small" href="${esc(adminHref(`/admin/users/${encodeURIComponent(u.id)}`, adminToken))}">详情</a>`,
     ];
   });
@@ -326,7 +327,7 @@ function usersHtml(base: string, adminToken: string, query: string): string {
 </form>
 
 <p class="muted">共 ${total} 个用户${shown < total ? `（显示前 ${shown} 条）` : ''} ·「请求数 / 工具调用」列为该用户的累计统计</p>
-${table(['用户名', '邮箱', '来源', 'GitHub', '注册时间', '最近活跃', '请求/工具', '操作'], rows)}
+${table(['用户名', '邮箱', '来源', 'GitHub', '注册时间', '最近活跃', '请求/工具', 'AI 对话', '操作'], rows)}
 `,
     adminTab: 'users',
   });
@@ -353,6 +354,7 @@ function userDetailHtml(
     ['GitHub', user.githubLogin ? `@${esc(user.githubLogin)}` : '—'],
     ['注册时间', esc(fmtTime(user.createdAt))],
     ['最近活跃', esc(fmtTime(user.lastSeenAt))],
+    ['AI 对话权限', user.aiChatEnabled ? badge('已授权', 'ok') : badge('未授权')],
   ];
 
   return page({
@@ -374,6 +376,13 @@ ${statCard(Object.keys(tools).length, '使用过的工具数')}
 </div>
 ${Object.keys(tools).length > 0 ? table(['工具', '次数', ''], Object.entries(tools).sort((a, b) => b[1] - a[1]).map(([n, c]) => [esc(n), String(c), bar(c, maxTool)])) : '<div class="empty">该用户暂无调用记录。</div>'}
 <p class="muted">首次记录 ${esc(fmtTime(stat?.firstSeenAt))} · 最近记录 ${esc(fmtTime(stat?.lastSeenAt))}</p>
+
+<h2>功能权限</h2>
+${card(`<p>授权后该用户登录时会看到「AI 对话」页签，并可创建任务。任务权限只影响 Web AI 对话，不会提升 Admin 权限。</p>
+<form method="post" action="${esc(adminHref(`/admin/users/${encodeURIComponent(user.id)}/ai-chat`, adminToken))}">
+<input type="hidden" name="enabled" value="${user.aiChatEnabled ? '0' : '1'}">
+<button class="btn${user.aiChatEnabled ? ' danger' : ''}" type="submit">${user.aiChatEnabled ? '取消 AI 对话授权' : '授予 AI 对话权限'}</button>
+</form>`)}
 
 <h2>计费</h2>
 <div class="grid">
@@ -823,6 +832,22 @@ export function createAdminRouter(): Router {
           ? '注意：该用户未绑定 GitHub，search_repos 仍会提示先登录。'
           : undefined;
       res.type('html').send(userDetailHtml(base, token, user, { token: issued.token, note }));
+    }),
+  );
+
+  router.post(
+    '/admin/users/:id/ai-chat',
+    requireAdmin,
+    requireSameOrigin,
+    wrap(async (req: Request, res: Response) => {
+      const token = resolveAdminToken(req) ?? '';
+      const base = deriveBase(req);
+      const id = String(req.params.id ?? '');
+      const user = store.getUser(id);
+      if (!user) { res.status(404).type('text/plain; charset=utf-8').send('用户不存在'); return; }
+      const enabled = String((req.body as Record<string, unknown> | undefined)?.enabled ?? '') === '1';
+      store.setAiChatEnabled(id, enabled);
+      res.redirect(302, `${base}${adminHref(`/admin/users/${encodeURIComponent(id)}`, token)}`);
     }),
   );
 

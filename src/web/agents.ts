@@ -8,7 +8,8 @@ import sanitizeHtml from 'sanitize-html';
 import { AgentModel, AgentTaskModel, AgentAutomationModel, dbEnabled } from '../db.js';
 import { config, getAdminToken, isLocalBaseUrl } from '../config.js';
 import { isAdminRequest } from './admin.js';
-import { deriveBase, requireSameOrigin, wrap } from './http.js';
+import { authenticateWebUserRequest, deriveBase, requireSameOrigin, wrap } from './http.js';
+import * as userStore from '../auth/store.js';
 import { esc, page } from './layout.js';
 import { publishAgentTask } from '../agent-websocket.js';
 
@@ -372,8 +373,38 @@ loadAutomation().catch(()=>{});loadTasks().catch(()=>{messages.textContent='加�
 </script>` });
 }
 
+function userAi(req: Request): userStore.User | null {
+  const user = authenticateWebUserRequest(req);
+  return user && userStore.canUseAiChat(user) ? { ...user, aiChatEnabled: true } : null;
+}
+
+function userListHtml(base: string, user: userStore.User): string {
+  return page({ title: 'AI 对话', base, active: 'admin', user, body: `<h1>AI 对话</h1>
+<p class="muted">选择一个 Agent，提交任务并查看该用户自己的任务记录。</p>
+<div id="agents" class="empty">加载中…</div>
+<script>
+(async()=>{const box=document.getElementById('agents');try{const r=await fetch('/api/user/agents');if(!r.ok)throw new Error();const xs=await r.json();box.replaceChildren();if(!xs.length){box.className='empty';box.textContent='暂无可用 Agent';return;}box.className='';for(const a of xs){const c=document.createElement('div');c.className='card';const l=document.createElement('a');l.href='/agents/'+encodeURIComponent(a.id);l.textContent=a.name;const p=document.createElement('p');p.textContent=a.description||'暂无描述';c.append(l,p);box.append(c);}}catch{box.textContent='加载失败';}})();
+</script>` });
+}
+
+function userConversationHtml(base: string, agent: Record<string, unknown>, user: userStore.User): string {
+  return page({ title: `与 ${String(agent.name)} 对话`, base, active: 'admin', user, bodyClass: 'agent-conversation', body: `<p><a href="/agents">← Agent 列表</a></p><h1>${esc(agent.name)}</h1><p>${esc(agent.description)}</p>
+<form id="task" class="card"><label for="content">任务内容</label><textarea id="content" rows="5" maxlength="20000" required></textarea><button class="btn" type="submit">生成任务链接</button><p id="status" class="muted" role="status"></p></form><h2>我的任务</h2><div id="tasks" class="empty">加载中…</div>
+<script>
+const id=${JSON.stringify(String(agent.id))}, box=document.getElementById('tasks'), status=document.getElementById('status');
+async function load(){const r=await fetch('/api/user/agents/'+encodeURIComponent(id)+'/tasks');if(!r.ok){box.textContent='加载失败';return;}const xs=await r.json();box.replaceChildren();if(!xs.length){box.className='empty';box.textContent='暂无任务';return;}box.className='';for(const t of xs){const c=document.createElement('div');c.className='card';c.innerHTML='<b>'+t.status+'</b><p></p>'+(t.result?'<details><summary>查看回报</summary><pre></pre></details>':'');c.querySelector('p').textContent=t.content;c.querySelector('pre')?.append(document.createTextNode(t.result||''));box.append(c);}}
+document.getElementById('task').addEventListener('submit',async e=>{e.preventDefault();status.textContent='提交中…';const r=await fetch('/api/user/agents/'+encodeURIComponent(id)+'/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:document.getElementById('content').value})});const d=await r.json();if(!r.ok){status.textContent=d.error||'提交失败';return;}status.textContent='任务已生成：'+d.url;document.getElementById('content').value='';load();});load();
+</script>` });
+}
+
 export function createAgentRouter(): Router {
   const router = Router();
+  router.use(['/agents', '/api/user/agents'], (_req, res, next) => { res.setHeader('Referrer-Policy', 'no-referrer'); res.setHeader('Cache-Control', 'no-store'); next(); });
+  router.get('/agents', requireDb, (req, res) => { const user = userAi(req); if (!user) { res.status(403).type('html').send('需要管理员授予 AI 对话权限'); return; } res.type('html').send(userListHtml(deriveBase(req), user)); });
+  router.get('/agents/:id', requireDb, wrap(async (req, res) => { const user = userAi(req); if (!user) { res.status(403).type('text').send('需要管理员授予 AI 对话权限'); return; } const agent = await AgentModel.findByPk(req.params.id); if (!agent) { res.status(404).type('text').send('Agent 不存在'); return; } res.type('html').send(userConversationHtml(deriveBase(req), row(agent), user)); }));
+  router.get('/api/user/agents', requireDb, wrap(async (req, res) => { if (!userAi(req)) { res.status(403).json({ error: 'AI 对话权限不足' }); return; } const agents = await AgentModel.findAll({ order: [['createdAt', 'DESC']] }); res.json(agents.map(a => row(a))); }));
+  router.get('/api/user/agents/:id/tasks', requireDb, wrap(async (req, res) => { const user = userAi(req); if (!user) { res.status(403).json({ error: 'AI 对话权限不足' }); return; } if (!(await AgentModel.findByPk(req.params.id))) { res.status(404).json({ error: 'Agent 不存在' }); return; } const tasks = await AgentTaskModel.findAll({ where: { agentId: req.params.id, createdBy: user.id }, order: [['createdAt', 'ASC']] }); res.json(tasks.map(t => { const d=row(t); return { id:d.id, content:d.content, status:d.status, result:d.result, createdAt:d.createdAt }; })); }));
+  router.post('/api/user/agents/:id/tasks', requireSameOrigin, requireDb, wrap(async (req, res) => { const user = userAi(req); if (!user) { res.status(403).json({ error: 'AI 对话权限不足' }); return; } if (!(await AgentModel.findByPk(req.params.id))) { res.status(404).json({ error: 'Agent 不存在' }); return; } const content=cleanText(req.body?.content, 20_000); if (!content) { res.status(400).json({ error: '任务内容必填且不超过 20000 字' }); return; } const id=randomUUID(), tokenExpiresAt=new Date(Date.now()+TASK_TTL_MS).toISOString(), createdAt=new Date().toISOString(); await AgentTaskModel.create({ id, agentId:req.params.id, createdBy:user.id, content:safeTaskContent(content), tokenExpiresAt, status:'pending', result:null, reportedAt:null, reportSource:null, createdAt }); const url=`${linkBase(req)}/api/tasks/${tokenFor(id, tokenExpiresAt)}`; publishAgentTask(req.params.id,{taskId:id,url,createdAt,expiresAt:tokenExpiresAt}); res.status(201).json({taskId:id,url,expiresAt:tokenExpiresAt}); }));
   router.use(['/admin/agents', '/admin/api/agents', '/api/tasks', '/api/agents'], (_req, res, next) => {
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Cache-Control', 'no-store');

@@ -29,6 +29,7 @@ import * as stats from '../stats.js';
 import { persistStatus } from '../db.js';
 import {
   authenticateUserRequest,
+  authenticateWebUserRequest,
   allowPublicCors,
   clearUserTokenCookie,
   deriveBase,
@@ -258,11 +259,12 @@ ${card(`
   });
 }
 
-function homeHtml(base: string): string {
+function homeHtml(base: string, user?: User | null): string {
   return page({
     title: 'MCP Demo',
     base,
     active: 'home',
+    user,
     body: `
 <h1>🔌 MCP Demo 服务</h1>
 <p>TypeScript + 官方 <code>@modelcontextprotocol/sdk</code>，基于 Streamable HTTP 传输，内置认证（账号密码 + 一键注册 + GitHub OAuth）、Admin 管理端与调用统计。</p>
@@ -679,7 +681,9 @@ export function createApp() {
   });
 
   app.get('/', (_req: Request, res: Response) => {
-    res.type('html').send(homeHtml(deriveBase(_req)));
+    const current = authenticateWebUserRequest(_req);
+    const stored = current ? store.getUser(current.id) : null;
+    res.type('html').send(homeHtml(deriveBase(_req), current ? { ...current, aiChatEnabled: stored?.aiChatEnabled === true } : null));
   });
 
   // 接入说明页：免登录、不含任何令牌，链接可直接分享给新用户
