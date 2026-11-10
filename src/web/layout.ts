@@ -109,6 +109,8 @@ body.agent-conversation{--fg:#e8edf3;--muted:#9ba9b8;--line:#344150;--bg:#111923
 .task-form-header{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .task-form-header label{margin-top:0}
 .task-form-links{display:flex;align-items:center;gap:10px}
+.template-panel{margin:8px 0 0;padding:12px 14px;background:var(--soft)}
+.template-panel-head,.template-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.template-panel-head{justify-content:space-between}.template-toolbar select{width:auto;min-width:220px;flex:1;margin:0}.template-panel .muted{margin-bottom:0}
 .text-link{padding:3px 0;border:0;background:none;color:var(--acc);font:inherit;font-size:.88em;cursor:pointer}
 .text-link:hover{text-decoration:underline}
 .editor-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px dashed var(--line);padding-top:8px;margin-top:8px;color:var(--muted);font-size:.85em}
