@@ -13,6 +13,8 @@ import { reloadBillingFromDb } from './billing.js';
 import { reloadStatsFromDb } from './stats.js';
 import { reloadRechargeSettingsFromDb, reloadRechargeRecordsFromDb } from './recharge.js';
 import { reloadGithubFromDb } from './settings.js';
+import { attachAgentTaskWebSocket } from './agent-websocket.js';
+import { pollTokenMatchesValue } from './web/agents.js';
 import type { Server } from 'node:http';
 
 // 兜底：Express 4 不捕获 async handler 的 rejection，一旦逃逸出来 Node 20 默认直接终止进程。
@@ -44,6 +46,7 @@ export async function startServer(port: number = config.port): Promise<Server> {
   const server = app.listen(port, config.host, () => {
     printBanner();
   });
+  attachAgentTaskWebSocket(server, pollTokenMatchesValue);
   startKeepAlive();
   registerGracefulShutdown(server);
   return server;

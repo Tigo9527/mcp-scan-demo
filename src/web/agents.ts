@@ -10,6 +10,7 @@ import { config, getAdminToken, isLocalBaseUrl } from '../config.js';
 import { isAdminRequest } from './admin.js';
 import { deriveBase, requireSameOrigin, wrap } from './http.js';
 import { esc, page } from './layout.js';
+import { publishAgentTask } from '../agent-websocket.js';
 
 const TASK_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_REPORT = 50_000;
@@ -52,12 +53,15 @@ function pollTokenFor(agentId: string): string {
   return createHmac('sha256', taskKey()).update(`poll.${agentId}`).digest('base64url');
 }
 
-function pollTokenMatches(req: Request, agentId: string): boolean {
-  const supplied = String(req.headers['x-agent-token'] || '');
+export function pollTokenMatchesValue(supplied: string, agentId: string): boolean {
   if (!/^[A-Za-z0-9_-]{43}$/.test(supplied)) return false;
   const expected = Buffer.from(pollTokenFor(agentId));
   const actual = Buffer.from(supplied);
   return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+function pollTokenMatches(req: Request, agentId: string): boolean {
+  return pollTokenMatchesValue(String(req.headers['x-agent-token'] || ''), agentId);
 }
 
 function tokenParts(token: string): { id: string; expiresAt: string } | null {
@@ -387,7 +391,9 @@ export function createAgentRouter(): Router {
     const content = `启动此 Agent 的自动任务。请在你的运行环境创建定时任务，每 10 秒访问轮询地址 ${pollUrl}，请求头 X-Agent-Token: ${pollTokenFor(req.params.id)}。仅处理返回的该 Agent 任务，读取每条任务的 url，并按其 report.url 回报。首次定时任务成功运行后，请回报本任务：已启动自动轮询。以后遇到停止自动任务的任务，请先回报该停止任务，再关闭定时任务。`;
     await AgentTaskModel.create({ id, agentId: req.params.id, content: safeTaskContent(content), tokenExpiresAt, status: 'pending', result: null, reportedAt: null, reportSource: null, createdAt: taskSince });
     await AgentAutomationModel.upsert({ agentId: req.params.id, state: 'starting', controlTaskId: id, taskSince, updatedAt: taskSince });
-    res.status(201).json({ state: 'starting', taskId: id, url: `${linkBase(req)}/api/tasks/${tokenFor(id, tokenExpiresAt)}` });
+    const url = `${linkBase(req)}/api/tasks/${tokenFor(id, tokenExpiresAt)}`;
+    publishAgentTask(req.params.id, { taskId: id, url, createdAt: taskSince, expiresAt: tokenExpiresAt, control: 'starting' });
+    res.status(201).json({ state: 'starting', taskId: id, url });
   }));
   router.post('/admin/api/agents/:id/automation/stop', adminOnly, requireSameOrigin, requireDb, wrap(async (req, res) => {
     if (!(await AgentModel.findByPk(req.params.id))) { res.status(404).json({ error: 'Agent 不存在' }); return; }
@@ -396,7 +402,9 @@ export function createAgentRouter(): Router {
     const id = randomUUID(), tokenExpiresAt = new Date(Date.now() + TASK_TTL_MS).toISOString();
     await AgentTaskModel.create({ id, agentId: req.params.id, content: '停止自动任务：请先回报本任务“已停止自动轮询”，然后关闭此 Agent 的定时轮询任务。不要停止其它 Agent 的轮询。', tokenExpiresAt, status: 'pending', result: null, reportedAt: null, reportSource: null, createdAt: new Date().toISOString() });
     await AgentAutomationModel.upsert({ agentId: req.params.id, state: 'stopping', controlTaskId: id, taskSince: current.taskSince, updatedAt: new Date().toISOString() });
-    res.status(201).json({ state: 'stopping', taskId: id });
+    const url = `${linkBase(req)}/api/tasks/${tokenFor(id, tokenExpiresAt)}`;
+    publishAgentTask(req.params.id, { taskId: id, url, createdAt: new Date().toISOString(), expiresAt: tokenExpiresAt, control: 'stopping' });
+    res.status(201).json({ state: 'stopping', taskId: id, url });
   }));
   router.get('/api/agents/:id/tasks/poll', requireDb, wrap(async (req, res) => {
     if (!pollTokenMatches(req, req.params.id)) { res.status(401).json({ error: 'Agent 轮询凭证无效' }); return; }
@@ -418,7 +426,9 @@ export function createAgentRouter(): Router {
     try { attachments = writeAttachmentMeta(id, attachmentsInput); } catch (err) { res.status(400).json({ error: err instanceof Error ? err.message : '附件无效' }); return; }
     await AgentTaskModel.create({ id, agentId: req.params.id, content: safeTaskContent(content), tokenExpiresAt, status: 'pending', result: null, reportedAt: null, reportSource: null, createdAt: new Date().toISOString() });
     const token = tokenFor(id, tokenExpiresAt);
-    res.status(201).json({ taskId: id, url: `${linkBase(req)}/api/tasks/${token}`, expiresAt: tokenExpiresAt, attachments: attachments.map(({ name, type, size }) => ({ name, type, size })) });
+    const url = `${linkBase(req)}/api/tasks/${token}`;
+    publishAgentTask(req.params.id, { taskId: id, url, createdAt: new Date().toISOString(), expiresAt: tokenExpiresAt });
+    res.status(201).json({ taskId: id, url, expiresAt: tokenExpiresAt, attachments: attachments.map(({ name, type, size }) => ({ name, type, size })) });
   }));
 
   router.patch('/admin/api/tasks/:id', adminOnly, requireSameOrigin, requireDb, wrap(async (req, res) => {
