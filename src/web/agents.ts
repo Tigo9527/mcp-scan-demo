@@ -328,9 +328,15 @@ async function loadTasks(){
     editActions.append(editButton,saveButton,cancelButton,linkToggle);c.append(editActions);
     let originalContent=t.content;
     const markdownSource=typeof t.content==='string'&&!t.content.includes('<');
-    editButton.addEventListener('click',()=>{originalContent=content.innerHTML;if(markdownSource)content.textContent=t.content;content.contentEditable='true';content.classList.add('editing');editButton.hidden=true;saveButton.hidden=false;cancelButton.hidden=t.result!==null;content.focus();});
-    cancelButton.addEventListener('click',()=>{content.innerHTML=originalContent;content.contentEditable='false';content.classList.remove('editing');editButton.hidden=false;saveButton.hidden=true;cancelButton.hidden=true;});
-    saveButton.addEventListener('click',async()=>{const next=(content.innerHTML||'').trim();if(!next){status.textContent='任务内容不能为空';return;}saveButton.disabled=true;const rr=await fetch('/admin/api/tasks/'+encodeURIComponent(t.id),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:next})});const dd=await rr.json();saveButton.disabled=false;if(!rr.ok){status.textContent=dd.error||'编辑失败';return;}status.textContent='任务已更新并重新生成链接。';await copyGeneratedText(shareText(dd.url));loadTasks();});
+    if(t.uploadCommand){
+      editButton.textContent='复制命令';
+      editButton.addEventListener('click',async()=>{const copied=await copyGeneratedText(t.uploadCommand);status.textContent=copied?'上传命令已复制。':'复制失败，请手动选中命令。';});
+      saveButton.hidden=true;cancelButton.hidden=true;
+    }else{
+      editButton.addEventListener('click',()=>{originalContent=content.innerHTML;if(markdownSource)content.textContent=t.content;content.contentEditable='true';content.classList.add('editing');editButton.hidden=true;saveButton.hidden=false;cancelButton.hidden=t.result!==null;content.focus();});
+      cancelButton.addEventListener('click',()=>{content.innerHTML=originalContent;content.contentEditable='false';content.classList.remove('editing');editButton.hidden=false;saveButton.hidden=true;cancelButton.hidden=true;});
+      saveButton.addEventListener('click',async()=>{const next=(content.innerHTML||'').trim();if(!next){status.textContent='任务内容不能为空';return;}saveButton.disabled=true;const rr=await fetch('/admin/api/tasks/'+encodeURIComponent(t.id),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:next})});const dd=await rr.json();saveButton.disabled=false;if(!rr.ok){status.textContent=dd.error||'编辑失败';return;}status.textContent='任务已更新并重新生成链接。';await copyGeneratedText(shareText(dd.url));loadTasks();});
+    }
     const linkBox=document.createElement('div');linkBox.className='codeblock';
     const head=document.createElement('div');head.className='cb-head';
     const title=document.createElement('span');title.className='cb-title';title.textContent='任务链接（请交给 CLI AI）';
@@ -339,6 +345,7 @@ async function loadTasks(){
     const copyText=t.uploadCommand||shareText(t.url); title.textContent=t.uploadCommand?'文件上传命令（末尾加文件路径）':'任务链接（请交给 CLI AI）';
     head.append(title,openLink,copy);const pre=document.createElement('pre');const code=document.createElement('code');code.textContent=copyText;pre.append(code);linkBox.append(head,pre);c.append(linkBox);
     linkBox.hidden=!expandedTaskLinks.has(t.id);linkToggle.textContent=linkBox.hidden?'显示任务链接':'收起任务链接';linkToggle.setAttribute('aria-expanded',String(!linkBox.hidden));
+    if(t.uploadCommand){linkToggle.hidden=true;linkBox.hidden=true;}
     linkToggle.addEventListener('click',()=>{linkBox.hidden=!linkBox.hidden;if(linkBox.hidden)expandedTaskLinks.delete(t.id);else expandedTaskLinks.add(t.id);linkToggle.textContent=linkBox.hidden?'显示任务链接':'收起任务链接';linkToggle.setAttribute('aria-expanded',String(!linkBox.hidden));});
     if(t.attachments?.length){const files=document.createElement('div');files.className='attachment-list';for(const a of t.attachments){const item=document.createElement('a');item.href=a.url;item.target='_blank';item.rel='noopener';item.textContent=a.name+' ('+Math.round(a.size/1024)+' KB)';files.append(item);}c.append(files);}
     if(t.result!==null){const reply=document.createElement('details');reply.className='task-reply';reply.open=expandedTaskReplies.has(t.id);

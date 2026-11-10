@@ -85,6 +85,8 @@ describe('Admin AI 对话和任务链接', () => {
     expect(html).toContain('上传文件任务');
     expect(html).toContain('upload-tasks');
     expect(html).toContain('t.uploadCommand||shareText(t.url)');
+    expect(html).toContain("editButton.textContent='复制命令'");
+    expect(html).toContain("if(t.uploadCommand){linkToggle.hidden=true;linkBox.hidden=true;}");
     expect(html).toContain("c.id='task-'+t.id");
     expect(html).toContain("anchor.href='#'+c.id");
     expect(html).toContain('initialTaskScrollPending');
