@@ -103,6 +103,27 @@ body.agent-conversation{--fg:#e8edf3;--muted:#9ba9b8;--line:#344150;--bg:#111923
 .agent-conversation .btn.link-open{color:var(--acc)}
 .automation-controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:12px 0 2px}
 .automation-controls .btn{margin:0}
+.task-form-header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.task-form-header label{margin-top:0}
+.text-link{padding:3px 0;border:0;background:none;color:var(--acc);font:inherit;font-size:.88em;cursor:pointer}
+.text-link:hover{text-decoration:underline}
+.editor-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px dashed var(--line);padding-top:8px;margin-top:8px;color:var(--muted);font-size:.85em}
+.editor-tools input[type=file]{display:none}
+.file-picker{margin:0;padding:3px 8px;border-radius:6px;cursor:pointer;color:var(--muted);font-weight:500}
+.file-picker:hover{background:var(--soft);color:var(--fg)}
+.file-hint{font-size:.9em}
+.file-chips{display:flex;gap:5px;flex-wrap:wrap}
+.task-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px}
+.task-submit{margin-left:auto}
+.switch-control{display:inline-flex;align-items:center;gap:7px;margin:0;color:var(--muted);font-size:.9em;cursor:pointer}
+.switch-control input{position:absolute;opacity:0;width:1px;height:1px}
+.switch-slider{width:30px;height:18px;border-radius:999px;background:var(--line);position:relative;transition:.15s}
+.switch-slider:after{content:'';position:absolute;width:14px;height:14px;left:2px;top:2px;border-radius:50%;background:#fff;transition:.15s}
+.switch-control input:checked+.switch-slider{background:var(--ok)}
+.switch-control input:checked+.switch-slider:after{transform:translateX(12px)}
+.switch-control input:focus-visible+.switch-slider{outline:2px solid var(--acc);outline-offset:2px}
+.agent-conversation .switch-slider{background:#465463}
+.agent-conversation .switch-control input:checked+.switch-slider{background:#4f9b73}
 `;
 
 /** HTML 转义。所有插值都必须过一遍，包括 href="...?token=${esc(x)}" 这类属性位置。 */
