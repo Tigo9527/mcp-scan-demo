@@ -388,7 +388,7 @@ export function createAgentRouter(): Router {
     const taskSince = new Date().toISOString();
     const id = randomUUID(), tokenExpiresAt = new Date(Date.now() + TASK_TTL_MS).toISOString();
     const pollUrl = `${linkBase(req)}/api/agents/${req.params.id}/tasks/poll`;
-    const content = `启动此 Agent 的自动任务。请在你的运行环境创建定时任务，每 10 秒访问轮询地址 ${pollUrl}，请求头 X-Agent-Token: ${pollTokenFor(req.params.id)}。仅处理返回的该 Agent 任务，读取每条任务的 url，并按其 report.url 回报。首次定时任务成功运行后，请回报本任务：已启动自动轮询。以后遇到停止自动任务的任务，请先回报该停止任务，再关闭定时任务。`;
+    const content = `启动此 Agent 的自动任务。请在你的运行环境使用自有定时器或 WebSocket 客户端，通过网络访问 ${pollUrl}，请求头 X-Agent-Token: ${pollTokenFor(req.params.id)}。仅处理返回的该 Agent 任务，读取每条任务的 url，并按其 report.url 回报。必须在当前 Agent 上下文直接完成任务，不要启动子 Agent 或委托其它执行器。首次自动任务成功运行后，请回报本任务：已启动自动任务。以后遇到停止自动任务的任务，请先回报该停止任务，再关闭你自己的定时器或推送连接。`;
     await AgentTaskModel.create({ id, agentId: req.params.id, content: safeTaskContent(content), tokenExpiresAt, status: 'pending', result: null, reportedAt: null, reportSource: null, createdAt: taskSince });
     await AgentAutomationModel.upsert({ agentId: req.params.id, state: 'starting', controlTaskId: id, taskSince, updatedAt: taskSince });
     const url = `${linkBase(req)}/api/tasks/${tokenFor(id, tokenExpiresAt)}`;
