@@ -72,6 +72,7 @@ describe('Admin AI 对话和任务链接', () => {
     expect(html).toContain('toLocaleString(undefined,{dateStyle:\'medium\',timeStyle:\'short\'})');
     expect(html).toContain("label.textContent='你 · '+formatLocalTime(t.createdAt)");
     expect(html).toContain('formatLocalTime(t.tokenExpiresAt)');
+    expect(html).toContain('const markdownSource=typeof t.content');
     expect(html).toContain('自动任务');
     expect(html).toContain('automationSwitch');
     expect(html).toContain('仅看未回报');
@@ -84,6 +85,11 @@ describe('Admin AI 对话和任务链接', () => {
     const { url, taskId }: any = await taskResponse.json();
     const taskList: any = await (await fetch(`${base}/admin/api/agents/${agent.id}/tasks`, { headers: admin })).json();
     expect(taskList[0].url).toBe(url);
+    const markdownTaskResponse = await post(`${base}/admin/api/agents/${agent.id}/tasks`, { content: '# Markdown 标题\n\n- 第一项\n- 第二项' }, admin);
+    const markdownTask: any = await markdownTaskResponse.json();
+    const markdownData: any = await (await fetch(markdownTask.url)).json();
+    expect(markdownData.content).toContain('<h1>Markdown 标题</h1>');
+    expect(markdownData.content).toContain('<li>第一项</li>');
     const pollUrl = `${base}/api/agents/${agent.id}/tasks/poll`;
     const pollAgents: any[] = (await (await fetch(`${base}/admin/api/agents`, { headers: admin })).json()) as any[];
     const pollToken = pollAgents.find((a: any) => a.id === agent.id).pollToken;
@@ -116,7 +122,7 @@ describe('Admin AI 对话和任务链接', () => {
     expect(editedData.url).not.toBe(url);
     const urlAfterEdit = editedData.url;
     const task: any = await (await fetch(urlAfterEdit)).json();
-    expect(task.content).toBe('检查更新后的代码');
+    expect(task.content).toContain('<p>检查更新后的代码</p>');
     expect(task.report.url).toBe(`${urlAfterEdit}/report`);
 
     const attachmentTask = await post(`${base}/admin/api/agents/${agent.id}/tasks`, {
