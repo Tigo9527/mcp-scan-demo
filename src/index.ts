@@ -102,7 +102,7 @@ function startKeepAlive(): void {
 export function printBanner(): void {
   const base = config.baseUrl;
   const adminHint = isUsingDefaultAdminToken()
-    ? '⚠ 使用默认令牌 dev-admin-change-me（公网环境会被禁用，请注入 ADMIN_TOKEN）'
+    ? '⚠ 未配置 ADMIN_TOKEN，已随机生成并写入 .env（公网环境会禁用自动生成令牌，请注入 ADMIN_TOKEN）'
     : `已注入（ADMIN_TOKEN=${getAdminToken().slice(0, 4)}****）`;
 
   const lines = [

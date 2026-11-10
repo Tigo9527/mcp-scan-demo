@@ -133,7 +133,7 @@ npm start            # 启动后控制台会打印可访问 URL，含 /admin 与
 
 ### Admin 管理端
 
-- 登录地址 `/admin`，令牌来自环境变量 `ADMIN_TOKEN`（本地不设置时用默认 `dev-admin-change-me`）。
+- 登录地址 `/admin`，令牌来自环境变量 `ADMIN_TOKEN`；未配置时启动会随机生成并写入 `.env`，公网部署建议显式注入。
 - 功能：用户列表（搜索 / 详情 / 签发新令牌 / 删除）、GitHub OAuth 参数在线设置、
   调用统计总览（总计卡片 + 工具 Top + 调用方 Top + 最近 14 天 + 最近调用）。
 
@@ -166,7 +166,7 @@ Admin 对话页的任务编辑框下提供“开启自动任务”和“关闭�
 
 ```bash
 BASE=http://localhost:3000
-ADMIN_TOKEN=dev-admin-change-me
+ADMIN_TOKEN=<从 .env 读取的令牌>
 AGENT_ID=$(curl -sS -X POST "$BASE/admin/api/agents" -H "X-Admin-Token: $ADMIN_TOKEN" -H 'Content-Type: application/json' -d '{"name":"Review Bot"}' | node -pe 'JSON.parse(require("fs").readFileSync(0,"utf8")).id')
 TASK_URL=$(curl -sS -X POST "$BASE/admin/api/agents/$AGENT_ID/tasks" -H "X-Admin-Token: $ADMIN_TOKEN" -H 'Content-Type: application/json' -d '{"content":"检查这段代码"}' | node -pe 'JSON.parse(require("fs").readFileSync(0,"utf8")).url')
 curl -sS "$TASK_URL"

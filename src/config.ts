@@ -7,13 +7,48 @@
  *   业务代码禁止直接读（读到的会是永远不变的 env 旧值）。
  * - admin 令牌请一律通过 `getAdminToken()` 读取（惰性读 env，便于测试期覆盖）。
  */
+import { appendFileSync, chmodSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import { randomBytes } from 'node:crypto';
+
+function envFileValue(name: string, file: string): string | undefined {
+  try {
+    const line = readFileSync(file, 'utf8').split(/\r?\n/).find((entry) => new RegExp(`^\\s*${name}\\s*=`).test(entry));
+    if (!line) return undefined;
+    const value = line.slice(line.indexOf('=') + 1).trim().replace(/^['"]|['"]$/g, '');
+    return value || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function ensurePersistedSecret(name: string): { value: string; generated: boolean } {
+  const configured = process.env[name]?.trim();
+  if (configured) return { value: configured, generated: false };
+  const envFile = path.resolve(process.env.MCP_DEMO_ENV_FILE ?? '.env');
+  const fromFile = envFileValue(name, envFile);
+  if (fromFile) return { value: fromFile, generated: false };
+  const generated = randomBytes(32).toString('hex');
+  try {
+    const needsNewline = (() => { try { return !readFileSync(envFile, 'utf8').endsWith('\n'); } catch { return false; } })();
+    appendFileSync(envFile, `${needsNewline ? '\n' : ''}${name}=${generated}\n`, { encoding: 'utf8', mode: 0o600 });
+    chmodSync(envFile, 0o600);
+    console.warn(`[mcp-demo] 未配置 ${name}，已生成随机值并写入 ${envFile}。请妥善保管该配置文件。`);
+  } catch (error) {
+    console.warn(`[mcp-demo] 未配置 ${name}，已生成随机值，但无法写入 ${envFile}：${error instanceof Error ? error.message : String(error)}`);
+  }
+  return { value: generated, generated: true };
+}
+
 const port = Number(process.env.PORT ?? 3000);
+const jwtSecretInfo = ensurePersistedSecret('JWT_SECRET');
+const adminTokenInfo = ensurePersistedSecret('ADMIN_TOKEN');
 
 export const config = {
   port,
   host: process.env.HOST ?? '0.0.0.0',
-  /** JWT 签名密钥，生产环境务必通过环境变量覆盖 */
-  jwtSecret: process.env.JWT_SECRET ?? 'dev-mcp-demo-secret-change-me',
+  /** JWT 签名密钥：优先读环境变量；未配置时启动生成并写入 .env */
+  jwtSecret: jwtSecretInfo.value,
   /** 对外基础地址，用于拼接回调与 MCP 端点 URL */
   baseUrl: process.env.BASE_URL ?? `http://localhost:${port}`,
   /** 对外可见基础地址（部署在公网/反代后由环境变量覆盖，用于工具里拼登录链接） */
@@ -51,21 +86,21 @@ export const config = {
 
 export type AppConfig = typeof config;
 
-/** admin 令牌的默认值。仅用于本地开发；非本地环境使用默认令牌会被拒绝（见 src/web/admin.ts） */
-export const DEFAULT_ADMIN_TOKEN = 'dev-admin-change-me';
+/** 启动时生成或从环境读取的 admin 令牌；非本地环境禁止使用自动生成值。 */
+export const DEFAULT_ADMIN_TOKEN = adminTokenInfo.value;
 
 /**
  * 读取 admin 令牌。**惰性读取** env，便于测试在 beforeAll 里覆盖。
- * 必须是固定值（启动时随机会导致重启后令牌就变了、根本登不进去），
- * 所以走环境变量注入而非启动生成。
+ * 未注入时使用启动期写入 .env 的随机值，重启后保持不变。
  */
 export function getAdminToken(): string {
-  return process.env.ADMIN_TOKEN?.trim() || DEFAULT_ADMIN_TOKEN;
+  return process.env.ADMIN_TOKEN?.trim() || adminTokenInfo.value;
 }
 
 /** 当前是否正在使用不安全的默认 admin 令牌 */
 export function isUsingDefaultAdminToken(): boolean {
-  return getAdminToken() === DEFAULT_ADMIN_TOKEN;
+  // 若入口没有先加载 dotenv，或测试显式清空 env，也视为未注入；公网路由应继续阻断。
+  return !process.env.ADMIN_TOKEN?.trim();
 }
 
 /** 对外地址是否为本地地址（用于判断能否放宽安全限制） */

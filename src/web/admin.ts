@@ -120,7 +120,7 @@ function requireAdmin(req: Request, res: Response, next: NextFunction): void {
         page({
           title: 'Admin 未启用',
           body: `<h1>Admin 管理端未启用</h1>${notice(
-            '当前使用的是**内置默认管理员令牌**，且服务对外地址不是本地地址，已禁用管理端以防被公网直接访问。<br><br>请通过启动参数注入真实令牌，例如：<br><code>ADMIN_TOKEN=&lt;your-token&gt; npm start</code><br>（部署到发布平台时用 <code>--start-cmd "PUBLIC_BASE_URL=... ADMIN_TOKEN=... npm start"</code> 注入）',
+            '当前使用的是启动时自动生成的管理员令牌，且服务对外地址不是本地地址，已禁用管理端以防被公网直接访问。<br><br>请通过启动参数注入真实令牌，例如：<br><code>ADMIN_TOKEN=&lt;your-token&gt; npm start</code><br>（部署到发布平台时用 <code>--start-cmd "PUBLIC_BASE_URL=... ADMIN_TOKEN=... npm start"</code> 注入）',
           )}`,
         }),
       );
@@ -717,7 +717,7 @@ export function createAdminRouter(): Router {
         page({
           title: 'Admin 未启用',
           base,
-          body: `<h1>Admin 管理端未启用</h1>${notice('当前使用内置默认管理员令牌且对外地址非本地，已禁用。请注入 <code>ADMIN_TOKEN</code> 环境变量后重启。')}`,
+          body: `<h1>Admin 管理端未启用</h1>${notice('当前使用启动时自动生成的管理员令牌且对外地址非本地，已禁用。请注入 <code>ADMIN_TOKEN</code> 环境变量后重启。')}`,
         }),
       );
       return;
