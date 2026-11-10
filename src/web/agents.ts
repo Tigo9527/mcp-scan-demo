@@ -131,9 +131,18 @@ function saveUploadedFile(taskId: string, buffer: Buffer, name: string, type: st
   fs.mkdirSync(ATTACHMENT_DIR, { recursive: true });
   const stored = `${taskId}-${randomUUID()}.bin`;
   fs.writeFileSync(path.join(ATTACHMENT_DIR, stored), buffer, { flag: 'wx' });
-  const item: AttachmentMeta = { name: cleanAttachmentName(name) || 'uploaded-file', type: type || 'application/octet-stream', size: buffer.length, path: stored, createdAt: new Date().toISOString() };
+  const cleanName = cleanAttachmentName(name) || 'uploaded-file';
+  const item: AttachmentMeta = { name: cleanName, type: detectUploadType(cleanName, type, buffer), size: buffer.length, path: stored, createdAt: new Date().toISOString() };
   fs.writeFileSync(path.join(ATTACHMENT_DIR, `${taskId}.json`), JSON.stringify([item]));
   return item;
+}
+function detectUploadType(name: string, declared: string, buffer: Buffer): string {
+  if (buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png';
+  if (buffer.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))) return 'image/jpeg';
+  if (buffer.subarray(0, 4).toString() === '%PDF') return 'application/pdf';
+  const ext = path.extname(name).toLowerCase();
+  const known: Record<string, string> = { '.md': 'text/markdown; charset=utf-8', '.markdown': 'text/markdown; charset=utf-8', '.txt': 'text/plain; charset=utf-8', '.csv': 'text/csv; charset=utf-8', '.json': 'application/json; charset=utf-8', '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8', '.xml': 'application/xml; charset=utf-8', '.zip': 'application/zip', '.gz': 'application/gzip', '.pdf': 'application/pdf' };
+  return known[ext] || declared || 'application/octet-stream';
 }
 cleanupAttachments();
 const attachmentCleanupTimer = setInterval(cleanupAttachments, 60 * 60 * 1000);
@@ -386,7 +395,7 @@ export function createAgentRouter(): Router {
   router.get('/admin/api/agents/:id/tasks', adminOnly, requireDb, wrap(async (req, res) => {
     if (!(await AgentModel.findByPk(req.params.id))) { res.status(404).json({ error: 'Agent 不存在' }); return; }
     const tasks = await AgentTaskModel.findAll({ where: { agentId: req.params.id }, order: [['createdAt', 'ASC']] });
-    res.json(tasks.map(t => { const d = row(t); const token = tokenFor(String(d.id), String(d.tokenExpiresAt)); const uploadCommand = /^curl\s[\s\S]*--upload-file\s*$/.test(String(d.content)); return { ...d, contentHtml: taskContentWithAttachmentUrls(String(d.content), String(d.id), token, req), uploadCommand: uploadCommand ? String(d.content) : null, attachments: attachmentMeta(String(d.id)).map(({ name, type, size, path: stored }) => ({ name, type, size, url: `${linkBase(req)}/admin/api/tasks/${d.id}/attachments/${encodeURIComponent(stored)}` })), url: `${linkBase(req)}/api/tasks/${token}`, resultHtml: d.result === null ? null : safeMarkdown(String(d.result)) }; }));
+    res.json(tasks.map(t => { const d = row(t); const token = tokenFor(String(d.id), String(d.tokenExpiresAt)); const uploadCommand = /^(?:curl|sh -c)\s[\s\S]*--upload-file/.test(String(d.content)); return { ...d, contentHtml: taskContentWithAttachmentUrls(String(d.content), String(d.id), token, req), uploadCommand: uploadCommand ? String(d.content) : null, attachments: attachmentMeta(String(d.id)).map(({ name, type, size, path: stored }) => ({ name, type, size, url: `${linkBase(req)}/admin/api/tasks/${d.id}/attachments/${encodeURIComponent(stored)}` })), url: `${linkBase(req)}/api/tasks/${token}`, resultHtml: d.result === null ? null : safeMarkdown(String(d.result)) }; }));
   }));
   router.get('/admin/api/agents/:id/automation', adminOnly, requireDb, wrap(async (req, res) => {
     if (!(await AgentModel.findByPk(req.params.id))) { res.status(404).json({ error: 'Agent 不存在' }); return; }
@@ -447,7 +456,7 @@ export function createAgentRouter(): Router {
     const id = randomUUID(), tokenExpiresAt = new Date(Date.now() + TASK_TTL_MS).toISOString();
     const token = tokenFor(id, tokenExpiresAt);
     const uploadUrl = `${linkBase(req)}/api/tasks/${token}/upload`;
-    const command = `curl -fsS -X POST '${uploadUrl}' -H 'Content-Type: application/octet-stream' --upload-file `;
+    const command = `sh -c 'f="$1"; curl -fsS -X POST "${uploadUrl}" -H "Content-Type: application/octet-stream" -H "X-File-Name: $(basename "$f")" --upload-file "$f"' _ `;
     const createdAt = new Date().toISOString();
     await AgentTaskModel.create({ id, agentId: req.params.id, content: command, tokenExpiresAt, status: 'pending', result: null, reportedAt: null, reportSource: null, createdAt });
     publishAgentTask(req.params.id, { taskId: id, url: `${linkBase(req)}/api/tasks/${token}`, createdAt, expiresAt: tokenExpiresAt });
@@ -477,6 +486,7 @@ export function createAgentRouter(): Router {
   router.get('/admin/api/tasks/:id/attachments/:file', adminOnly, requireDb, (req, res) => {
     const meta = attachmentMeta(req.params.id).find(a => a.path === req.params.file);
     if (!meta) { res.status(404).json({ error: '附件不存在或已过期' }); return; }
+    res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(meta.name)}`);
     res.type(meta.type).sendFile(path.join(ATTACHMENT_DIR, meta.path));
   });
 
@@ -494,6 +504,7 @@ export function createAgentRouter(): Router {
     if (!task) { res.status(403).json({ error: '任务凭证无效或已过期' }); return; }
     const meta = attachmentMeta(String(task.id)).find(a => a.path === req.params.file);
     if (!meta) { res.status(404).json({ error: '附件不存在或已过期' }); return; }
+    res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(meta.name)}`);
     res.type(meta.type).sendFile(path.join(ATTACHMENT_DIR, meta.path));
   }));
   router.post('/api/tasks/:token/upload', express.raw({ type: '*/*', limit: `${MAX_ATTACHMENT_BYTES}b` }), requireDb, wrap(async (req, res) => {

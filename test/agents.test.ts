@@ -103,11 +103,14 @@ describe('Admin AI 对话和任务链接', () => {
     const uploadTaskResponse = await post(`${base}/admin/api/agents/${agent.id}/upload-tasks`, {}, { ...admin, Origin: base });
     expect(uploadTaskResponse.status).toBe(201);
     const uploadTask: any = await uploadTaskResponse.json();
-    expect(uploadTask.command).toContain('--upload-file ');
-    const uploaded = await fetch(uploadTask.uploadUrl, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: 'uploaded content' });
+    expect(uploadTask.command).toContain('--upload-file "$f"');
+    expect(uploadTask.command).toContain('X-File-Name');
+    const uploaded = await fetch(uploadTask.uploadUrl, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-File-Name': 'notes.md' }, body: '# uploaded content' });
     expect(uploaded.status).toBe(200);
     const uploadedData: any = await uploaded.json();
     expect(uploadedData.status).toBe('reported');
+    expect(uploadedData.attachment.name).toBe('notes.md');
+    expect(uploadedData.attachment.type).toContain('text/markdown');
     expect((await fetch(uploadedData.attachment.url)).status).toBe(200);
     const pollUrl = `${base}/api/agents/${agent.id}/tasks/poll`;
     const pollAgents: any[] = (await (await fetch(`${base}/admin/api/agents`, { headers: admin })).json()) as any[];
