@@ -46,7 +46,7 @@ export async function startServer(port: number = config.port): Promise<Server> {
   const server = app.listen(port, config.host, () => {
     printBanner();
   });
-  attachAgentTaskWebSocket(server, pollTokenMatchesValue);
+  attachAgentTaskWebSocket(server, (agentId, token) => pollTokenMatchesValue(token, agentId));
   startKeepAlive();
   registerGracefulShutdown(server);
   return server;
