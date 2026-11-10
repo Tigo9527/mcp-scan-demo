@@ -1,5 +1,5 @@
 /** Admin AI 对话与限时任务链接。任务数据直接写入现有 Sequelize 数据库。 */
-import { Router, type Request, type Response, type NextFunction } from 'express';
+import express, { Router, type Request, type Response, type NextFunction } from 'express';
 import { createHmac, hkdfSync, randomUUID, timingSafeEqual } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -126,6 +126,15 @@ function deleteAttachmentMeta(taskId: string): void {
   for (const a of attachmentMeta(taskId)) { try { fs.rmSync(path.join(ATTACHMENT_DIR, a.path), { force: true }); } catch {} }
   try { fs.rmSync(path.join(ATTACHMENT_DIR, `${taskId}.json`), { force: true }); } catch {}
 }
+function saveUploadedFile(taskId: string, buffer: Buffer, name: string, type: string): AttachmentMeta {
+  if (!buffer.length || buffer.length > MAX_ATTACHMENT_BYTES) throw new Error('文件不能为空且不能超过 5MB');
+  fs.mkdirSync(ATTACHMENT_DIR, { recursive: true });
+  const stored = `${taskId}-${randomUUID()}.bin`;
+  fs.writeFileSync(path.join(ATTACHMENT_DIR, stored), buffer, { flag: 'wx' });
+  const item: AttachmentMeta = { name: cleanAttachmentName(name) || 'uploaded-file', type: type || 'application/octet-stream', size: buffer.length, path: stored, createdAt: new Date().toISOString() };
+  fs.writeFileSync(path.join(ATTACHMENT_DIR, `${taskId}.json`), JSON.stringify([item]));
+  return item;
+}
 cleanupAttachments();
 const attachmentCleanupTimer = setInterval(cleanupAttachments, 60 * 60 * 1000);
 attachmentCleanupTimer.unref();
@@ -234,7 +243,7 @@ function conversationHtml(base: string, agent: Record<string, unknown>): string 
   return page({ title: `与 ${String(agent.name)} 对话`, base, active: 'admin', adminTab: 'agents', bodyClass: 'agent-conversation', body: `
 <p><a href="/admin/agents">← Agent 列表</a></p><h1>${esc(agent.name)}</h1><p>${esc(agent.description)}</p>
 <div id="messages" class="empty">加载中…</div>
-<form id="create-task" class="card"><div class="task-form-header"><label for="task-content">任务内容</label><button id="all-tasks-link" class="text-link" type="button">显示全部任务</button></div>
+<form id="create-task" class="card"><div class="task-form-header"><label for="task-content">任务内容</label><span class="task-form-links"><button id="upload-task-link" class="btn small alt" type="button">上传文件任务</button><button id="all-tasks-link" class="text-link" type="button">显示全部任务</button></span></div>
 <div id="task-content" class="rich-editor" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="输入任务，支持粘贴图片或选择附件"></div>
 <div class="editor-tools"><label class="file-picker" for="task-files">📎 选择或拖入文件</label><input id="task-files" type="file" multiple><span class="file-hint">单个 ≤5MB · 保存 1 天</span><span id="task-attachments" class="file-chips"></span></div>
 <div class="task-actions"><label class="switch-control"><input id="automation-switch" type="checkbox"><span class="switch-slider" aria-hidden="true"></span><span>自动任务</span></label><button id="unreported-toggle" class="text-link" type="button" aria-pressed="false">仅看未回报</button><button class="btn task-submit" type="submit">生成任务链接</button></div><p id="automation-state" class="muted" role="status">读取自动任务状态…</p><p id="task-status" class="muted" role="status"></p>
@@ -244,6 +253,7 @@ const agentId=${JSON.stringify(String(agent.id))};
 const messages=document.getElementById('messages'),status=document.getElementById('task-status');
 const automationSwitch=document.getElementById('automation-switch'),automationState=document.getElementById('automation-state'),unreportedToggle=document.getElementById('unreported-toggle');
 let onlyUnreported=false,showAllTasks=false;
+document.getElementById('upload-task-link').addEventListener('click',async()=>{const button=document.getElementById('upload-task-link');button.disabled=true;status.textContent='正在生成上传任务…';try{const r=await fetch('/admin/api/agents/'+encodeURIComponent(agentId)+'/upload-tasks',{method:'POST',headers:{'Content-Type':'application/json'}});const data=await r.json();if(!r.ok)throw new Error(data.error||'生成失败');status.textContent='上传任务已生成，命令已复制；在 Linux 终端命令末尾加文件路径后执行。';await copyGeneratedText(data.command);loadTasks();}catch(error){status.textContent=error.message||'生成失败';}finally{button.disabled=false;}});
 document.getElementById('all-tasks-link').addEventListener('click',()=>{showAllTasks=!showAllTasks;loadTasks();messages.scrollIntoView({behavior:'smooth',block:'start'});});
 unreportedToggle.addEventListener('click',()=>{onlyUnreported=!onlyUnreported;unreportedToggle.setAttribute('aria-pressed',String(onlyUnreported));unreportedToggle.textContent=onlyUnreported?'显示全部任务':'仅看未回报';loadTasks();});
 async function loadAutomation(){const r=await fetch('/admin/api/agents/'+encodeURIComponent(agentId)+'/automation');if(!r.ok)return;const data=await r.json();const state=data.state;automationSwitch.checked=state==='on'||state==='starting';automationSwitch.disabled=state==='starting'||state==='stopping';automationState.textContent=({off:'自动任务未开启',starting:'等待 AI 启动并回报',on:'AI 已确认启动',stopping:'等待 AI 领取停止任务并回报'})[state]||'状态未知';}
@@ -317,7 +327,8 @@ async function loadTasks(){
     const title=document.createElement('span');title.className='cb-title';title.textContent='任务链接（请交给 CLI AI）';
     const openLink=document.createElement('a');openLink.className='btn small link-open';openLink.href=t.url;openLink.target='_blank';openLink.rel='noopener';openLink.textContent='查看任务';
     const copy=document.createElement('button');copy.type='button';copy.className='btn small copy';copy.textContent='复制';
-    head.append(title,openLink,copy);const pre=document.createElement('pre');const code=document.createElement('code');code.textContent=shareText(t.url);pre.append(code);linkBox.append(head,pre);c.append(linkBox);
+    const copyText=t.uploadCommand||shareText(t.url); title.textContent=t.uploadCommand?'文件上传命令（末尾加文件路径）':'任务链接（请交给 CLI AI）';
+    head.append(title,openLink,copy);const pre=document.createElement('pre');const code=document.createElement('code');code.textContent=copyText;pre.append(code);linkBox.append(head,pre);c.append(linkBox);
     linkBox.hidden=!expandedTaskLinks.has(t.id);linkToggle.textContent=linkBox.hidden?'显示任务链接':'收起任务链接';linkToggle.setAttribute('aria-expanded',String(!linkBox.hidden));
     linkToggle.addEventListener('click',()=>{linkBox.hidden=!linkBox.hidden;if(linkBox.hidden)expandedTaskLinks.delete(t.id);else expandedTaskLinks.add(t.id);linkToggle.textContent=linkBox.hidden?'显示任务链接':'收起任务链接';linkToggle.setAttribute('aria-expanded',String(!linkBox.hidden));});
     if(t.attachments?.length){const files=document.createElement('div');files.className='attachment-list';for(const a of t.attachments){const item=document.createElement('a');item.href=a.url;item.target='_blank';item.rel='noopener';item.textContent=a.name+' ('+Math.round(a.size/1024)+' KB)';files.append(item);}c.append(files);}
@@ -375,7 +386,7 @@ export function createAgentRouter(): Router {
   router.get('/admin/api/agents/:id/tasks', adminOnly, requireDb, wrap(async (req, res) => {
     if (!(await AgentModel.findByPk(req.params.id))) { res.status(404).json({ error: 'Agent 不存在' }); return; }
     const tasks = await AgentTaskModel.findAll({ where: { agentId: req.params.id }, order: [['createdAt', 'ASC']] });
-    res.json(tasks.map(t => { const d = row(t); const token = tokenFor(String(d.id), String(d.tokenExpiresAt)); return { ...d, contentHtml: taskContentWithAttachmentUrls(String(d.content), String(d.id), token, req), attachments: attachmentMeta(String(d.id)).map(({ name, type, size, path: stored }) => ({ name, type, size, url: `${linkBase(req)}/admin/api/tasks/${d.id}/attachments/${encodeURIComponent(stored)}` })), url: `${linkBase(req)}/api/tasks/${token}`, resultHtml: d.result === null ? null : safeMarkdown(String(d.result)) }; }));
+    res.json(tasks.map(t => { const d = row(t); const token = tokenFor(String(d.id), String(d.tokenExpiresAt)); const uploadCommand = /^curl\s[\s\S]*--upload-file\s*$/.test(String(d.content)); return { ...d, contentHtml: taskContentWithAttachmentUrls(String(d.content), String(d.id), token, req), uploadCommand: uploadCommand ? String(d.content) : null, attachments: attachmentMeta(String(d.id)).map(({ name, type, size, path: stored }) => ({ name, type, size, url: `${linkBase(req)}/admin/api/tasks/${d.id}/attachments/${encodeURIComponent(stored)}` })), url: `${linkBase(req)}/api/tasks/${token}`, resultHtml: d.result === null ? null : safeMarkdown(String(d.result)) }; }));
   }));
   router.get('/admin/api/agents/:id/automation', adminOnly, requireDb, wrap(async (req, res) => {
     if (!(await AgentModel.findByPk(req.params.id))) { res.status(404).json({ error: 'Agent 不存在' }); return; }
@@ -431,6 +442,18 @@ export function createAgentRouter(): Router {
     res.status(201).json({ taskId: id, url, expiresAt: tokenExpiresAt, attachments: attachments.map(({ name, type, size }) => ({ name, type, size })) });
   }));
 
+  router.post('/admin/api/agents/:id/upload-tasks', adminOnly, requireSameOrigin, requireDb, wrap(async (req, res) => {
+    if (!(await AgentModel.findByPk(req.params.id))) { res.status(404).json({ error: 'Agent 不存在' }); return; }
+    const id = randomUUID(), tokenExpiresAt = new Date(Date.now() + TASK_TTL_MS).toISOString();
+    const token = tokenFor(id, tokenExpiresAt);
+    const uploadUrl = `${linkBase(req)}/api/tasks/${token}/upload`;
+    const command = `curl -fsS -X POST '${uploadUrl}' -H 'Content-Type: application/octet-stream' --upload-file `;
+    const createdAt = new Date().toISOString();
+    await AgentTaskModel.create({ id, agentId: req.params.id, content: command, tokenExpiresAt, status: 'pending', result: null, reportedAt: null, reportSource: null, createdAt });
+    publishAgentTask(req.params.id, { taskId: id, url: `${linkBase(req)}/api/tasks/${token}`, createdAt, expiresAt: tokenExpiresAt });
+    res.status(201).json({ taskId: id, url: `${linkBase(req)}/api/tasks/${token}`, uploadUrl, command, expiresAt: tokenExpiresAt });
+  }));
+
   router.patch('/admin/api/tasks/:id', adminOnly, requireSameOrigin, requireDb, wrap(async (req, res) => {
     const content = cleanText(req.body?.content, 20_000);
     if (!content) { res.status(400).json({ error: '任务内容必填且不超过 20000 字' }); return; }
@@ -472,6 +495,18 @@ export function createAgentRouter(): Router {
     const meta = attachmentMeta(String(task.id)).find(a => a.path === req.params.file);
     if (!meta) { res.status(404).json({ error: '附件不存在或已过期' }); return; }
     res.type(meta.type).sendFile(path.join(ATTACHMENT_DIR, meta.path));
+  }));
+  router.post('/api/tasks/:token/upload', express.raw({ type: '*/*', limit: `${MAX_ATTACHMENT_BYTES}b` }), requireDb, wrap(async (req, res) => {
+    const task = await taskFromToken(req.params.token);
+    if (!task) { res.status(403).json({ error: '任务凭证无效或已过期' }); return; }
+    if (task.status !== 'pending') { res.status(409).json({ error: '任务已经完成或已被处理' }); return; }
+    const buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    let item: AttachmentMeta;
+    try { item = saveUploadedFile(String(task.id), buffer, String(req.headers['x-file-name'] || 'uploaded-file'), String(req.headers['content-type'] || 'application/octet-stream')); } catch (err) { res.status(400).json({ error: err instanceof Error ? err.message : '文件无效' }); return; }
+    const reportedAt = new Date().toISOString();
+    const result = `文件已上传：${item.name}（${item.size} bytes）`;
+    await AgentTaskModel.update({ status: 'reported', result, reportedAt, reportSource: req.ip || 'unknown' }, { where: { id: task.id, status: 'pending' } });
+    res.json({ ok: true, taskId: task.id, status: 'reported', result, attachment: { name: item.name, type: item.type, size: item.size, url: `${linkBase(req)}/api/tasks/${req.params.token}/attachments/${encodeURIComponent(item.path)}` } });
   }));
   router.post('/api/tasks/:token/report', requireSameOrigin, requireDb, wrap(async (req, res) => {
     if (rateLimited(req)) { res.status(429).json({ error: '回报过于频繁' }); return; }

@@ -82,6 +82,9 @@ describe('Admin AI 对话和任务链接', () => {
     expect(html).toContain('onlyUnreported');
     expect(html).toContain('class="agent-conversation"');
     expect(html).toContain('playReportSound()');
+    expect(html).toContain('上传文件任务');
+    expect(html).toContain('upload-tasks');
+    expect(html).toContain('t.uploadCommand||shareText(t.url)');
     expect(html).toContain("c.id='task-'+t.id");
     expect(html).toContain("anchor.href='#'+c.id");
     expect(html).toContain('initialTaskScrollPending');
@@ -97,6 +100,15 @@ describe('Admin AI 对话和任务链接', () => {
     const markdownData: any = await (await fetch(markdownTask.url)).json();
     expect(markdownData.content).toContain('<h1>Markdown 标题</h1>');
     expect(markdownData.content).toContain('<li>第一项</li>');
+    const uploadTaskResponse = await post(`${base}/admin/api/agents/${agent.id}/upload-tasks`, {}, { ...admin, Origin: base });
+    expect(uploadTaskResponse.status).toBe(201);
+    const uploadTask: any = await uploadTaskResponse.json();
+    expect(uploadTask.command).toContain('--upload-file ');
+    const uploaded = await fetch(uploadTask.uploadUrl, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: 'uploaded content' });
+    expect(uploaded.status).toBe(200);
+    const uploadedData: any = await uploaded.json();
+    expect(uploadedData.status).toBe('reported');
+    expect((await fetch(uploadedData.attachment.url)).status).toBe(200);
     const pollUrl = `${base}/api/agents/${agent.id}/tasks/poll`;
     const pollAgents: any[] = (await (await fetch(`${base}/admin/api/agents`, { headers: admin })).json()) as any[];
     const pollToken = pollAgents.find((a: any) => a.id === agent.id).pollToken;

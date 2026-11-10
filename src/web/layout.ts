@@ -107,6 +107,7 @@ body.agent-conversation{--fg:#e8edf3;--muted:#9ba9b8;--line:#344150;--bg:#111923
 .automation-controls .btn{margin:0}
 .task-form-header{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .task-form-header label{margin-top:0}
+.task-form-links{display:flex;align-items:center;gap:10px}
 .text-link{padding:3px 0;border:0;background:none;color:var(--acc);font:inherit;font-size:.88em;cursor:pointer}
 .text-link:hover{text-decoration:underline}
 .editor-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px dashed var(--line);padding-top:8px;margin-top:8px;color:var(--muted);font-size:.85em}
