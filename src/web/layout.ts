@@ -20,7 +20,7 @@ h1{font-size:1.6em;margin:24px 0 8px}
 h2{font-size:1.25em;margin:28px 0 10px}
 h3{font-size:1.05em;margin:18px 0 8px}
 .muted{color:var(--muted);font-size:.92em}
-.card{border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:14px 0}
+.card{border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:14px 0;position:relative}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:14px 0}
 .stat{border:1px solid var(--line);border-radius:12px;padding:14px 16px}
 .stat .n{font-size:1.7em;font-weight:600;line-height:1.2}
@@ -115,6 +115,12 @@ body.agent-conversation{--fg:#e8edf3;--muted:#9ba9b8;--line:#344150;--bg:#111923
 .file-chips{display:flex;gap:5px;flex-wrap:wrap}
 .task-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px}
 .task-submit{margin-left:auto}
+.task-menu{position:absolute;top:12px;right:14px;z-index:2}
+.task-menu summary{list-style:none;cursor:pointer;color:var(--muted);font-size:1.3em;line-height:1;padding:2px 6px;border-radius:6px}
+.task-menu summary::-webkit-details-marker{display:none}
+.task-menu summary:hover{background:var(--soft);color:var(--fg)}
+.task-menu .text-link{display:block;background:var(--bg);border:1px solid var(--line);padding:5px 10px;border-radius:6px;white-space:nowrap;box-shadow:0 3px 10px rgba(0,0,0,.12)}
+.danger-link{color:var(--err)}
 .switch-control{display:inline-flex;align-items:center;gap:7px;margin:0;color:var(--muted);font-size:.9em;cursor:pointer}
 .switch-control input{position:absolute;opacity:0;width:1px;height:1px}
 .switch-slider{width:30px;height:18px;border-radius:999px;background:var(--line);position:relative;transition:.15s}

@@ -75,6 +75,9 @@ describe('Admin AI 对话和任务链接', () => {
     expect(html).toContain('const markdownSource=typeof t.content');
     expect(html).toContain('自动任务');
     expect(html).toContain('automationSwitch');
+    expect(html).toContain('task-menu');
+    expect(html).toContain("deleteButton.textContent='删除'");
+    expect(html).toContain('slice(-5)');
     expect(html).toContain('仅看未回报');
     expect(html).toContain('onlyUnreported');
     expect(html).toContain('class="agent-conversation"');
@@ -154,6 +157,7 @@ describe('Admin AI 对话和任务链接', () => {
     expect(messages[0].resultHtml).not.toContain('<script>');
     expect(messages[0].resultHtml).not.toContain('href="javascript:');
     expect((await fetch(`${base}/admin/api/agents/${agent.id}/tasks`)).status).toBe(403);
+    expect((await fetch(`${base}/admin/api/tasks/${taskId}`, { method: 'DELETE', headers: { ...admin, Origin: base } })).status).toBe(200);
   });
 
   it('拒绝跨站写入、非法内容与过期链接', async () => {

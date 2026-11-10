@@ -239,8 +239,8 @@ function conversationHtml(base: string, agent: Record<string, unknown>): string 
 const agentId=${JSON.stringify(String(agent.id))};
 const messages=document.getElementById('messages'),status=document.getElementById('task-status');
 const automationSwitch=document.getElementById('automation-switch'),automationState=document.getElementById('automation-state'),unreportedToggle=document.getElementById('unreported-toggle');
-document.getElementById('all-tasks-link').addEventListener('click',()=>{onlyUnreported=false;unreportedToggle.setAttribute('aria-pressed','false');unreportedToggle.textContent='仅看未回报';loadTasks();messages.scrollIntoView({behavior:'smooth',block:'start'});});
-let onlyUnreported=false;
+let onlyUnreported=false,showAllTasks=false;
+document.getElementById('all-tasks-link').addEventListener('click',()=>{showAllTasks=!showAllTasks;loadTasks();messages.scrollIntoView({behavior:'smooth',block:'start'});});
 unreportedToggle.addEventListener('click',()=>{onlyUnreported=!onlyUnreported;unreportedToggle.setAttribute('aria-pressed',String(onlyUnreported));unreportedToggle.textContent=onlyUnreported?'显示全部任务':'仅看未回报';loadTasks();});
 async function loadAutomation(){const r=await fetch('/admin/api/agents/'+encodeURIComponent(agentId)+'/automation');if(!r.ok)return;const data=await r.json();const state=data.state;automationSwitch.checked=state==='on'||state==='starting';automationSwitch.disabled=state==='starting'||state==='stopping';automationState.textContent=({off:'自动任务未开启',starting:'等待 AI 启动并回报',on:'AI 已确认启动',stopping:'等待 AI 领取停止任务并回报'})[state]||'状态未知';}
 automationSwitch.addEventListener('change',async()=>{const enabling=automationSwitch.checked;automationSwitch.disabled=true;try{const r=await fetch('/admin/api/agents/'+encodeURIComponent(agentId)+'/automation/'+(enabling?'start':'stop'),{method:'POST'});const data=await r.json();if(!r.ok)throw new Error(data.error||'操作失败');if(enabling){const copied=await copyGeneratedText(shareText(data.url));automationState.textContent=copied?'启动指令已复制，请粘贴给 AI':'启动指令已创建，请复制任务链接交给 AI';}else automationState.textContent='停止任务已创建，等待 AI 自动领取';await loadAutomation();}catch(error){automationSwitch.checked=!enabling;automationState.textContent=error.message||'操作失败';automationSwitch.disabled=false;}});
@@ -286,12 +286,15 @@ async function loadTasks(){
   tasks.forEach(t=>{if(t.result!==null)knownReported.add(t.id);});
   const taskIds=new Set(tasks.map(t=>t.id));
   for(const id of expandedTaskLinks)if(!taskIds.has(id))expandedTaskLinks.delete(id);
-  const visibleTasks=onlyUnreported?tasks.filter(t=>t.result===null):tasks;
+  const filteredTasks=onlyUnreported?tasks.filter(t=>t.result===null):tasks;
+  const visibleTasks=showAllTasks?filteredTasks:filteredTasks.slice(-5);
+  document.getElementById('all-tasks-link').textContent=showAllTasks?'仅显示最近 5 个任务':'显示全部任务';
   messages.replaceChildren();
   if(!visibleTasks.length){messages.className='empty';messages.textContent=onlyUnreported?'暂无未回报任务':'暂无对话。输入任务后生成链接。';taskListInitialized=true;return;}
   messages.className='';
   for(const t of visibleTasks){const c=document.createElement('section');c.className=t.result!==null?'card task-reported':'card';
     const label=document.createElement('strong');label.textContent='你 · '+formatLocalTime(t.createdAt);
+    const menu=document.createElement('details');menu.className='task-menu';const menuButton=document.createElement('summary');menuButton.title='任务菜单';menuButton.textContent='⋯';const deleteButton=document.createElement('button');deleteButton.type='button';deleteButton.className='text-link danger-link';deleteButton.textContent='删除';deleteButton.addEventListener('click',async()=>{if(!window.confirm('确定删除这个任务？删除后无法恢复。'))return;deleteButton.disabled=true;const rr=await fetch('/admin/api/tasks/'+encodeURIComponent(t.id),{method:'DELETE'});if(!rr.ok){deleteButton.disabled=false;status.textContent='删除失败';return;}menu.open=false;status.textContent='任务已删除';loadTasks();});menu.append(menuButton,deleteButton);c.append(menu);
     const content=document.createElement('div');content.className='task-content';content.contentEditable='false';if(t.contentHtml)content.innerHTML=t.contentHtml;else content.textContent=t.content;
     c.append(label,content);
     const editActions=document.createElement('div');editActions.className='row';
@@ -426,6 +429,14 @@ export function createAgentRouter(): Router {
     await task.update({ content: safeTaskContent(content), tokenExpiresAt, status: 'pending', result: null, reportedAt: null, reportSource: null });
     const url = `${linkBase(req)}/api/tasks/${tokenFor(req.params.id, tokenExpiresAt)}`;
     res.json({ taskId: req.params.id, url, expiresAt: tokenExpiresAt });
+  }));
+
+  router.delete('/admin/api/tasks/:id', adminOnly, requireSameOrigin, requireDb, wrap(async (req, res) => {
+    const task = await AgentTaskModel.findByPk(req.params.id);
+    if (!task) { res.status(404).json({ error: '任务不存在' }); return; }
+    deleteAttachmentMeta(req.params.id);
+    await task.destroy();
+    res.json({ ok: true, taskId: req.params.id });
   }));
 
   router.get('/admin/api/tasks/:id/attachments/:file', adminOnly, requireDb, (req, res) => {
