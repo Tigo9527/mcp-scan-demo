@@ -301,7 +301,7 @@ async function loadTasks(){
     const linkToggle=document.createElement('button');linkToggle.type='button';linkToggle.className='btn small link-toggle';linkToggle.textContent='显示任务链接';
     editActions.append(editButton,saveButton,cancelButton,linkToggle);c.append(editActions);
     let originalContent=t.content;
-    const markdownSource=typeof t.content==='string'&&!/<\/?[a-z][^>]*>/i.test(t.content);
+    const markdownSource=typeof t.content==='string'&&!t.content.includes('<');
     editButton.addEventListener('click',()=>{originalContent=content.innerHTML;if(markdownSource)content.textContent=t.content;content.contentEditable='true';content.classList.add('editing');editButton.hidden=true;saveButton.hidden=false;cancelButton.hidden=t.result!==null;content.focus();});
     cancelButton.addEventListener('click',()=>{content.innerHTML=originalContent;content.contentEditable='false';content.classList.remove('editing');editButton.hidden=false;saveButton.hidden=true;cancelButton.hidden=true;});
     saveButton.addEventListener('click',async()=>{const next=(content.innerHTML||'').trim();if(!next){status.textContent='任务内容不能为空';return;}saveButton.disabled=true;const rr=await fetch('/admin/api/tasks/'+encodeURIComponent(t.id),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:next})});const dd=await rr.json();saveButton.disabled=false;if(!rr.ok){status.textContent=dd.error||'编辑失败';return;}status.textContent='任务已更新并重新生成链接。';await copyGeneratedText(shareText(dd.url));loadTasks();});
