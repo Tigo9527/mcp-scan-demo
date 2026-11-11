@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Server } from 'node:http';
+import { Script } from 'node:vm';
 import { createApp } from '../src/web/app.js';
 import { AgentTaskModel, closeDb, initDb } from '../src/db.js';
 
@@ -51,6 +52,16 @@ describe('Admin AI 对话和任务链接', () => {
     expect(list.some((a: { id: string }) => a.id === agent.id)).toBe(true);
     const page = await fetch(`${base}/admin/agents/${agent.id}`, { headers: admin });
     expect(page.status).toBe(200);
+    // 浏览器登录后保存的 mcp_admin Cookie；直接构造等价 Cookie，避免测试间共享 ADMIN_TOKEN 环境互相干扰。
+    const cookie = `mcp_admin=${encodeURIComponent(admin['X-Admin-Token'])}`;
+    const authenticatedPage = await fetch(`${base}/admin/agents/${agent.id}`, { headers: { Cookie: cookie! } });
+    expect(authenticatedPage.status).toBe(200);
+    const browserHtml = await authenticatedPage.text();
+    expect(browserHtml).toContain('id=\"messages\"');
+    for (const match of browserHtml.matchAll(/<script>([\s\S]*?)<\/script>/g)) new Script(match[1]);
+    const browserTasks = await fetch(`${base}/admin/api/agents/${agent.id}/tasks`, { headers: { Cookie: cookie! } });
+    expect(browserTasks.status).toBe(200);
+    expect(Array.isArray(await browserTasks.json())).toBe(true);
     const html = await page.text();
     expect(html).toContain('生成任务链接');
     expect(html).toContain('Admin 登录已过期，请重新登录后刷新。');
