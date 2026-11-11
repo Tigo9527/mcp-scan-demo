@@ -322,7 +322,11 @@ function playReportSound(){
   }catch(_err){}
 }
 async function loadTasks(){
-  const r=await fetch('/admin/api/agents/'+encodeURIComponent(agentId)+'/tasks');
+  const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),10000);
+  let r;
+  try{r=await fetch('/admin/api/agents/'+encodeURIComponent(agentId)+'/tasks',{credentials:'same-origin',signal:controller.signal});}
+  catch(error){messages.innerHTML='<p class="muted">对话列表加载失败，请检查登录状态或网络连接。</p><button class="btn small" type="button" onclick="loadTasks()">重试</button>';return;}
+  finally{clearTimeout(timeout);}
   if(!r.ok){if(r.status===401||r.status===403){messages.innerHTML='<p class="muted">Admin 登录已过期，请重新登录后刷新。</p><a class="btn small" href="/admin/login">重新登录</a>';}else messages.textContent='加载失败（HTTP '+r.status+'）';return;}
   const tasks=await r.json();
   if(!taskListInitialized){const latest=tasks.slice().reverse().find(t=>t.result!==null);if(latest)expandedTaskReplies.add(latest.id);}
