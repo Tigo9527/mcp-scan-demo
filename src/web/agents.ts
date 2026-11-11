@@ -37,7 +37,7 @@ function adminOnly(req: Request, res: Response, next: NextFunction): void {
   if (isAdminRequest(req)) { next(); return; }
   // 页面请求缺少/失效的 Admin Cookie 时回到登录页，避免浏览器直接看到 JSON。
   // API 请求仍保持 403 JSON，便于脚本明确处理权限失败。
-  if (req.method === 'GET' && req.path.startsWith('/admin/agents') && req.accepts('html')) {
+  if (req.method === 'GET' && req.path.startsWith('/admin/agents') && String(req.headers.accept ?? '').toLowerCase().includes('text/html')) {
     res.redirect(302, '/admin/login');
     return;
   }
