@@ -86,6 +86,8 @@ nav a.active{opacity:1;font-weight:600;color:var(--acc)}
 .rich-editor:empty:before{content:attr(data-placeholder);color:var(--muted)}
 .rich-editor img{max-width:240px;max-height:180px;display:block;margin:6px 0;border-radius:6px}
 .attachment-list{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;font-size:.9em}
+.edit-attachments{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:8px 0;font-size:.9em;color:var(--muted)}
+.file-chip{display:inline-block;padding:2px 7px;border:1px solid var(--line);border-radius:999px;background:var(--soft);color:var(--fg)}
 .codeblock{border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:12px 0}
 .codeblock .cb-head{display:flex;align-items:center;gap:8px;background:var(--soft);
   padding:8px 12px;border-bottom:1px solid var(--line);font-size:.9em}

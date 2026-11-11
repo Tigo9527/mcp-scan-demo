@@ -87,6 +87,8 @@ describe('Admin AI 对话和任务链接', () => {
     expect(html).toContain('contenteditable="true"');
     expect(html).toContain('task-files');
     expect(html).toContain("taskContentEditor.addEventListener('drop'");
+    expect(html).toContain("editAttachments.hidden=false");
+    expect(html).toContain("file-chip");
     expect(html).toContain('clipboardData');
     expect(html).toContain('cancelButton.hidden=t.result!==null');
     expect(html).toContain('toLocaleString(undefined,{dateStyle:\'medium\',timeStyle:\'short\'})');
