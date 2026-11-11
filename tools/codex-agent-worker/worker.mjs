@@ -11,13 +11,19 @@ const STATE_FILE = resolve(process.env.CODEX_WORKER_STATE || './codex-agent-work
 async function loadState() { try { return JSON.parse(await readFile(STATE_FILE, 'utf8')); } catch { return {}; } }
 async function saveState(state) { await mkdir(dirname(STATE_FILE), { recursive: true }); await writeFile(STATE_FILE, JSON.stringify(state, null, 2) + '\n'); }
 const sleep = ms => new Promise(resolveSleep => setTimeout(resolveSleep, ms));
+function eventSummary(event) {
+  const item = event?.item || {};
+  const detail = item.type ? ` item=${item.type}` : '';
+  const text = typeof item.text === 'string' ? `: ${item.text.replace(/\s+/g, ' ').slice(0, 180)}` : '';
+  return `${event?.type || 'event'}${detail}${text}`;
+}
 
 export async function start(startUrl, { fetchImpl = fetch, runner = runCodex, now = () => Date.now(), once = false } = {}) {
   const startup = await getTask(startUrl, fetchImpl);
   const { pollUrl, pollToken } = parsePollDetails(startup.content);
   const state = await loadState();
   state.agentId = startup.agent.id; state.pollUrl = pollUrl; state.lastActivity = now(); state.startedAt = new Date(now()).toISOString();
-  const boot = await runner('worker 已连接。请保持这个 Codex 会话可恢复，等待后续自动任务。只回复 READY。', { sessionId: state.sessionId, onEvent: event => console.log('[codex]', event.type || 'event') });
+  const boot = await runner('worker 已连接。请保持这个 Codex 会话可恢复，等待后续自动任务。只回复 READY。', { sessionId: state.sessionId, onEvent: event => console.log(`[codex] ${eventSummary(event)}`) });
   state.sessionId = boot.sessionId || state.sessionId;
   await saveState(state);
   const welcome = `Codex 实例已经启动，session id 是 ${state.sessionId || '未返回（见状态文件）'}。worker 已连接 Agent ${startup.agent.name}，轮询间隔 ${POLL_MS / 1000} 秒。`;
@@ -28,15 +34,20 @@ export async function start(startUrl, { fetchImpl = fetch, runner = runCodex, no
   process.once('SIGTERM', () => { stopping = true; }); process.once('SIGINT', () => { stopping = true; });
   while (!stopping) {
     const data = await pollTasks(pollUrl, pollToken, fetchImpl);
+    console.log(`[worker] poll: ${data.tasks?.length || 0} pending task(s)`);
     if (data.tasks?.length) {
       for (const pointer of data.tasks) {
         const task = await getTask(pointer.url, fetchImpl);
-        const prompt = `执行下面的 AI 自动任务。完成后只输出面向用户的 Markdown 结果，不要启动子 Agent：\n\n${task.content}`;
-        const execution = await runner(prompt, { sessionId, onEvent: event => console.log('[codex]', event.type || 'event') });
+        const taskText = String(task.content || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+        console.log(`[worker] received task ${task.taskId}: ${taskText.slice(0, 240)}`);
+        const prompt = `执行下面的 AI 自动任务。完成后只输出面向用户的 Markdown 结果，不要启动子 Agent。任务编号：${task.taskId}\n\n${task.content}`;
+        const execution = await runner(prompt, { sessionId, onEvent: event => console.log(`[codex:${task.taskId}] ${eventSummary(event)}`) });
         sessionId = execution.sessionId || sessionId;
         state.sessionId = sessionId; state.lastTaskId = task.taskId; state.lastActivity = now();
         await saveState(state);
+        console.log(`[worker] task ${task.taskId} completed; reporting result`);
         await reportTask(task.report, execution.result, fetchImpl);
+        console.log(`[worker] task ${task.taskId} reported successfully`);
         lastActivity = now();
       }
     }
