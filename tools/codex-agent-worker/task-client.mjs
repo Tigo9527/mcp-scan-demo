@@ -21,7 +21,8 @@ export async function reportTask(report, result, fetchImpl = fetch) {
 }
 
 export function parsePollDetails(content) {
-  const match = String(content).match(/(?:通过网络访问|访问)\s+(https?:\/\/[^\s，,。]+\/api\/agents\/[^\s，,。]+\/tasks\/poll)[，,。\s]+请求头\s+X-Agent-Token:\s*([^。\s]+)/);
+  const plain = String(content).replace(/<[^>]*>/g, ' ');
+  const match = plain.match(/(?:通过网络访问|访问)\s+(https?:\/\/[^\s，,。]+\/api\/agents\/[^\s，,。]+\/tasks\/poll)[，,。\s]+请求头\s+X-Agent-Token:\s*([^。\s]+)/);
   if (!match) throw new Error('启动任务中没有找到 poll URL 和 X-Agent-Token');
   return { pollUrl: match[1], pollToken: match[2] };
 }

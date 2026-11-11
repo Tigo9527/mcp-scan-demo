@@ -5,7 +5,7 @@
 ## 使用
 
 ```bash
-node tools/codex-agent-worker/worker.mjs 'http://localhost:8003/api/tasks/<启动任务凭证>'
+tools/codex-agent-worker/start-worker.sh 'http://localhost:8003/api/tasks/<启动任务凭证>'
 ```
 
 状态默认写入当前目录的 `codex-agent-worker-state.json`，可用 `CODEX_WORKER_STATE` 指定。`CODEX_WORKER_POLL_MS` 和 `CODEX_WORKER_IDLE_MS` 可调整轮询与空闲停止时间。空闲一小时后 worker 保存 `startUrl`、`pollUrl`、`sessionId` 和停止原因并退出；下次使用保存的启动链接即可恢复。Codex 的执行事件会以 `[codex]` 前缀写入 stdout，便于 systemd/journal 收集进度。

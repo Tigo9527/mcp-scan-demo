@@ -20,7 +20,7 @@ export async function start(startUrl, { fetchImpl = fetch, runner = runCodex, no
   const boot = await runner('worker 已连接。请保持这个 Codex 会话可恢复，等待后续自动任务。只回复 READY。', { sessionId: state.sessionId, onEvent: event => console.log('[codex]', event.type || 'event') });
   state.sessionId = boot.sessionId || state.sessionId;
   await saveState(state);
-  const welcome = `Codex 实例已经启动，session id 是 `${state.sessionId || '未返回（见状态文件）'}`。worker 已连接 Agent ${startup.agent.name}，轮询间隔 ${POLL_MS / 1000} 秒。`;
+  const welcome = `Codex 实例已经启动，session id 是 ${state.sessionId || '未返回（见状态文件）'}。worker 已连接 Agent ${startup.agent.name}，轮询间隔 ${POLL_MS / 1000} 秒。`;
   await reportTask(startup.report, welcome, fetchImpl);
   let sessionId = state.sessionId;
   let lastActivity = now();
