@@ -27,7 +27,8 @@ export async function start(startUrl, { fetchImpl = fetch, runner = runCodex, no
   state.sessionId = boot.sessionId || state.sessionId;
   await saveState(state);
   const welcome = `Codex 实例已经启动，session id 是 ${state.sessionId || '未返回（见状态文件）'}。worker 已连接 Agent ${startup.agent.name}，轮询间隔 ${POLL_MS / 1000} 秒。`;
-  await reportTask(startup.report, welcome, fetchImpl);
+  if (startup.status === 'pending') await reportTask(startup.report, welcome, fetchImpl);
+  else console.log(`[worker] startup task ${startup.taskId} already reported; continuing`);
   let sessionId = state.sessionId;
   let lastActivity = now();
   let stopping = false;
