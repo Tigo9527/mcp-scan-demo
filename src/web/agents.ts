@@ -323,7 +323,7 @@ function playReportSound(){
 }
 async function loadTasks(){
   const r=await fetch('/admin/api/agents/'+encodeURIComponent(agentId)+'/tasks');
-  if(!r.ok){messages.textContent='加载失败';return;}
+  if(!r.ok){if(r.status===401||r.status===403){messages.innerHTML='<p class="muted">Admin 登录已过期，请重新登录后刷新。</p><a class="btn small" href="/admin/login">重新登录</a>';}else messages.textContent='加载失败（HTTP '+r.status+'）';return;}
   const tasks=await r.json();
   if(!taskListInitialized){const latest=tasks.slice().reverse().find(t=>t.result!==null);if(latest)expandedTaskReplies.add(latest.id);}
   const hasNewReport=taskListInitialized&&tasks.some(t=>t.result!==null&&!knownReported.has(t.id));
