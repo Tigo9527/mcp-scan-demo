@@ -264,7 +264,7 @@ function conversationHtml(base: string, agent: Record<string, unknown>): string 
 <div id="template-panel" class="template-panel card" hidden>
   <div class="template-panel-head"><strong>任务模板</strong><button id="template-close" class="text-link" type="button">收起</button></div>
   <div class="template-toolbar"><select id="template-select"><option value="">选择模板…</option></select><button id="template-use" class="btn small" type="button">使用</button><button id="template-edit" class="btn small alt" type="button" disabled>编辑</button><button id="template-delete" class="btn small danger" type="button" disabled>删除</button></div>
-  <div id="template-form" hidden><label for="template-name">模板名称</label><input id="template-name" maxlength="80" required><label for="template-body">模板内容</label><textarea id="template-body" rows="5" maxlength="20000" required></textarea><div class="row"><button id="template-save" class="btn small" type="button">保存模板</button><button id="template-cancel" class="btn small alt" type="button">取消</button></div></div>
+  <div id="template-form" hidden><label for="template-name">模板名称</label><input id="template-name" maxlength="80"><label for="template-body">模板内容</label><textarea id="template-body" rows="5" maxlength="20000"></textarea><div class="row"><button id="template-save" class="btn small" type="button">保存模板</button><button id="template-cancel" class="btn small alt" type="button">取消</button></div></div>
   <button id="template-add" class="text-link" type="button">＋ 新建模板</button><p class="muted">模板只保存在当前浏览器，可随时编辑、删除或一键填入任务。</p>
 </div>
 <div class="editor-tools"><label class="file-picker" for="task-files">📎 选择或拖入文件</label><input id="task-files" type="file" multiple><span class="file-hint">单个 ≤5MB · 保存 1 天</span><span id="task-attachments" class="file-chips"></span></div>
@@ -423,6 +423,17 @@ document.getElementById('task').addEventListener('submit',async e=>{e.preventDef
 
 export function createAgentRouter(): Router {
   const router = Router();
+  router.post('/admin/api/client-errors', adminOnly, requireSameOrigin, (req, res) => {
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    const now = Date.now(); const key = `client:${ip}`; const old = reportAttempts.get(key);
+    if (!old || old.until <= now) reportAttempts.set(key, { count: 1, until: now + 60_000 });
+    else if (++old.count > 10) { res.status(204).end(); return; }
+    const body = req.body && typeof req.body === 'object' ? req.body as Record<string, unknown> : {};
+    const clip = (v: unknown, n: number) => String(v ?? '').slice(0, n);
+    console.error('[browser-js-error]', JSON.stringify({ message: clip(body.message, 500), source: clip(body.source, 300), line: Number(body.line) || 0, column: Number(body.column) || 0, stack: clip(body.stack, 2000), url: clip(body.url, 500), ip }));
+    res.status(204).end();
+  });
+
   router.use(['/agents', '/api/user/agents'], (_req, res, next) => { res.setHeader('Referrer-Policy', 'no-referrer'); res.setHeader('Cache-Control', 'no-store'); next(); });
   router.get('/agents', requireDb, (req, res) => { const user = userAi(req); if (!user) { res.status(403).type('html').send('需要管理员授予 AI 对话权限'); return; } res.type('html').send(userListHtml(deriveBase(req), user)); });
   router.get('/agents/:id', requireDb, wrap(async (req, res) => { const user = userAi(req); if (!user) { res.status(403).type('text').send('需要管理员授予 AI 对话权限'); return; } const agent = await AgentModel.findByPk(req.params.id); if (!agent) { res.status(404).type('text').send('Agent 不存在'); return; } res.type('html').send(userConversationHtml(deriveBase(req), row(agent), user)); }));

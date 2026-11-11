@@ -170,6 +170,18 @@ export function step(n: number, text: string): string {
  * 且只注入一次、无外部依赖。navigator.clipboard 在非 HTTPS / 沙箱 iframe 里不可用，
  * 故保留 execCommand 兜底。
  */
+const CLIENT_ERROR_SCRIPT = `<script>
+(function(){
+  var sent=0;
+  function report(message,source,line,column,stack){
+    if(sent++>=10)return;
+    try{fetch('/admin/api/client-errors',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:String(message||'未知错误').slice(0,500),source:String(source||'').slice(0,300),line:Number(line)||0,column:Number(column)||0,stack:String(stack||'').slice(0,2000),url:location.href.slice(0,500)})}).catch(function(){});}catch(_e){}
+  }
+  window.addEventListener('error',function(e){report(e.message,e.filename,e.lineno,e.colno,e.error&&e.error.stack);});
+  window.addEventListener('unhandledrejection',function(e){var r=e.reason;report(r&&r.message||String(r),'',0,0,r&&r.stack);});
+})();
+</script>`;
+
 const COPY_SCRIPT = `<script>
 document.addEventListener('click',function(e){
   var t=e.target;if(!t||!t.closest)return;
@@ -266,7 +278,7 @@ export function page(opts: PageOptions): string {
   return `<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(opts.title)}</title><style>${CSS}</style></head>
-<body${opts.bodyClass ? ` class="${esc(opts.bodyClass)}"` : ''}>${nav}${subnav}${opts.body}${versionFooter()}${COPY_SCRIPT}</body></html>`;
+<body${opts.bodyClass ? ` class="${esc(opts.bodyClass)}"` : ''}>${nav}${subnav}${opts.body}${versionFooter()}${COPY_SCRIPT}${opts.adminTab ? CLIENT_ERROR_SCRIPT : ''}</body></html>`;
 }
 
 /**
