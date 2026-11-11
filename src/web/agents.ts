@@ -293,6 +293,10 @@ function addTaskFile(file){return new Promise((resolve,reject)=>{if(file.size>5*
 function refreshAttachmentList(){document.getElementById('task-attachments').textContent=window.pendingTaskAttachments.length?('已添加 '+window.pendingTaskAttachments.length+' 个附件（提交后保存 1 天）'):'';}
 function prepareTaskContent(){const clone=document.getElementById('task-content').cloneNode(true);const images=[...clone.querySelectorAll('img')];images.forEach(img=>{const index=window.pendingTaskAttachments.findIndex(a=>a.dataUrl===img.getAttribute('src'));if(index>=0)img.setAttribute('src','attachment://'+index);else img.removeAttribute('src');});return clone.innerHTML;}
 document.getElementById('task-files').addEventListener('change',async e=>{try{for(const file of e.target.files)await addTaskFile(file);refreshAttachmentList();}catch(err){status.textContent=err.message||'附件读取失败';}});
+const taskContentEditor=document.getElementById('task-content');
+for(const eventName of ['dragenter','dragover'])taskContentEditor.addEventListener(eventName,e=>{e.preventDefault();e.stopPropagation();taskContentEditor.classList.add('dragging');});
+for(const eventName of ['dragleave','drop'])taskContentEditor.addEventListener(eventName,e=>{e.preventDefault();e.stopPropagation();taskContentEditor.classList.remove('dragging');});
+taskContentEditor.addEventListener('drop',async e=>{const files=[...(e.dataTransfer?.files||[])];if(!files.length)return;try{for(const file of files)await addTaskFile(file);refreshAttachmentList();status.textContent='附件已添加';}catch(err){status.textContent=err.message||'附件读取失败';}});
 document.getElementById('task-content').addEventListener('paste',async e=>{const items=[...(e.clipboardData?.items||[])];const images=items.filter(item=>item.kind==='file'&&item.type.startsWith('image/'));if(!images.length)return;e.preventDefault();for(const item of images){const file=item.getAsFile();if(!file)continue;try{const dataUrl=await addTaskFile(file);const editor=document.getElementById('task-content');const img=document.createElement('img');img.src=dataUrl;img.alt=file.name;img.style.maxWidth='240px';img.style.display='block';editor.append(img,document.createElement('br'));}catch(err){status.textContent=err.message||'图片读取失败';}}refreshAttachmentList();});
 async function copyGeneratedText(text){
   if(navigator.clipboard&&navigator.clipboard.writeText){
@@ -358,7 +362,7 @@ async function loadTasks(){
       editButton.addEventListener('click',async()=>{const copied=await copyGeneratedText(t.uploadCommand);status.textContent=copied?'上传命令已复制。':'复制失败，请手动选中命令。';});
       saveButton.hidden=true;cancelButton.hidden=true;
     }else{
-      editButton.addEventListener('click',()=>{originalContent=content.innerHTML;if(markdownSource)content.textContent=t.content;content.contentEditable='true';content.classList.add('editing');editButton.hidden=true;saveButton.hidden=false;cancelButton.hidden=t.result!==null;content.focus();});
+      editButton.addEventListener('click',()=>{originalContent=content.innerHTML;content.innerHTML=t.content;content.contentEditable='true';content.classList.add('editing');editButton.hidden=true;saveButton.hidden=false;cancelButton.hidden=t.result!==null;content.focus();});
       cancelButton.addEventListener('click',()=>{content.innerHTML=originalContent;content.contentEditable='false';content.classList.remove('editing');editButton.hidden=false;saveButton.hidden=true;cancelButton.hidden=true;});
       saveButton.addEventListener('click',async()=>{const next=(content.innerHTML||'').trim();if(!next){status.textContent='任务内容不能为空';return;}saveButton.disabled=true;const rr=await fetch('/admin/api/tasks/'+encodeURIComponent(t.id),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:next})});const dd=await rr.json();saveButton.disabled=false;if(!rr.ok){status.textContent=dd.error||'编辑失败';return;}status.textContent='任务已更新并重新生成链接。';await copyGeneratedText(shareText(dd.url));loadTasks();});
     }
@@ -542,7 +546,6 @@ export function createAgentRouter(): Router {
     const task = await AgentTaskModel.findByPk(req.params.id);
     if (!task) { res.status(404).json({ error: '任务不存在' }); return; }
     const tokenExpiresAt = new Date(Date.now() + TASK_TTL_MS).toISOString();
-    deleteAttachmentMeta(req.params.id);
     await task.update({ content: safeTaskContent(content), tokenExpiresAt, status: 'pending', result: null, reportedAt: null, reportSource: null });
     const url = `${linkBase(req)}/api/tasks/${tokenFor(req.params.id, tokenExpiresAt)}`;
     res.json({ taskId: req.params.id, url, expiresAt: tokenExpiresAt });

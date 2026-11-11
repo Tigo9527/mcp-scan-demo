@@ -82,6 +82,7 @@ nav a.active{opacity:1;font-weight:600;color:var(--acc)}
 .task-reply summary{padding:10px 12px;cursor:pointer;color:var(--muted);font-weight:600}
 .task-reply-body{padding:0 12px 12px}
 .rich-editor{min-height:130px;padding:10px;border:1px solid var(--line);border-radius:8px;white-space:pre-wrap}
+.rich-editor.dragging{border-color:var(--accent);background:var(--soft)}
 .rich-editor:empty:before{content:attr(data-placeholder);color:var(--muted)}
 .rich-editor img{max-width:240px;max-height:180px;display:block;margin:6px 0;border-radius:6px}
 .attachment-list{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;font-size:.9em}

@@ -86,6 +86,7 @@ describe('Admin AI 对话和任务链接', () => {
     expect(html).toContain('.btn.link-toggle{background:var(--soft);color:var(--muted);border:1px solid var(--line)}');
     expect(html).toContain('contenteditable="true"');
     expect(html).toContain('task-files');
+    expect(html).toContain("taskContentEditor.addEventListener('drop'");
     expect(html).toContain('clipboardData');
     expect(html).toContain('cancelButton.hidden=t.result!==null');
     expect(html).toContain('toLocaleString(undefined,{dateStyle:\'medium\',timeStyle:\'short\'})');
@@ -175,10 +176,14 @@ describe('Admin AI 对话和任务链接', () => {
     expect(attachmentTask.status).toBe(201);
     const attachmentData: any = await attachmentTask.json();
     expect(attachmentData.attachments[0].name).toBe('note.txt');
+    const attachmentEdit = await fetch(`${base}/admin/api/tasks/${attachmentData.taskId}`, { method: 'PATCH', headers: { ...admin, Origin: base, 'Content-Type': 'application/json' }, body: JSON.stringify({ content: '<p>编辑后仍保留附件</p><img src="attachment://0" alt="note.txt">' }) });
+    expect(attachmentEdit.status).toBe(200);
+    const attachmentEditedData: any = await attachmentEdit.json();
     const attachmentList: any = await (await fetch(`${base}/admin/api/agents/${agent.id}/tasks`, { headers: admin })).json();
     const storedAttachment = attachmentList.find((entry: any) => entry.id === attachmentData.taskId).attachments[0];
+    expect(storedAttachment.name).toBe('note.txt');
     expect((await fetch(storedAttachment.url, { headers: admin })).status).toBe(200);
-    const externalTask: any = await (await fetch(attachmentData.url)).json();
+    const externalTask: any = await (await fetch(attachmentEditedData.url)).json();
     expect((await fetch(externalTask.attachments[0].url)).status).toBe(200);
     expect((await fetch(`${base}/api/tasks/not-valid`)).status).toBe(403);
     expect((await post(`${base}/api/tasks/not-valid/report`, { result: 'bad' })).status).toBe(403);
