@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { marked } from 'marked';
 import sanitizeHtml from 'sanitize-html';
-import { AgentModel, AgentTaskModel, AgentAutomationModel, dbEnabled } from '../db.js';
+import { AgentModel, AgentTaskModel, AgentAutomationModel, AgentTemplateModel, dbEnabled } from '../db.js';
 import { config, getAdminToken, isLocalBaseUrl } from '../config.js';
 import { isAdminRequest } from './admin.js';
 import { authenticateWebUserRequest, deriveBase, requireSameOrigin, wrap } from './http.js';
@@ -259,11 +259,11 @@ function conversationHtml(base: string, agent: Record<string, unknown>): string 
   return page({ title: `与 ${String(agent.name)} 对话`, base, active: 'admin', adminTab: 'agents', bodyClass: 'agent-conversation', body: `
 <p><a href="/admin/agents">← Agent 列表</a></p><h1>${esc(agent.name)}</h1><p>${esc(agent.description)}</p>
 <div id="messages" class="empty">加载中…</div>
-<form id="create-task" class="card"><div class="task-form-header"><label for="task-content">任务内容</label><span class="task-form-links"><button id="templates-link" class="btn small alt" type="button">模板</button><button id="upload-task-link" class="btn small alt" type="button">上传文件任务</button><button id="all-tasks-link" class="text-link" type="button">显示全部任务</button></span></div>
+<form id="create-task" class="card"><div class="task-form-header"><label for="task-content">任务内容</label><span class="task-form-links"><select id="template-select" class="btn small alt" aria-label="任务模板"><option value="">模板</option></select><button id="upload-task-link" class="btn small alt" type="button">上传文件任务</button><button id="all-tasks-link" class="text-link" type="button">显示全部任务</button></span></div>
 <div id="task-content" class="rich-editor" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="输入任务，支持粘贴图片或选择附件"></div>
 <div id="template-panel" class="template-panel card" hidden>
   <div class="template-panel-head"><strong>任务模板</strong><button id="template-close" class="text-link" type="button">收起</button></div>
-  <div class="template-toolbar"><select id="template-select"><option value="">选择模板…</option></select><button id="template-use" class="btn small" type="button">使用</button><button id="template-edit" class="btn small alt" type="button" disabled>编辑</button><button id="template-delete" class="btn small danger" type="button" disabled>删除</button></div>
+  <div class="template-toolbar"><select id="template-manage-select"><option value="">选择模板…</option></select><button id="template-use" class="btn small" type="button">使用</button><button id="template-edit" class="btn small alt" type="button" disabled>编辑</button><button id="template-delete" class="btn small danger" type="button" disabled>删除</button></div>
   <div id="template-form" hidden><label for="template-name">模板名称</label><input id="template-name" maxlength="80"><label for="template-body">模板内容</label><textarea id="template-body" rows="5" maxlength="20000"></textarea><div class="row"><button id="template-save" class="btn small" type="button">保存模板</button><button id="template-cancel" class="btn small alt" type="button">取消</button></div></div>
   <button id="template-add" class="text-link" type="button">＋ 新建模板</button><p class="muted">模板只保存在当前浏览器，可随时编辑、删除或一键填入任务。</p>
 </div>
@@ -274,13 +274,13 @@ function conversationHtml(base: string, agent: Record<string, unknown>): string 
 const agentId=${JSON.stringify(String(agent.id))};
 const messages=document.getElementById('messages'),status=document.getElementById('task-status');
 const automationSwitch=document.getElementById('automation-switch'),automationState=document.getElementById('automation-state'),unreportedToggle=document.getElementById('unreported-toggle');
-const templatePanel=document.getElementById('template-panel'),templateSelect=document.getElementById('template-select'),templateForm=document.getElementById('template-form'),templateName=document.getElementById('template-name'),templateBody=document.getElementById('template-body');
-const templateKey='mcp-demo-task-templates:'+agentId;let templates=[];let editingTemplate=null;
-function loadTemplates(){try{const parsed=JSON.parse(localStorage.getItem(templateKey)||'[]');templates=Array.isArray(parsed)?parsed.filter(t=>t&&typeof t.id==='string'&&typeof t.name==='string'&&typeof t.content==='string'):[];}catch{templates=[];}renderTemplates();}
-function saveTemplates(){localStorage.setItem(templateKey,JSON.stringify(templates));renderTemplates();}
-function renderTemplates(){const selected=templateSelect.value;templateSelect.replaceChildren(new Option('选择模板…',''));templates.forEach(t=>templateSelect.add(new Option(t.name,t.id)));templateSelect.value=templates.some(t=>t.id===selected)?selected:'';const active=templates.find(t=>t.id===templateSelect.value);document.getElementById('template-edit').disabled=!active;document.getElementById('template-delete').disabled=!active;}
+const templatePanel=document.getElementById('template-panel'),templateSelect=document.getElementById('template-select'),templateManageSelect=document.getElementById('template-manage-select'),templateForm=document.getElementById('template-form'),templateName=document.getElementById('template-name'),templateBody=document.getElementById('template-body');
+let templates=[];let editingTemplate=null;
+async function loadTemplates(){try{const r=await fetch('/api/templates');const parsed=await r.json();if(!r.ok)throw new Error(parsed.error||'模板加载失败');templates=Array.isArray(parsed)?parsed:[];}catch(error){templates=[];status.textContent=error.message||'模板加载失败';}renderTemplates();}
+async function saveTemplate(){const name=templateName.value.trim(),content=templateBody.value.trim();if(!name||!content){status.textContent='模板名称和内容不能为空';return;}const now=new Date().toISOString();const url=editingTemplate?'/api/templates/'+encodeURIComponent(editingTemplate):'/api/templates';const r=await fetch(url,{method:editingTemplate?'PATCH':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,content})});const data=await r.json();if(!r.ok){status.textContent=data.error||'模板保存失败';return;}if(editingTemplate){templates=templates.map(t=>t.id===editingTemplate?data:t);}else templates.unshift(data);renderTemplates();templateForm.hidden=true;editingTemplate=null;status.textContent='模板已保存';}
+function renderTemplates(){const selected=templateManageSelect.value;templateSelect.replaceChildren(new Option('模板',''),...templates.map(t=>new Option(t.name,t.id)),new Option('编辑模板…','__edit__'));templateManageSelect.replaceChildren(new Option('选择模板…',''),...templates.map(t=>new Option(t.name,t.id)));templateManageSelect.value=templates.some(t=>t.id===selected)?selected:'';const active=templates.find(t=>t.id===templateManageSelect.value);document.getElementById('template-edit').disabled=!active;document.getElementById('template-delete').disabled=!active;}
 function openTemplateForm(t){editingTemplate=t?.id||null;templateName.value=t?.name||'';templateBody.value=t?.content||'';templateForm.hidden=false;templateName.focus();}
-document.getElementById('templates-link').addEventListener('click',()=>{templatePanel.hidden=!templatePanel.hidden;if(!templatePanel.hidden)loadTemplates();});document.getElementById('template-close').addEventListener('click',()=>{templatePanel.hidden=true;});document.getElementById('template-add').addEventListener('click',()=>openTemplateForm());document.getElementById('template-cancel').addEventListener('click',()=>{templateForm.hidden=true;editingTemplate=null;});templateSelect.addEventListener('change',renderTemplates);document.getElementById('template-use').addEventListener('click',()=>{const t=templates.find(x=>x.id===templateSelect.value);if(!t)return;document.getElementById('task-content').innerHTML=t.content;status.textContent='已填入模板，可继续编辑后提交。';});document.getElementById('template-edit').addEventListener('click',()=>{const t=templates.find(x=>x.id===templateSelect.value);if(t)openTemplateForm(t);});document.getElementById('template-delete').addEventListener('click',()=>{const t=templates.find(x=>x.id===templateSelect.value);if(!t||!confirm('确认删除模板“'+t.name+'”？'))return;templates=templates.filter(x=>x.id!==t.id);saveTemplates();status.textContent='模板已删除';});document.getElementById('template-save').addEventListener('click',()=>{const name=templateName.value.trim(),content=templateBody.value.trim();if(!name||!content)return;const now=new Date().toISOString();if(editingTemplate){const t=templates.find(x=>x.id===editingTemplate);if(t){t.name=name;t.content=content;t.updatedAt=now;}}else templates.push({id:(globalThis.crypto&&typeof globalThis.crypto.randomUUID==='function'?globalThis.crypto.randomUUID():'tpl-'+Date.now()+'-'+Math.random().toString(36).slice(2)),name,content,updatedAt:now});saveTemplates();templateForm.hidden=true;editingTemplate=null;status.textContent='模板已保存';});
+templateSelect.addEventListener('change',()=>{const t=templates.find(x=>x.id===templateSelect.value);if(templateSelect.value==='__edit__'){templatePanel.hidden=false;templateSelect.value='';loadTemplates();return;}if(t){document.getElementById('task-content').innerHTML=t.content;status.textContent='已填入模板，可继续编辑后提交。';}templateSelect.value='';});document.getElementById('template-close').addEventListener('click',()=>{templatePanel.hidden=true;});document.getElementById('template-add').addEventListener('click',()=>openTemplateForm());document.getElementById('template-cancel').addEventListener('click',()=>{templateForm.hidden=true;editingTemplate=null;});templateManageSelect.addEventListener('change',renderTemplates);document.getElementById('template-use').addEventListener('click',()=>{const t=templates.find(x=>x.id===templateManageSelect.value);if(!t)return;document.getElementById('task-content').innerHTML=t.content;status.textContent='已填入模板，可继续编辑后提交。';});document.getElementById('template-edit').addEventListener('click',()=>{const t=templates.find(x=>x.id===templateManageSelect.value);if(t)openTemplateForm(t);});document.getElementById('template-delete').addEventListener('click',async()=>{const t=templates.find(x=>x.id===templateManageSelect.value);if(!t||!confirm('确认删除模板“'+t.name+'”？'))return;const r=await fetch('/api/templates/'+encodeURIComponent(t.id),{method:'DELETE'});if(!r.ok){status.textContent='模板删除失败';return;}templates=templates.filter(x=>x.id!==t.id);renderTemplates();status.textContent='模板已删除';});document.getElementById('template-save').addEventListener('click',()=>saveTemplate());
 loadTemplates();
 let onlyUnreported=false,showAllTasks=false;
 document.getElementById('upload-task-link').addEventListener('click',async()=>{const button=document.getElementById('upload-task-link');button.disabled=true;status.textContent='正在生成上传任务…';try{const r=await fetch('/admin/api/agents/'+encodeURIComponent(agentId)+'/upload-tasks',{method:'POST',headers:{'Content-Type':'application/json'}});const data=await r.json();if(!r.ok)throw new Error(data.error||'生成失败');status.textContent='上传任务已生成，命令已复制；在 Linux 终端命令末尾加文件路径后执行。';await copyGeneratedText(data.command);loadTasks();}catch(error){status.textContent=error.message||'生成失败';}finally{button.disabled=false;}});
@@ -408,6 +408,15 @@ function userAi(req: Request): userStore.User | null {
   return user && userStore.canUseAiChat(user) ? { ...user, aiChatEnabled: true } : null;
 }
 
+function templateOwner(req: Request): string | null {
+  if (isAdminRequest(req)) return 'admin';
+  return userAi(req)?.id ?? null;
+}
+
+function templateJson(model: AgentTemplateModel): Record<string, unknown> {
+  return { id: model.get('id'), name: model.get('name'), content: model.get('content'), createdAt: model.get('createdAt'), updatedAt: model.get('updatedAt') };
+}
+
 function userListHtml(base: string, user: userStore.User): string {
   return page({ title: 'AI 对话', base, active: 'admin', user, body: `<h1>AI 对话</h1>
 <p class="muted">选择一个 Agent，提交任务并查看该用户自己的任务记录。</p>
@@ -439,6 +448,39 @@ export function createAgentRouter(): Router {
     console.error('[browser-js-error]', JSON.stringify({ message: clip(body.message, 500), source: clip(body.source, 300), line: Number(body.line) || 0, column: Number(body.column) || 0, stack: clip(body.stack, 2000), url: clip(body.url, 500), ip }));
     res.status(204).end();
   });
+
+  router.get('/api/templates', requireDb, wrap(async (req, res) => {
+    const ownerId = templateOwner(req);
+    if (!ownerId) { res.status(403).json({ error: '模板权限不足' }); return; }
+    const rows = await AgentTemplateModel.findAll({ where: { ownerId }, order: [['updatedAt', 'DESC']] });
+    res.json(rows.map(templateJson));
+  }));
+  router.post('/api/templates', requireSameOrigin, requireDb, wrap(async (req, res) => {
+    const ownerId = templateOwner(req);
+    if (!ownerId) { res.status(403).json({ error: '模板权限不足' }); return; }
+    const name = cleanText(req.body?.name, 80), content = cleanText(req.body?.content, 20_000);
+    if (!name || !content) { res.status(400).json({ error: '模板名称和内容不能为空' }); return; }
+    const now = new Date().toISOString();
+    const model = await AgentTemplateModel.create({ id: randomUUID(), ownerId, name, content: safeTaskContent(content), createdAt: now, updatedAt: now });
+    res.status(201).json(templateJson(model));
+  }));
+  router.patch('/api/templates/:id', requireSameOrigin, requireDb, wrap(async (req, res) => {
+    const ownerId = templateOwner(req);
+    if (!ownerId) { res.status(403).json({ error: '模板权限不足' }); return; }
+    const model = await AgentTemplateModel.findOne({ where: { id: req.params.id, ownerId } });
+    if (!model) { res.status(404).json({ error: '模板不存在' }); return; }
+    const name = cleanText(req.body?.name, 80), content = cleanText(req.body?.content, 20_000);
+    if (!name || !content) { res.status(400).json({ error: '模板名称和内容不能为空' }); return; }
+    await model.update({ name, content: safeTaskContent(content), updatedAt: new Date().toISOString() });
+    res.json(templateJson(model));
+  }));
+  router.delete('/api/templates/:id', requireSameOrigin, requireDb, wrap(async (req, res) => {
+    const ownerId = templateOwner(req);
+    if (!ownerId) { res.status(403).json({ error: '模板权限不足' }); return; }
+    const deleted = await AgentTemplateModel.destroy({ where: { id: req.params.id, ownerId } });
+    if (!deleted) { res.status(404).json({ error: '模板不存在' }); return; }
+    res.json({ ok: true, id: req.params.id });
+  }));
 
   router.use(['/agents', '/api/user/agents'], (_req, res, next) => { res.setHeader('Referrer-Policy', 'no-referrer'); res.setHeader('Cache-Control', 'no-store'); next(); });
   router.get('/agents', requireDb, (req, res) => { const user = userAi(req); if (!user) { res.status(403).type('html').send('需要管理员授予 AI 对话权限'); return; } res.type('html').send(userListHtml(deriveBase(req), user)); });

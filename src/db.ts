@@ -237,6 +237,7 @@ export class StatsModel extends Model {}
 export class AgentModel extends Model {}
 export class AgentTaskModel extends Model {}
 export class AgentAutomationModel extends Model {}
+export class AgentTemplateModel extends Model {}
 
 function defineModels(seq: Sequelize): void {
   UserModel.init(
@@ -371,6 +372,18 @@ function defineModels(seq: Sequelize): void {
       updatedAt: { type: DataTypes.STRING, allowNull: false },
     },
     { sequelize: seq, timestamps: false, modelName: 'agentAutomation', tableName: 'agent_automation' },
+  );
+
+  AgentTemplateModel.init(
+    {
+      id: { type: DataTypes.STRING, primaryKey: true },
+      ownerId: { type: DataTypes.STRING, allowNull: false },
+      name: { type: DataTypes.STRING(80), allowNull: false },
+      content: { type: DataTypes.TEXT('long'), allowNull: false },
+      createdAt: { type: DataTypes.STRING, allowNull: false },
+      updatedAt: { type: DataTypes.STRING, allowNull: false },
+    },
+    { sequelize: seq, timestamps: false, modelName: 'agentTemplate', tableName: 'agent_templates', indexes: [{ fields: ['ownerId', 'updatedAt'] }] },
   );
 }
 

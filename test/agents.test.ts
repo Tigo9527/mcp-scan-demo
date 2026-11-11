@@ -86,6 +86,9 @@ describe('Admin AI 对话和任务链接', () => {
     expect(html).toContain('.btn.link-toggle{background:var(--soft);color:var(--muted);border:1px solid var(--line)}');
     expect(html).toContain('contenteditable="true"');
     expect(html).toContain('task-files');
+    expect(html).toContain('id="template-select"');
+    expect(html).toContain('编辑模板…');
+    expect(html).toContain("fetch('/api/templates'");
     expect(html).toContain("taskContentEditor.addEventListener('drop'");
     expect(html).toContain("editAttachments.hidden=false");
     expect(html).toContain("file-chip");
@@ -189,6 +192,15 @@ describe('Admin AI 对话和任务链接', () => {
     expect((await fetch(externalTask.attachments[0].url)).status).toBe(200);
     expect((await fetch(`${base}/api/tasks/not-valid`)).status).toBe(403);
     expect((await post(`${base}/api/tasks/not-valid/report`, { result: 'bad' })).status).toBe(403);
+
+    const templateCreate = await post(`${base}/api/templates`, { name: '跨对话模板', content: '检查 ${target}' }, { ...admin, Origin: base });
+    expect(templateCreate.status).toBe(201);
+    const template: any = await templateCreate.json();
+    const templateList: any = await (await fetch(`${base}/api/templates`, { headers: admin })).json();
+    expect(templateList.some((entry: any) => entry.id === template.id && entry.name === '跨对话模板')).toBe(true);
+    expect((await fetch(`${base}/api/templates/${template.id}`, { headers: admin })).status).toBe(404);
+    expect((await fetch(`${base}/api/templates`, { headers: { Cookie: cookie! } })).status).toBe(200);
+    expect((await fetch(`${base}/api/templates/${template.id}`, { method: 'DELETE', headers: { ...admin, Origin: base } })).status).toBe(200);
 
     const report = '**完成** <script>alert(1)</script>\n第二行 [链接](javascript:alert(1))';
     expect((await post(task.report.url, { result: report })).status).toBe(200);
