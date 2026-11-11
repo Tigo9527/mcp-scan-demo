@@ -64,6 +64,9 @@ describe('Admin AI 对话和任务链接', () => {
     expect(Array.isArray(await browserTasks.json())).toBe(true);
     const html = await page.text();
     expect(html).toContain('生成任务链接');
+    expect(html).toContain('id="template-form"');
+    expect(html).not.toContain('<form id="template-form"');
+    expect(html).toContain('id="template-save"');
     expect(html).toContain('Admin 登录已过期，请重新登录后刷新。');
     expect(html).toContain('href="/admin/login"');
     expect(html).toContain("function shareText(url){return '请阅读这个任务，并按要求回报结果。");
