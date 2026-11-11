@@ -37,6 +37,9 @@ describe('Admin AI 对话和任务链接', () => {
 
   it('Admin 创建 Agent 和任务，CLI 获取并回报，页面安全展示 Markdown', async () => {
     expect((await fetch(`${base}/admin/agents`)).status).toBe(403);
+    const browserPage = await fetch(`${base}/admin/agents`, { headers: { Accept: 'text/html' }, redirect: 'manual' });
+    expect(browserPage.status).toBe(302);
+    expect(browserPage.headers.get('location')).toBe('/admin/login');
     expect((await fetch(`${base}/admin/api/agents`)).status).toBe(403);
     expect((await post(`${base}/admin/api/agents`, { name: 'x' })).status).toBe(403);
 
@@ -50,6 +53,8 @@ describe('Admin AI 对话和任务链接', () => {
     expect(page.status).toBe(200);
     const html = await page.text();
     expect(html).toContain('生成任务链接');
+    expect(html).toContain('Admin 登录已过期，请重新登录后刷新。');
+    expect(html).toContain('href="/admin/login"');
     expect(html).toContain("function shareText(url){return '请阅读这个任务，并按要求回报结果。");
     expect(html).not.toContain('请把链接交给 CLI AI');
     expect(html).toContain("content.contentEditable='true'");
