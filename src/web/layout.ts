@@ -22,6 +22,13 @@ h2{font-size:1.25em;margin:28px 0 10px}
 h3{font-size:1.05em;margin:18px 0 8px}
 .muted{color:var(--muted);font-size:.92em}
 .card{border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:14px 0;position:relative}
+.agent-list{list-style:none;margin:14px 0;padding:0;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.agent-list-item{display:flex;align-items:baseline;gap:14px;padding:12px 16px;border-bottom:1px solid var(--line)}
+.agent-list-item:last-child{border-bottom:0}
+.agent-list-item p{margin:0;color:var(--muted);flex:1}
+.agent-list-item small{color:var(--muted);white-space:nowrap}
+.admin-agents-dark .agent-list{border-color:var(--line);background:#17222d}
+.admin-agents-dark .agent-list-item{border-color:var(--line)}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:14px 0}
 .stat{border:1px solid var(--line);border-radius:12px;padding:14px 16px}
 .stat .n{font-size:1.7em;font-weight:600;line-height:1.2}

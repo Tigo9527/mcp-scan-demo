@@ -45,7 +45,10 @@ describe('Admin AI 对话和任务链接', () => {
     expect((await post(`${base}/admin/api/agents`, { name: 'x' })).status).toBe(403);
     const agentListPage = await fetch(`${base}/admin/agents`, { headers: admin });
     expect(agentListPage.status).toBe(200);
-    expect(await agentListPage.text()).toContain('class="admin-agents-dark"');
+    const agentListHtml = await agentListPage.text();
+    expect(agentListHtml).toContain('class="admin-agents-dark"');
+    expect(agentListHtml).toContain("list.className='agent-list'");
+    expect(agentListHtml).toContain("c.className='agent-list-item'");
 
     const create = await post(`${base}/admin/api/agents`, { name: ' Review Bot ', description: '测试' }, admin);
     expect(create.status).toBe(201);

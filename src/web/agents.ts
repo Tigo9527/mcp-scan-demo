@@ -238,8 +238,8 @@ async function loadAgents(){
   if(!r.ok){list.textContent='加载失败';return;}
   const agents=await r.json();list.replaceChildren();
   if(!agents.length){list.className='empty';list.textContent='暂无 Agent';return;}
-  list.className='';
-  for(const a of agents){const c=document.createElement('div');c.className='card';
+  list.className='agent-list';
+  for(const a of agents){const c=document.createElement('div');c.className='agent-list-item';
     const link=document.createElement('a');link.href='/admin/agents/'+encodeURIComponent(a.id);link.textContent=a.name;
     const p=document.createElement('p');p.textContent=a.description||'暂无描述';
     const small=document.createElement('small');small.textContent='创建于 '+a.createdAt;
@@ -422,7 +422,7 @@ function userListHtml(base: string, user: userStore.User): string {
 <p class="muted">选择一个 Agent，提交任务并查看该用户自己的任务记录。</p>
 <div id="agents" class="empty">加载中…</div>
 <script>
-(async()=>{const box=document.getElementById('agents');try{const r=await fetch('/api/user/agents');if(!r.ok)throw new Error();const xs=await r.json();box.replaceChildren();if(!xs.length){box.className='empty';box.textContent='暂无可用 Agent';return;}box.className='';for(const a of xs){const c=document.createElement('div');c.className='card';const l=document.createElement('a');l.href='/agents/'+encodeURIComponent(a.id);l.textContent=a.name;const p=document.createElement('p');p.textContent=a.description||'暂无描述';c.append(l,p);box.append(c);}}catch{box.textContent='加载失败';}})();
+(async()=>{const box=document.getElementById('agents');try{const r=await fetch('/api/user/agents');if(!r.ok)throw new Error();const xs=await r.json();box.replaceChildren();if(!xs.length){box.className='empty';box.textContent='暂无可用 Agent';return;}box.className='agent-list';for(const a of xs){const c=document.createElement('div');c.className='agent-list-item';const l=document.createElement('a');l.href='/agents/'+encodeURIComponent(a.id);l.textContent=a.name;const p=document.createElement('p');p.textContent=a.description||'暂无描述';c.append(l,p);box.append(c);}}catch{box.textContent='加载失败';}})();
 </script>` });
 }
 
