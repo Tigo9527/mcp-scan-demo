@@ -39,7 +39,7 @@ import {
 } from './layout.js';
 
 const COOKIE_NAME = 'mcp_admin';
-const COOKIE_MAX_AGE = 28_800; // 8 小时
+const COOKIE_MAX_AGE = 30 * 24 * 60 * 60; // 30 天
 const MAX_FAILURES = 10;
 const FAILURE_WINDOW_MS = 10 * 60 * 1000;
 

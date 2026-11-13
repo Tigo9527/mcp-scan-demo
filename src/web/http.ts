@@ -36,8 +36,8 @@ export function deriveBase(req: Request): string {
  * 既不像正经网站，令牌还会漏进浏览器历史。登录后下发 Cookie 即可解决。
  */
 export const USER_TOKEN_COOKIE = 'mcp_demo_user';
-/** 与访问令牌 TTL 对齐（7 天） */
-const USER_COOKIE_MAX_AGE = 7 * 24 * 60 * 60;
+/** 与访问令牌 TTL 对齐（30 天） */
+const USER_COOKIE_MAX_AGE = 30 * 24 * 60 * 60;
 
 function isHttps(req: Request): boolean {
   const proto = (req.headers['x-forwarded-proto'] as string | undefined) ?? '';

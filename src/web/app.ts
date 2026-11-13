@@ -391,7 +391,7 @@ function loggedOutHtml(base: string): string {
     body: `
 <h1>已退出登录</h1>
 ${notice('本机的登录会话已清除，页面不会再自动带上你的身份。', 'ok')}
-<p class="muted">已经发出去的访问令牌仍然有效（7 天有效期），只是浏览器不再自动携带；重新登录即可。</p>
+<p class="muted">已经发出去的访问令牌仍然有效（30 天有效期），只是浏览器不再自动携带；重新登录即可。</p>
 <div class="row"><a class="btn" href="${esc(base)}/login">重新登录</a>
 <a class="btn alt" href="${esc(base)}/">返回首页</a></div>
 `,

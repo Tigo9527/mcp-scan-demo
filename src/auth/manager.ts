@@ -23,7 +23,8 @@ export class AuthError extends Error {
   }
 }
 
-const TOKEN_TTL = '7d';
+/** 普通网页登录令牌有效期：30 天。 */
+const TOKEN_TTL = '30d';
 
 /** OAuth 访问令牌有效期（秒）。比普通令牌短，配合 refresh_token 使用。 */
 const OAUTH_ACCESS_TTL_SECONDS = 3600;

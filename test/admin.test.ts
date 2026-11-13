@@ -157,6 +157,7 @@ describe('admin 鉴权', () => {
     expect(setCookie).toContain('mcp_admin=');
     expect(setCookie).toContain('HttpOnly');
     expect(setCookie).toContain('SameSite=Lax');
+    expect(setCookie).toContain('Max-Age=2592000');
     // 跳转目标不再带 admin_token
     const loc = res.headers.get('location') ?? '';
     expect(loc).toContain('/admin');

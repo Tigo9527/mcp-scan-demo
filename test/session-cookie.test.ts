@@ -57,6 +57,7 @@ describe('会话 Cookie：登录态自动保持', () => {
     expect(sc).toContain('httponly');
     expect(sc).toContain('samesite=lax');
     expect(sc).toContain('path=/');
+    expect(sc).toContain('max-age=2592000');
     // 明文 http 环境不该带 Secure，否则本地开发直接登录失效
     expect(sc).not.toContain('secure');
   });
