@@ -241,9 +241,9 @@ async function loadAgents(){
   list.className='agent-list';
   for(const a of agents){const c=document.createElement('div');c.className='agent-list-item';
     const link=document.createElement('a');link.href='/admin/agents/'+encodeURIComponent(a.id);link.textContent=a.name;
-    const p=document.createElement('p');p.textContent=a.description||'暂无描述';
-    const small=document.createElement('small');small.textContent='创建于 '+a.createdAt;
-    c.append(link,p,small);list.append(c);}
+    if(a.description){const p=document.createElement('p');p.textContent=a.description;c.append(p);}
+    if(a.lastActivityAt){const small=document.createElement('small');small.textContent='最后对话：'+new Date(a.lastActivityAt).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'});c.append(small);}
+    c.prepend(link);list.append(c);}
 }
 document.getElementById('create-agent').addEventListener('submit',async e=>{
   e.preventDefault();status.textContent='创建中…';const f=new FormData(e.target);
@@ -417,12 +417,19 @@ function templateJson(model: AgentTemplateModel): Record<string, unknown> {
   return { id: model.get('id'), name: model.get('name'), content: model.get('content'), createdAt: model.get('createdAt'), updatedAt: model.get('updatedAt') };
 }
 
+async function lastTaskTimes(agentIds: string[]): Promise<Map<string, string>> {
+  const rows = await AgentTaskModel.findAll({ where: { agentId: agentIds }, order: [['createdAt', 'DESC']], attributes: ['agentId', 'createdAt'] });
+  const result = new Map<string, string>();
+  for (const row of rows) { const id = String(row.get('agentId')); if (!result.has(id)) result.set(id, String(row.get('createdAt'))); }
+  return result;
+}
+
 function userListHtml(base: string, user: userStore.User): string {
   return page({ title: 'AI 对话', base, active: 'admin', user, body: `<h1>AI 对话</h1>
 <p class="muted">选择一个 Agent，提交任务并查看该用户自己的任务记录。</p>
 <div id="agents" class="empty">加载中…</div>
 <script>
-(async()=>{const box=document.getElementById('agents');try{const r=await fetch('/api/user/agents');if(!r.ok)throw new Error();const xs=await r.json();box.replaceChildren();if(!xs.length){box.className='empty';box.textContent='暂无可用 Agent';return;}box.className='agent-list';for(const a of xs){const c=document.createElement('div');c.className='agent-list-item';const l=document.createElement('a');l.href='/agents/'+encodeURIComponent(a.id);l.textContent=a.name;const p=document.createElement('p');p.textContent=a.description||'暂无描述';c.append(l,p);box.append(c);}}catch{box.textContent='加载失败';}})();
+(async()=>{const box=document.getElementById('agents');try{const r=await fetch('/api/user/agents');if(!r.ok)throw new Error();const xs=await r.json();box.replaceChildren();if(!xs.length){box.className='empty';box.textContent='暂无可用 Agent';return;}box.className='agent-list';for(const a of xs){const c=document.createElement('div');c.className='agent-list-item';const l=document.createElement('a');l.href='/agents/'+encodeURIComponent(a.id);l.textContent=a.name;if(a.description){const p=document.createElement('p');p.textContent=a.description;c.append(p);}if(a.lastActivityAt){const small=document.createElement('small');small.textContent='最后对话：'+new Date(a.lastActivityAt).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'});c.append(small);}c.prepend(l);box.append(c);}}catch{box.textContent='加载失败';}})();
 </script>` });
 }
 
@@ -485,7 +492,7 @@ export function createAgentRouter(): Router {
   router.use(['/agents', '/api/user/agents'], (_req, res, next) => { res.setHeader('Referrer-Policy', 'no-referrer'); res.setHeader('Cache-Control', 'no-store'); next(); });
   router.get('/agents', requireDb, (req, res) => { const user = userAi(req); if (!user) { res.status(403).type('html').send('需要管理员授予 AI 对话权限'); return; } res.type('html').send(userListHtml(deriveBase(req), user)); });
   router.get('/agents/:id', requireDb, wrap(async (req, res) => { const user = userAi(req); if (!user) { res.status(403).type('text').send('需要管理员授予 AI 对话权限'); return; } const agent = await AgentModel.findByPk(req.params.id); if (!agent) { res.status(404).type('text').send('Agent 不存在'); return; } res.type('html').send(userConversationHtml(deriveBase(req), row(agent), user)); }));
-  router.get('/api/user/agents', requireDb, wrap(async (req, res) => { if (!userAi(req)) { res.status(403).json({ error: 'AI 对话权限不足' }); return; } const agents = await AgentModel.findAll({ order: [['createdAt', 'DESC']] }); res.json(agents.map(a => row(a))); }));
+  router.get('/api/user/agents', requireDb, wrap(async (req, res) => { if (!userAi(req)) { res.status(403).json({ error: 'AI 对话权限不足' }); return; } const agents = await AgentModel.findAll(); const times = await lastTaskTimes(agents.map(a => String(a.get('id')))); const data = agents.map(a => ({ ...row(a), lastActivityAt: times.get(String(a.get('id'))) || null })); data.sort((a, b) => String(b.lastActivityAt || '').localeCompare(String(a.lastActivityAt || ''))); res.json(data); }));
   router.get('/api/user/agents/:id/tasks', requireDb, wrap(async (req, res) => { const user = userAi(req); if (!user) { res.status(403).json({ error: 'AI 对话权限不足' }); return; } if (!(await AgentModel.findByPk(req.params.id))) { res.status(404).json({ error: 'Agent 不存在' }); return; } const tasks = await AgentTaskModel.findAll({ where: { agentId: req.params.id, createdBy: user.id }, order: [['createdAt', 'ASC']] }); res.json(tasks.map(t => { const d=row(t); return { id:d.id, content:d.content, status:d.status, result:d.result, createdAt:d.createdAt }; })); }));
   router.post('/api/user/agents/:id/tasks', requireSameOrigin, requireDb, wrap(async (req, res) => { const user = userAi(req); if (!user) { res.status(403).json({ error: 'AI 对话权限不足' }); return; } if (!(await AgentModel.findByPk(req.params.id))) { res.status(404).json({ error: 'Agent 不存在' }); return; } const content=cleanText(req.body?.content, 20_000); if (!content) { res.status(400).json({ error: '任务内容必填且不超过 20000 字' }); return; } const id=randomUUID(), tokenExpiresAt=new Date(Date.now()+TASK_TTL_MS).toISOString(), createdAt=new Date().toISOString(); await AgentTaskModel.create({ id, agentId:req.params.id, createdBy:user.id, content:safeTaskContent(content), tokenExpiresAt, status:'pending', result:null, reportedAt:null, reportSource:null, createdAt }); const url=`${linkBase(req)}/api/tasks/${tokenFor(id, tokenExpiresAt)}`; publishAgentTask(req.params.id,{taskId:id,url,createdAt,expiresAt:tokenExpiresAt}); res.status(201).json({taskId:id,url,expiresAt:tokenExpiresAt}); }));
   router.use(['/admin/agents', '/admin/api/agents', '/api/tasks', '/api/agents'], (_req, res, next) => {
@@ -502,8 +509,9 @@ export function createAgentRouter(): Router {
   }));
 
   router.get('/admin/api/agents', adminOnly, requireDb, wrap(async (_req, res) => {
-    const agents = await AgentModel.findAll({ order: [['createdAt', 'DESC']] });
-    res.json(agents.map(a => ({ ...row(a), pollUrl: `${deriveBase(_req)}/api/agents/${a.get('id')}/tasks/poll`, pollToken: pollTokenFor(String(a.get('id'))) })));
+    const agents = await AgentModel.findAll(); const times = await lastTaskTimes(agents.map(a => String(a.get('id'))));
+    const data = agents.map(a => ({ ...row(a), lastActivityAt: times.get(String(a.get('id'))) || null, pollUrl: `${deriveBase(_req)}/api/agents/${a.get('id')}/tasks/poll`, pollToken: pollTokenFor(String(a.get('id'))) }));
+    data.sort((a, b) => String(b.lastActivityAt || '').localeCompare(String(a.lastActivityAt || ''))); res.json(data);
   }));
   router.post('/admin/api/agents', adminOnly, requireSameOrigin, requireDb, wrap(async (req, res) => {
     const name = cleanText(req.body?.name, 100);
