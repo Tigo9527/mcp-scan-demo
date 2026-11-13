@@ -23,7 +23,7 @@ h3{font-size:1.05em;margin:18px 0 8px}
 .muted{color:var(--muted);font-size:.92em}
 .card{border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:14px 0;position:relative}
 .agent-list{list-style:none;margin:14px 0;padding:0;border:1px solid var(--line);border-radius:10px;overflow:hidden}
-.agent-list-item{display:flex;align-items:baseline;gap:14px;padding:12px 16px;border-bottom:1px solid var(--line)}
+.agent-list-item{display:grid;grid-template-columns:minmax(150px,auto) minmax(0,1fr) auto;align-items:baseline;gap:14px;padding:12px 16px;border-bottom:1px solid var(--line)}
 .agent-list-item:last-child{border-bottom:0}
 .agent-list-item p{margin:0;color:var(--muted);flex:1}
 .agent-list-item small{color:var(--muted);white-space:nowrap}
