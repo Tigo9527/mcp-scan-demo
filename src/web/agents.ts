@@ -223,7 +223,7 @@ function rateLimited(req: Request): boolean {
 }
 
 function listHtml(base: string): string {
-  return page({ title: 'AI 对话', base, active: 'admin', adminTab: 'agents', body: `
+  return page({ title: 'AI 对话', base, active: 'admin', adminTab: 'agents', bodyClass: 'admin-agents-dark', body: `
 <h1>AI 对话</h1>
 <form id="create-agent" class="card">
 <label for="agent-name">Agent 名称</label><input id="agent-name" name="name" maxlength="100" required>
