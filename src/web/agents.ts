@@ -243,7 +243,8 @@ async function loadAgents(){
     const link=document.createElement('a');link.href='/admin/agents/'+encodeURIComponent(a.id);link.textContent=a.name;
     const p=document.createElement('p');if(a.description)p.textContent=a.description;c.append(p);
     if(a.lastActivityAt){const small=document.createElement('small');small.textContent='最后对话：'+new Date(a.lastActivityAt).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'});c.append(small);}
-    c.prepend(link);list.append(c);}
+    const del=document.createElement('button');del.type='button';del.className='text-link danger-link';del.textContent='删除';del.addEventListener('click',async()=>{if(!confirm('确认删除 Agent“'+a.name+'”？其任务、附件和自动任务状态也会删除。'))return;del.disabled=true;const rr=await fetch('/admin/api/agents/'+encodeURIComponent(a.id),{method:'DELETE'});const dd=await rr.json().catch(()=>({}));if(!rr.ok){del.disabled=false;status.textContent=dd.error||'删除失败';return;}status.textContent='Agent 已删除';loadAgents();});
+    c.prepend(link);c.append(del);list.append(c);}
 }
 document.getElementById('create-agent').addEventListener('submit',async e=>{
   e.preventDefault();status.textContent='创建中…';const f=new FormData(e.target);
@@ -519,6 +520,16 @@ export function createAgentRouter(): Router {
     if (!name || description === null) { res.status(400).json({ error: '名称必填且不超过 100 字，描述不超过 2000 字' }); return; }
     const agent = await AgentModel.create({ id: randomUUID(), name, description, createdBy: 'admin', createdAt: new Date().toISOString() });
     res.status(201).json(row(agent));
+  }));
+  router.delete('/admin/api/agents/:id', adminOnly, requireSameOrigin, requireDb, wrap(async (req, res) => {
+    const agent = await AgentModel.findByPk(req.params.id);
+    if (!agent) { res.status(404).json({ error: 'Agent 不存在' }); return; }
+    const tasks = await AgentTaskModel.findAll({ where: { agentId: req.params.id }, attributes: ['id'] });
+    for (const task of tasks) deleteAttachmentMeta(String(task.get('id')));
+    await AgentTaskModel.destroy({ where: { agentId: req.params.id } });
+    await AgentAutomationModel.destroy({ where: { agentId: req.params.id } });
+    await agent.destroy();
+    res.json({ ok: true, id: req.params.id });
   }));
 
   router.get('/admin/api/agents/:id/tasks', adminOnly, requireDb, wrap(async (req, res) => {

@@ -49,6 +49,7 @@ describe('Admin AI 对话和任务链接', () => {
     expect(agentListHtml).toContain('class="admin-agents-dark"');
     expect(agentListHtml).toContain("list.className='agent-list'");
     expect(agentListHtml).toContain("c.className='agent-list-item'");
+    expect(agentListHtml).toContain("method:'DELETE'");
 
     const create = await post(`${base}/admin/api/agents`, { name: ' Review Bot ', description: '测试' }, admin);
     expect(create.status).toBe(201);
@@ -198,6 +199,14 @@ describe('Admin AI 对话和任务链接', () => {
     expect((await fetch(externalTask.attachments[0].url)).status).toBe(200);
     expect((await fetch(`${base}/api/tasks/not-valid`)).status).toBe(403);
     expect((await post(`${base}/api/tasks/not-valid/report`, { result: 'bad' })).status).toBe(403);
+
+    const deleteCreate = await post(`${base}/admin/api/agents`, { name: '待删除 Agent' }, { ...admin, Origin: base });
+    const deleteAgent: any = await deleteCreate.json();
+    const deleteTask = await post(`${base}/admin/api/agents/${deleteAgent.id}/tasks`, { content: '删除测试任务' }, { ...admin, Origin: base });
+    expect(deleteTask.status).toBe(201);
+    expect((await fetch(`${base}/admin/api/agents/${deleteAgent.id}`, { method: 'DELETE', headers: { ...admin, Origin: base } })).status).toBe(200);
+    expect((await fetch(`${base}/admin/api/agents/${deleteAgent.id}`, { headers: admin })).status).toBe(404);
+    expect((await fetch(`${base}/admin/api/agents/${deleteAgent.id}/tasks`, { headers: admin })).status).toBe(404);
 
     const templateCreate = await post(`${base}/api/templates`, { name: '跨对话模板', content: '检查 ${target}' }, { ...admin, Origin: base });
     expect(templateCreate.status).toBe(201);
