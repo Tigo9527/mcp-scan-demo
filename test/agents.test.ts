@@ -72,6 +72,9 @@ describe('Admin AI 对话和任务链接', () => {
     const html = await page.text();
     expect(html).toContain('生成任务链接');
     expect(html).toContain('id="template-form"');
+    expect(html).toContain('function insertTemplateContent(html)');
+    expect(html).toContain('range.createContextualFragment(html)');
+    expect(html).toContain('已插入模板，可继续编辑。');
     expect(html).not.toContain('<form id="template-form"');
     expect(html).toContain('id="template-save"');
     expect(html).toContain('Admin 登录已过期，请重新登录后刷新。');
