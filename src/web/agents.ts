@@ -181,7 +181,10 @@ function safeMarkdown(source: string): string {
 function safeTaskContent(source: string): string {
   const html = /<\/?[a-z][^>]*>/i.test(source) ? source : marked.parse(source, { async: false, breaks: true, gfm: true }) as string;
   return sanitizeHtml(html, {
-    allowedTags: ['p', 'br', 'strong', 'em', 'u', 's', 'ul', 'ol', 'li', 'blockquote', 'h1', 'h2', 'h3', 'pre', 'code', 'a', 'img'],
+    // contenteditable editors commonly represent each Enter-separated line as a
+    // <div>. Keep the block element so sanitizing submitted HTML does not join
+    // the lines together.
+    allowedTags: ['p', 'div', 'br', 'strong', 'em', 'u', 's', 'ul', 'ol', 'li', 'blockquote', 'h1', 'h2', 'h3', 'pre', 'code', 'a', 'img'],
     allowedAttributes: { img: ['src', 'alt', 'title', 'width', 'height'] },
     allowedSchemes: ['http', 'https', 'mailto', 'data', 'attachment'],
     allowedSchemesByTag: { img: ['data', 'attachment', 'http', 'https'] },

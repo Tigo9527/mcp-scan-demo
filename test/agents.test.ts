@@ -137,6 +137,12 @@ describe('Admin AI 对话和任务链接', () => {
     const markdownData: any = await (await fetch(markdownTask.url)).json();
     expect(markdownData.content).toContain('<h1>Markdown 标题</h1>');
     expect(markdownData.content).toContain('<li>第一项</li>');
+    const richLineTaskResponse = await post(`${base}/admin/api/agents/${agent.id}/tasks`, { content: '<div>第一行</div><div>第二行</div>' }, admin);
+    expect(richLineTaskResponse.status).toBe(201);
+    const richLineTask: any = await richLineTaskResponse.json();
+    const richLineData: any = await (await fetch(richLineTask.url)).json();
+    expect(richLineData.content).toContain('<div>第一行</div>');
+    expect(richLineData.content).toContain('<div>第二行</div>');
     const uploadTaskResponse = await post(`${base}/admin/api/agents/${agent.id}/upload-tasks`, {}, { ...admin, Origin: base });
     expect(uploadTaskResponse.status).toBe(201);
     const uploadTask: any = await uploadTaskResponse.json();
