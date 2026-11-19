@@ -36,6 +36,33 @@ describe('Admin AI 对话和任务链接', () => {
     method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body),
   });
 
+  it('创建 Agent 后打开新 Agent 的对话页', async () => {
+    const response = await fetch(`${base}/admin/agents`, { headers: admin });
+    const html = await response.text();
+    const script = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(match => match[1]).find(source => source.includes("document.getElementById('create-agent').addEventListener"));
+    expect(script).toBeDefined();
+
+    let submit: ((event: { preventDefault: () => void; target: object }) => Promise<void>) | undefined;
+    let destination = '';
+    const form = { addEventListener: (_event: string, handler: typeof submit) => { submit = handler; } };
+    const list = { className: '', textContent: '', replaceChildren: () => {} };
+    const status = { textContent: '' };
+    const document = { getElementById: (id: string) => ({ 'create-agent': form, 'agent-list': list, 'create-status': status })[id as 'create-agent' | 'agent-list' | 'create-status'] };
+    const agentId = 'new-agent-id';
+    new Script(script!).runInNewContext({
+      document,
+      window: { location: { assign: (url: string) => { destination = url; } } },
+      FormData: class { get(name: string) { return name === 'name' ? '新 Agent' : '描述'; } },
+      fetch: async (_url: string, options?: { method?: string }) => options?.method === 'POST'
+        ? { ok: true, json: async () => ({ id: agentId }) }
+        : { ok: true, json: async () => [] },
+      encodeURIComponent,
+    });
+    expect(submit).toBeDefined();
+    await submit!({ preventDefault: () => {}, target: form });
+    expect(destination).toBe(`/admin/agents/${agentId}`);
+  });
+
   it('Admin 创建 Agent 和任务，CLI 获取并回报，页面安全展示 Markdown', async () => {
     expect((await fetch(`${base}/admin/agents`)).status).toBe(403);
     const browserPage = await fetch(`${base}/admin/agents`, { headers: { Accept: 'text/html' }, redirect: 'manual' });

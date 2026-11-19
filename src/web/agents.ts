@@ -252,8 +252,9 @@ async function loadAgents(){
 document.getElementById('create-agent').addEventListener('submit',async e=>{
   e.preventDefault();status.textContent='创建中…';const f=new FormData(e.target);
   const r=await fetch('/admin/api/agents',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:f.get('name'),description:f.get('description')})});
-  const data=await r.json();status.textContent=r.ok?'创建成功':data.error||'创建失败';
-  if(r.ok){e.target.reset();loadAgents();}
+  const data=await r.json();
+  if(!r.ok){status.textContent=data.error||'创建失败';return;}
+  window.location.assign('/admin/agents/'+encodeURIComponent(data.id));
 });
 loadAgents().catch(()=>{list.textContent='加载失败';});
 </script>` });
