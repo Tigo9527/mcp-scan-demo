@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import express from 'express';
 import type { Server } from 'node:http';
-import { BINANCE_CFX, TrackerDb, cfxAmount } from '../src/cfx-tracker.js';
+import { BINANCE_CFX, TrackerDb, cfxAmount, cfxWholeAmount } from '../src/cfx-tracker.js';
 import { createCfxTrackerRouter } from '../src/web/cfx-tracker.js';
 
 const dir = mkdtempSync(path.join(tmpdir(), 'cfx-tracker-'));
@@ -37,6 +37,7 @@ it('精确累计 wei，并区分转入和转出', async () => {
   expect(seed!.inWei).toBe('2000000000000000000');
   expect(seed!.outWei).toBe('123456789000000000000');
   expect(cfxAmount(seed!.outWei)).toBe('123.456789');
+  expect(cfxWholeAmount(seed!.outWei)).toBe('123');
 });
 
 it('公开页面展示排名与数据来源', async () => {
@@ -46,6 +47,16 @@ it('公开页面展示排名与数据来源', async () => {
   expect(html).toContain('地址排名');
   expect(html).toContain(BINANCE_CFX);
   expect(html).toContain('ConfluxScan');
+  expect(html).toContain('class="cfx-tracker-page"');
+  expect(html).toContain('.cfx-tracker-page{max-width:none');
+  expect(html).toContain('<code>cfx:aatx4z91…</code>');
+  expect(html).toContain('title="' + BINANCE_CFX + '"');
+  expect(html).toContain('最近 1 周');
+  expect(html).toContain('最近 1 月');
+  expect(html).toContain('<th scope="row">最近 1 周</th><td>2</td><td>1</td><td>1</td><td>2</td><td>123</td><td>125</td>');
+  expect(html).not.toContain('123.456789');
+  expect((html.match(/role="tab"/g) ?? [])).toHaveLength(4);
+  expect((html.match(/role="tabpanel"/g) ?? [])).toHaveLength(4);
 });
 
 it('转移记录接口可分页读取', async () => {

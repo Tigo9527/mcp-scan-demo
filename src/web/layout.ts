@@ -37,6 +37,15 @@ table{border-collapse:collapse;width:100%;font-size:.92em;margin:10px 0}
 th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
 th{background:var(--soft);font-weight:600}
 tbody tr:nth-child(even){background:#fcfcfd}
+.cfx-tracker-page{max-width:none;width:100%;padding:0 clamp(16px,2vw,40px) 48px}
+.cfx-tracker-page .tracker-summary th,.cfx-tracker-page .tracker-summary td{white-space:nowrap}
+.cfx-tracker-page .tracker-summary td:not(:first-child),.cfx-tracker-page .tracker-table td.tracker-number{text-align:right;font-variant-numeric:tabular-nums}
+.cfx-tracker-page .tracker-tabs{display:flex;gap:4px;overflow-x:auto;border-bottom:1px solid var(--line);margin-top:28px}
+.cfx-tracker-page .tracker-tab{width:auto;flex:none;margin:0;padding:11px 18px;background:transparent;border:0;border-bottom:3px solid transparent;border-radius:0;color:var(--muted);font:inherit;white-space:nowrap;cursor:pointer}
+.cfx-tracker-page .tracker-tab[aria-selected="true"]{color:var(--acc);border-bottom-color:var(--acc);font-weight:600}
+.cfx-tracker-page .tracker-tab-panel{padding-top:12px}
+.cfx-tracker-page .tracker-tab-panel table{min-width:760px}
+.cfx-tracker-page .tracker-address code{white-space:nowrap;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
 .bar{background:var(--soft);border-radius:6px;height:8px;overflow:hidden;min-width:60px}
 .bar>i{display:block;height:100%;background:var(--acc)}
 .btn{display:inline-block;background:var(--ok);color:#fff;padding:9px 15px;border-radius:8px;

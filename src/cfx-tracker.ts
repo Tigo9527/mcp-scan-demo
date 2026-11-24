@@ -56,3 +56,10 @@ export function cfxAmount(wei: string): string {
   const frac = (n % 10n ** 18n).toString().padStart(18, '0').replace(/0+$/, '');
   return `${whole.toLocaleString('en-US')}${frac ? '.' + frac : ''}`;
 }
+
+/** 页面用整数 CFX：以 wei 精确累计后四舍五入，不经过浮点数。 */
+export function cfxWholeAmount(wei: string | bigint): string {
+  const n = typeof wei === 'bigint' ? wei : BigInt(wei);
+  const rounded = (n + 5n * 10n ** 17n) / 10n ** 18n;
+  return rounded.toLocaleString('en-US');
+}
