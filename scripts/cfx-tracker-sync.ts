@@ -1,0 +1,142 @@
+/** Binance Core address -> Core transfers -> CrossSpace mapped eSpace accounts. */
+import 'dotenv/config';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import addressJs from '@conflux-dev/conflux-address-js';
+import { BINANCE_CFX, CROSS_SPACE, TrackerDb } from '../src/cfx-tracker.js';
+
+type CoreTransfer = { transactionHash: string; txLogIndex: number; timestamp: number; from: string; to: string; amount: string };
+type CorePage = { code: number; message: string; data: { total: number; list: CoreTransfer[] } };
+type EvmTx = { hash: string; timestamp: string; from: string; to: string; value: string; isError: string; transactionIndex: string };
+
+const msDay = 86400;
+const execFileAsync = promisify(execFile);
+const now = new Date();
+const threeMonthsAgo = new Date(now);
+threeMonthsAgo.setUTCMonth(now.getUTCMonth() - 3);
+const fromTs = Math.floor(Date.parse(process.env.CFX_TRACKER_FROM ?? `${threeMonthsAgo.toISOString().slice(0,10)}T00:00:00Z`) / 1000);
+const untilTs = Math.floor(Date.parse(process.env.CFX_TRACKER_UNTIL ?? now.toISOString()) / 1000);
+if (!Number.isFinite(fromTs) || !Number.isFinite(untilTs) || fromTs >= untilTs) throw new Error('Invalid tracker date range');
+
+async function json<T>(url: URL): Promise<T> {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      // curl honors HTTPS_PROXY in environments where Node's global fetch does not.
+      const { stdout } = await execFileAsync('curl', ['-fsSL', '--max-time', '20', url.toString()], { timeout: 25000, maxBuffer: 10 * 1024 * 1024 });
+      return JSON.parse(stdout) as T;
+    } catch (e) {
+      if (attempt === 3) throw new Error(`${url.origin}${url.pathname}: ${String(e)}`);
+      await new Promise(r => setTimeout(r, (attempt + 1) * 1000));
+    }
+  }
+  throw new Error('unreachable');
+}
+
+async function coreWindow(db: TrackerDb, start: number, end: number): Promise<void> {
+  const source = `core:${BINANCE_CFX}`;
+  if (await db.get('SELECT 1 FROM checkpoints WHERE source=? AND start_ts=? AND end_ts=?', [source, start, end])) return;
+  const base = process.env.CONFLUXSCAN_API_URL ?? 'https://api.confluxscan.org';
+  const url = new URL('/account/cfx/transfers', base);
+  url.searchParams.set('account', BINANCE_CFX);
+  url.searchParams.set('minTimestamp', String(start));
+  url.searchParams.set('maxTimestamp', String(end));
+  url.searchParams.set('limit', '100');
+  url.searchParams.set('sort', 'desc');
+  url.searchParams.set('skip', '0');
+  const first = await json<CorePage>(url);
+  if (first.code !== 0 || !first.data || !Array.isArray(first.data.list)) throw new Error(`Core API: ${first.message}`);
+  const total = first.data.total;
+  if (total > 10000) {
+    if (start === end) throw new Error(`Core API has >10000 records in one second: ${start}`);
+    const mid = Math.floor((start + end) / 2);
+    await coreWindow(db, start, mid);
+    await coreWindow(db, mid + 1, end);
+    return;
+  }
+  for (let skip = 0; skip < total; skip += 100) {
+    url.searchParams.set('skip', String(skip));
+    const response = skip === 0 ? first : await json<CorePage>(url);
+    if (response.code !== 0 || !Array.isArray(response.data?.list)) throw new Error(`Core page ${skip}: ${response.message}`);
+    await db.run('BEGIN');
+    try {
+      for (const t of response.data.list) {
+        if (t.timestamp < start || t.timestamp > end) continue;
+        await db.run(`INSERT OR IGNORE INTO transfers VALUES (?,?,?,?,?,?,?,?)`,
+          ['core', t.transactionHash.toLowerCase(), t.txLogIndex, t.timestamp, t.from.toLowerCase(), t.to.toLowerCase(), t.amount, 'ConfluxScan Core CFX transfers']);
+      }
+      await db.run('COMMIT');
+    } catch (error) { await db.run('ROLLBACK'); throw error; }
+  }
+  await db.run('INSERT OR REPLACE INTO checkpoints VALUES (?,?,?,?,?)', [source, start, end, new Date().toISOString(), total]);
+  console.log(`Core ${new Date(start * 1000).toISOString()} - ${new Date(end * 1000).toISOString()}: ${total}`);
+}
+
+async function crossSpace(db: TrackerDb): Promise<void> {
+  const rows = await db.all<{ tx_hash: string; timestamp: number; amount_wei: string }>(
+    `SELECT tx_hash,timestamp,amount_wei FROM transfers WHERE space='core' AND from_address=? AND to_address=? AND timestamp BETWEEN ? AND ? ORDER BY timestamp DESC`,
+    [BINANCE_CFX, CROSS_SPACE, fromTs, untilTs]);
+  const pending = [] as typeof rows;
+  for (const row of rows) if (!await db.get('SELECT 1 FROM cross_space_links WHERE core_tx_hash=?', [row.tx_hash])) pending.push(row);
+  for (let i = 0; i < pending.length; i += 8) {
+    const batch = await Promise.all(pending.slice(i, i + 8).map(async row => {
+      const url = new URL(`/v1/transaction/${row.tx_hash}`, process.env.CONFLUXSCAN_WEB_API_URL ?? 'https://www.confluxscan.org');
+      const response = await json<{ code: number; data?: { cfxTransfers?: { list?: { to: string; from: string }[] } } }>(url);
+      if (response.code !== 0) throw new Error(`Core transaction ${row.tx_hash}: ${response.code}`);
+      const leg = response.data?.cfxTransfers?.list?.find(t => t.from.toLowerCase() === CROSS_SPACE);
+      const es = leg ? `0x${Buffer.from(addressJs.decode(leg.to).hexAddress).toString('hex')}` : null;
+      return { row, leg, es };
+    }));
+    for (const { row, leg, es } of batch) await db.run('INSERT INTO cross_space_links VALUES (?,?,?,?,?,?)',
+      [row.tx_hash, row.timestamp, leg?.to.toLowerCase() ?? CROSS_SPACE, es, row.amount_wei, es ? 'mapped' : 'unresolved']);
+    if (i % 80 === 0) console.log(`Cross-space mapped ${Math.min(i + 8, pending.length)}/${pending.length}`);
+  }
+  console.log(`Cross-space Core legs: ${rows.length}`);
+}
+
+async function eSpace(db: TrackerDb): Promise<void> {
+  const accounts = await db.all<{ es_address: string }>(`SELECT DISTINCT es_address FROM cross_space_links WHERE es_address IS NOT NULL`);
+  const base = process.env.CONFLUXSCAN_ESPACE_API_URL ?? 'https://evmapi.confluxscan.org';
+  for (const { es_address } of accounts) {
+    const source = `espace:${es_address}`;
+    if (await db.get('SELECT 1 FROM checkpoints WHERE source=? AND start_ts=? AND end_ts=?', [source, fromTs, untilTs])) continue;
+    let count = 0;
+    let complete = false;
+    for (let page = 1; page <= 100; page++) {
+      const url = new URL('/api', base);
+      for (const [key, val] of Object.entries({ module: 'account', action: 'txlist', address: es_address, page: String(page), offset: '100', sort: 'desc' })) url.searchParams.set(key, val);
+      const response = await json<{ status: string; message: string; result: EvmTx[] | string }>(url);
+      if (!Array.isArray(response.result)) throw new Error(`eSpace ${es_address}: ${response.message}`);
+      if (response.result.length === 0) { complete = true; break; }
+      await db.run('BEGIN');
+      try {
+        for (const t of response.result) {
+          const ts = Number(t.timestamp);
+          // eSpace exposes the bridge mint as 0x0 -> mapped account and the actual
+          // mapped -> recipient transfer. Keep only the latter to avoid a third leg.
+          if (ts < fromTs || ts > untilTs || t.isError !== '0' || t.from.toLowerCase() === '0x0000000000000000000000000000000000000000' || !/^\d+$/.test(t.value) || BigInt(t.value) === 0n) continue;
+          await db.run('INSERT OR IGNORE INTO transfers VALUES (?,?,?,?,?,?,?,?)',
+            ['espace', t.hash.toLowerCase(), Number(t.transactionIndex), ts, t.from.toLowerCase(), t.to.toLowerCase(), t.value, 'ConfluxScan eSpace txlist']);
+          count++;
+        }
+        await db.run('COMMIT');
+      } catch (error) { await db.run('ROLLBACK'); throw error; }
+      if (Number(response.result.at(-1)?.timestamp) < fromTs || response.result.length < 100) { complete = true; break; }
+    }
+    if (!complete) throw new Error(`eSpace ${es_address} exceeded 100 pages; checkpoint withheld`);
+    await db.run('INSERT OR REPLACE INTO checkpoints VALUES (?,?,?,?,?)', [source, fromTs, untilTs, new Date().toISOString(), count]);
+    console.log(`eSpace ${es_address}: ${count}`);
+  }
+}
+
+const db = new TrackerDb();
+try {
+  await db.init();
+  for (let start = fromTs; start <= untilTs;) {
+    const end = Math.min((Math.floor(start / (msDay * 7)) + 1) * msDay * 7 - 1, untilTs);
+    await coreWindow(db, start, end);
+    start = end + 1;
+  }
+  await crossSpace(db);
+  await eSpace(db);
+  console.log('Tracker sync complete');
+} finally { await db.close(); }

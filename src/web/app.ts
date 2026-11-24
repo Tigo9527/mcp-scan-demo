@@ -60,6 +60,7 @@ import { completeAuthorizeFromTicket } from '../oauth/complete.js';
 import { createRegisterRouter } from '../oauth/register.js';
 import { createWeb3Router } from './web3.js';
 import { createTokenRouter } from '../oauth/token.js';
+import { createCfxTrackerRouter } from './cfx-tracker.js';
 import { readClient, redirectUriAllowed } from '../oauth/clients.js';
 import { open } from '../oauth/tickets.js';
 import { badge, authorizeCompleteHtml, card, copyBlock, esc, notice, page, step } from './layout.js';
@@ -313,6 +314,12 @@ ${card(`
 <p>用户可在 <code>/profile</code> 查看个人资料与调用统计（登录一次即自动保持，不用往链接上拼令牌）；管理员可进入 Admin 管理端查看用户列表与全局统计。</p>
 <div class="row"><a class="btn small alt" href="${esc(base)}/profile">我的 Profile</a>
 <a class="btn small alt" href="${esc(base)}/admin">Admin 管理端</a></div>
+`)}
+
+${card(`
+<h3>📊 币安 CFX 地址追踪</h3>
+<p>公开查看最近三个月的 Core / eSpace CFX 转移、地址排名和跨 Space 映射。</p>
+<a class="btn small alt" href="${esc(base)}/cfx-tracker">打开追踪页面</a>
 `)}
 
 <p class="muted">健康检查：<a href="${esc(base)}/health">${esc(base)}/health</a> · 当前实例 <code>${esc(config.instanceId)}</code> · 版本 v${esc(serverInfo.version)}（commit ${esc(serverInfo.commit)}）</p>
@@ -888,6 +895,7 @@ export function createApp() {
   // Admin 管理端
   app.use(createAdminRouter());
   app.use(createAgentRouter());
+  app.use(createCfxTrackerRouter());
 
   // ---- 授权发现（MCP Authorization Discovery）----
   // 客户端收到 401 后会读 WWW-Authenticate 里的 resource_metadata，再按 RFC 8414 找授权服务器。

@@ -14,9 +14,11 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "oauth:e2e": "tsx scripts/oauth-e2e.ts",
+    "cfx:sync": "tsx scripts/cfx-tracker-sync.ts",
     "test:codex": "codex exec --task \"Run the integration test suite with `npm test` (or `npx vitest run`). The test boots the MCP demo server and MUST print the local visit URLs (web portal, GitHub OAuth login, and MCP endpoint) to stdout. Report those URLs verbatim to the user so they can open them in a browser.\""
   },
   "dependencies": {
+    "@conflux-dev/conflux-address-js": "^2.1.0",
     "@modelcontextprotocol/sdk": "^1.12.0",
     "dotenv": "^17.4.2",
     "ethers": "^6.17.0",

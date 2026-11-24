@@ -1,5 +1,29 @@
 # MCP Demo 服务（TypeScript）
 
+## 币安 CFX 地址追踪
+
+公开页面：`/cfx-tracker`；机器可读数据：`/api/cfx-tracker`。起点固定为
+`cfx:aatx4z91eg536e55vhcr1gfuewnc34v26ajab18ngb`。页面可选 UTC 日期区间，
+按交易次数、转入、转出或进出总金额排列地址，展示地址间转移和跨 Space 映射。
+逐笔记录可从 `/api/cfx-tracker/transfers?limit=100&offset=0` 分页读取；两个 API
+均支持 `from=YYYY-MM-DD&to=YYYY-MM-DD` 过滤。
+
+运行 `npm run cfx:sync` 抓取最近三个日历月的数据。采集结果在
+`data/cfx-tracker.sqlite`，与用户、计费数据库分开。用 `CFX_TRACKER_FROM` 和
+`CFX_TRACKER_UNTIL` 设置 ISO 日期或时间可以扩展区间，例如：
+
+```bash
+CFX_TRACKER_FROM=2026-07-01T00:00:00Z CFX_TRACKER_UNTIL=2026-11-24T00:00:00Z npm run cfx:sync
+```
+
+Core 数据按对齐的周区间查询；超过 API 单次 10000 条分页上限时自动拆分。
+同步命令使用系统 `curl` 发请求，以沿用 `HTTPS_PROXY` 等代理配置。
+`checkpoints` 表只记录完成的区间，失败后重新运行会续抓，转账主键保证幂等。
+跨 Space 交易通过 Core 交易详情里的第二段转移找到 eSpace 映射地址，再用
+ConfluxScan eSpace `txlist` 读取其 CFX 交易；无解析结果会明确标记 `unresolved`。
+eSpace 每个映射地址最多读 100 页，超过时不写完成检查点并报错。
+转账次数按转移记录计；跨 Space 两段可能代表同一经济转移，不应把两边金额相加当成净流量。
+
 一个**开箱即跑**的 MCP（Model Context Protocol）服务端示例：
 
 - 使用官方 **`@modelcontextprotocol/sdk`**，基于 **Streamable HTTP** 传输（不自己造轮子）
