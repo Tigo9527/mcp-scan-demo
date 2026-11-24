@@ -4,7 +4,8 @@
 
 公开页面：`/cfx-tracker`；机器可读数据：`/api/cfx-tracker`。起点固定为
 `cfx:aatx4z91eg536e55vhcr1gfuewnc34v26ajab18ngb`。页面可选 UTC 日期区间，
-按交易次数、转入、转出或进出总金额排列地址，展示地址间转移和跨 Space 映射。
+按交易次数、转入、转出或净流入金额排列地址，展示地址间转移和跨 Space 映射。
+Core 与 eSpace 的最近转移分别显示在两个 Tab。
 逐笔记录可从 `/api/cfx-tracker/transfers?limit=100&offset=0` 分页读取；两个 API
 均支持 `from=YYYY-MM-DD&to=YYYY-MM-DD` 过滤。
 
@@ -20,7 +21,9 @@ Core 数据按对齐的周区间查询；超过 API 单次 10000 条分页上限
 随后同步与线索地址直接交易的 Core 地址在相同时间范围内的全部 CFX 转移，
 避免把这些地址在当前样本里未出现的转入误认为零。直接交易对手较多时需要较长时间，
 可先用 `CFX_TRACKER_EXPAND_ADDRESSES=<Core 地址>` 单独补抓指定地址；不设置则补抓全部一跳地址。
-页面排名中的“账户已补抓”表示该地址已有账户检查点，“样本内”只代表当前采集样本。
+正常同步还会从次数排名前 100 中选出转入次数为零的 Core / eSpace 地址，
+按账户补抓相同时间范围内的转移。仅执行这一步可运行 `npm run cfx:sync -- --top-zero`。
+矿工即使补抓后仍可能没有普通转入记录；页面会另查挖出区块并标记已确认的矿工。
 同步命令使用系统 `curl` 发请求，以沿用 `HTTPS_PROXY` 等代理配置。
 `checkpoints` 表只记录完成的区间，失败后重新运行会续抓，转账主键保证幂等。
 跨 Space 交易通过 Core 交易详情里的第二段转移找到 eSpace 映射地址，再用

@@ -50,6 +50,19 @@ export class TrackerDb {
   }
 }
 
+/** 与页面的次数排名使用同一统计口径，选出前 100 中零转入的地址。 */
+export async function topZeroInAddresses(db: TrackerDb, from: number, to: number): Promise<string[]> {
+  const rows = await db.all<{ address: string; in_count: number; total_count: number }>(`
+    WITH legs AS (
+      SELECT from_address AS address, 0 AS in_count FROM transfers WHERE timestamp BETWEEN ? AND ?
+      UNION ALL
+      SELECT to_address AS address, 1 AS in_count FROM transfers WHERE timestamp BETWEEN ? AND ?
+    )
+    SELECT address, SUM(in_count) AS in_count, COUNT(*) AS total_count
+    FROM legs GROUP BY address ORDER BY total_count DESC, address LIMIT 100`, [from, to, from, to]);
+  return rows.filter(row => row.in_count === 0 && (row.address.startsWith('cfx:') || /^0x[0-9a-f]{40}$/.test(row.address))).map(row => row.address);
+}
+
 export function cfxAmount(wei: string): string {
   const n = BigInt(wei);
   const whole = n / 10n ** 18n;

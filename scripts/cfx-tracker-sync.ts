@@ -3,7 +3,7 @@ import 'dotenv/config';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import addressJs from '@conflux-dev/conflux-address-js';
-import { BINANCE_CFX, CROSS_SPACE, TrackerDb } from '../src/cfx-tracker.js';
+import { BINANCE_CFX, CROSS_SPACE, TrackerDb, topZeroInAddresses } from '../src/cfx-tracker.js';
 
 type CoreTransfer = { transactionHash: string; txLogIndex: number; timestamp: number; from: string; to: string; amount: string };
 type CorePage = { code: number; message: string; data: { total: number; list: CoreTransfer[] } };
@@ -119,6 +119,35 @@ async function coreCounterparties(db: TrackerDb): Promise<void> {
   }
 }
 
+async function syncTopZeroInAddresses(db: TrackerDb): Promise<void> {
+  const selected = await topZeroInAddresses(db, fromTs, untilTs);
+  console.log(`Top 100 zero-in addresses to sync: ${selected.length}`);
+  const workers: TrackerDb[] = [];
+  try {
+    for (let i = 0; i < Math.min(4, selected.length); i++) {
+      const worker = new TrackerDb();
+      await worker.init();
+      workers.push(worker);
+    }
+    let next = 0;
+    let done = 0;
+    const failures: string[] = [];
+    await Promise.all(workers.map(async worker => {
+      while (next < selected.length) {
+        const address = selected[next++];
+        try {
+          if (address.startsWith('cfx:')) await coreWindow(worker, address, fromTs, untilTs);
+          else await eSpaceAccount(worker, address);
+        }
+        catch (error) { failures.push(`${address}: ${String(error)}`); }
+        done++;
+        if (done % 10 === 0) console.log(`Top zero-in addresses processed: ${done}/${selected.length}`);
+      }
+    }));
+    if (failures.length) throw new Error(`${failures.length} zero-in addresses failed:\n${failures.slice(0, 10).join('\n')}`);
+  } finally { await Promise.all(workers.map(worker => worker.close())); }
+}
+
 async function crossSpace(db: TrackerDb): Promise<void> {
   const rows = await db.all<{ tx_hash: string; timestamp: number; amount_wei: string }>(
     `SELECT tx_hash,timestamp,amount_wei FROM transfers WHERE space='core' AND from_address=? AND to_address=? AND timestamp BETWEEN ? AND ? ORDER BY timestamp DESC`,
@@ -141,15 +170,13 @@ async function crossSpace(db: TrackerDb): Promise<void> {
   console.log(`Cross-space Core legs: ${rows.length}`);
 }
 
-async function eSpace(db: TrackerDb): Promise<void> {
-  const accounts = await db.all<{ es_address: string }>(`SELECT DISTINCT es_address FROM cross_space_links WHERE es_address IS NOT NULL`);
+async function eSpaceAccount(db: TrackerDb, es_address: string): Promise<void> {
   const base = process.env.CONFLUXSCAN_ESPACE_API_URL ?? 'https://evmapi.confluxscan.org';
-  for (const { es_address } of accounts) {
-    const source = `espace:${es_address}`;
-    if (await db.get('SELECT 1 FROM checkpoints WHERE source=? AND start_ts=? AND end_ts=?', [source, fromTs, untilTs])) continue;
-    let count = 0;
-    let complete = false;
-    for (let page = 1; page <= 100; page++) {
+  const source = `espace:${es_address}`;
+  if (await db.get('SELECT 1 FROM checkpoints WHERE source=? AND start_ts=? AND end_ts=?', [source, fromTs, untilTs])) return;
+  let count = 0;
+  let complete = false;
+  for (let page = 1; page <= 100; page++) {
       const url = new URL('/api', base);
       for (const [key, val] of Object.entries({ module: 'account', action: 'txlist', address: es_address, page: String(page), offset: '100', sort: 'desc' })) url.searchParams.set(key, val);
       const response = await json<{ status: string; message: string; result: EvmTx[] | string }>(url);
@@ -169,23 +196,32 @@ async function eSpace(db: TrackerDb): Promise<void> {
         await db.run('COMMIT');
       } catch (error) { await db.run('ROLLBACK'); throw error; }
       if (Number(response.result.at(-1)?.timestamp) < fromTs || response.result.length < 100) { complete = true; break; }
-    }
-    if (!complete) throw new Error(`eSpace ${es_address} exceeded 100 pages; checkpoint withheld`);
-    await db.run('INSERT OR REPLACE INTO checkpoints VALUES (?,?,?,?,?)', [source, fromTs, untilTs, new Date().toISOString(), count]);
-    console.log(`eSpace ${es_address}: ${count}`);
   }
+  if (!complete) throw new Error(`eSpace ${es_address} exceeded 100 pages; checkpoint withheld`);
+  await db.run('INSERT OR REPLACE INTO checkpoints VALUES (?,?,?,?,?)', [source, fromTs, untilTs, new Date().toISOString(), count]);
+  console.log(`eSpace ${es_address}: ${count}`);
+}
+
+async function eSpace(db: TrackerDb): Promise<void> {
+  const accounts = await db.all<{ es_address: string }>(`SELECT DISTINCT es_address FROM cross_space_links WHERE es_address IS NOT NULL`);
+  for (const { es_address } of accounts) await eSpaceAccount(db, es_address);
 }
 
 const db = new TrackerDb();
 try {
   await db.init();
-  for (let start = fromTs; start <= untilTs;) {
-    const end = Math.min((Math.floor(start / (msDay * 7)) + 1) * msDay * 7 - 1, untilTs);
-    await coreWindow(db, BINANCE_CFX, start, end);
-    start = end + 1;
+  if (process.argv.includes('--top-zero')) {
+    await syncTopZeroInAddresses(db);
+  } else {
+    for (let start = fromTs; start <= untilTs;) {
+      const end = Math.min((Math.floor(start / (msDay * 7)) + 1) * msDay * 7 - 1, untilTs);
+      await coreWindow(db, BINANCE_CFX, start, end);
+      start = end + 1;
+    }
+    await coreCounterparties(db);
+    await crossSpace(db);
+    await eSpace(db);
+    await syncTopZeroInAddresses(db);
   }
-  await coreCounterparties(db);
-  await crossSpace(db);
-  await eSpace(db);
   console.log('Tracker sync complete');
 } finally { await db.close(); }

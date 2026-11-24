@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import express from 'express';
 import type { Server } from 'node:http';
-import { BINANCE_CFX, TrackerDb, cfxAmount, cfxWholeAmount } from '../src/cfx-tracker.js';
+import { BINANCE_CFX, TrackerDb, cfxAmount, cfxWholeAmount, topZeroInAddresses } from '../src/cfx-tracker.js';
 import { localAddressMeta, lookupMinerAddresses, lookupTrackerMetadata } from '../src/cfx-tracker-meta.js';
 import { createCfxTrackerRouter } from '../src/web/cfx-tracker.js';
 
@@ -147,6 +147,7 @@ it('Core 和 eSpace 最近转移分开显示，并标记零转入矿工', async 
   const now = Math.floor(Date.now() / 1000);
   await db.run('INSERT INTO transfers VALUES (?,?,?,?,?,?,?,?)', ['core', '0x04', 1, now, miner, BINANCE_CFX, '1000000000000000000', 'fixture']);
   await db.run('INSERT INTO transfers VALUES (?,?,?,?,?,?,?,?)', ['espace', '0x05', 1030, now - 86400, '0x1111111111111111111111111111111111111111', '0x2222222222222222222222222222222222222222', '3000000000000000000', 'fixture']);
+  expect(await topZeroInAddresses(db, now - 2 * 86400, now + 1)).toEqual(['0x1111111111111111111111111111111111111111', miner]);
   await db.close();
   const html = await (await fetch(`${base}/cfx-tracker`)).text();
   expect(html).toContain('最近转移 · Core（50 条）');
