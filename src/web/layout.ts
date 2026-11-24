@@ -46,6 +46,8 @@ tbody tr:nth-child(even){background:#fcfcfd}
 .cfx-tracker-page .tracker-tab-panel{padding-top:12px}
 .cfx-tracker-page .tracker-tab-panel table{min-width:760px}
 .cfx-tracker-page .tracker-address code{white-space:nowrap;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+.cfx-tracker-page .tracker-address-cell{display:inline-flex;align-items:center;gap:5px;flex-wrap:wrap}
+.cfx-tracker-page .tracker-address-badge{display:inline-block;padding:2px 6px;border-radius:5px;background:#e8f1ff;color:#17427f;font-size:.78em;white-space:nowrap}
 .bar{background:var(--soft);border-radius:6px;height:8px;overflow:hidden;min-width:60px}
 .bar>i{display:block;height:100%;background:var(--acc)}
 .btn{display:inline-block;background:var(--ok);color:#fff;padding:9px 15px;border-radius:8px;
