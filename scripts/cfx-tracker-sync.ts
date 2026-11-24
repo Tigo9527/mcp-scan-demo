@@ -32,12 +32,18 @@ async function json<T>(url: URL): Promise<T> {
   throw new Error('unreachable');
 }
 
-async function coreWindow(db: TrackerDb, start: number, end: number): Promise<void> {
-  const source = `core:${BINANCE_CFX}`;
-  if (await db.get('SELECT 1 FROM checkpoints WHERE source=? AND start_ts=? AND end_ts=?', [source, start, end])) return;
+async function coreWindow(db: TrackerDb, account: string, start: number, end: number): Promise<void> {
+  const source = `core:${account}`;
+  // 已完成的连续前段无需重抓；再次运行只补上次检查点之后的新时间。
+  while (start <= end) {
+    const covered = await db.get<{ end_ts: number }>('SELECT MAX(end_ts) AS end_ts FROM checkpoints WHERE source=? AND start_ts<=?', [source, start]);
+    if (covered?.end_ts >= start) start = covered.end_ts + 1;
+    else break;
+  }
+  if (start > end) return;
   const base = process.env.CONFLUXSCAN_API_URL ?? 'https://api.confluxscan.org';
   const url = new URL('/account/cfx/transfers', base);
-  url.searchParams.set('account', BINANCE_CFX);
+  url.searchParams.set('account', account);
   url.searchParams.set('minTimestamp', String(start));
   url.searchParams.set('maxTimestamp', String(end));
   url.searchParams.set('limit', '100');
@@ -49,8 +55,8 @@ async function coreWindow(db: TrackerDb, start: number, end: number): Promise<vo
   if (total > 10000) {
     if (start === end) throw new Error(`Core API has >10000 records in one second: ${start}`);
     const mid = Math.floor((start + end) / 2);
-    await coreWindow(db, start, mid);
-    await coreWindow(db, mid + 1, end);
+    await coreWindow(db, account, start, mid);
+    await coreWindow(db, account, mid + 1, end);
     return;
   }
   for (let skip = 0; skip < total; skip += 100) {
@@ -68,7 +74,49 @@ async function coreWindow(db: TrackerDb, start: number, end: number): Promise<vo
     } catch (error) { await db.run('ROLLBACK'); throw error; }
   }
   await db.run('INSERT OR REPLACE INTO checkpoints VALUES (?,?,?,?,?)', [source, start, end, new Date().toISOString(), total]);
-  console.log(`Core ${new Date(start * 1000).toISOString()} - ${new Date(end * 1000).toISOString()}: ${total}`);
+  console.log(`Core ${account} ${new Date(start * 1000).toISOString()} - ${new Date(end * 1000).toISOString()}: ${total}`);
+}
+
+async function coreCounterparties(db: TrackerDb): Promise<void> {
+  // 固定在币安地址的一跳范围，避免补抓过程中把新发现的地址无限递归扩展。
+  const rows = await db.all<{ address: string; count: number }>(`
+    SELECT CASE WHEN from_address=? THEN to_address ELSE from_address END AS address, COUNT(*) AS count
+    FROM transfers WHERE space='core' AND (from_address=? OR to_address=?)
+      AND timestamp BETWEEN ? AND ?
+    GROUP BY address ORDER BY count DESC`, [BINANCE_CFX, BINANCE_CFX, BINANCE_CFX, fromTs, untilTs]);
+  const candidates = rows.map(r => r.address).filter(address => {
+    if (address === BINANCE_CFX) return false;
+    try { return addressJs.decode(address).type !== 'builtin'; } catch { return false; }
+  });
+  const selected = process.env.CFX_TRACKER_EXPAND_ADDRESSES
+    ? candidates.filter(address => process.env.CFX_TRACKER_EXPAND_ADDRESSES!.toLowerCase().split(',').includes(address))
+    : candidates;
+  if (process.env.CFX_TRACKER_EXPAND_ADDRESSES && !selected.length) throw new Error('No requested direct Core counterparty found');
+  console.log(`Core counterparties to sync: ${selected.length}/${candidates.length}`);
+  const workerCount = Math.min(4, selected.length);
+  const workers: TrackerDb[] = [];
+  try {
+    for (let i = 0; i < workerCount; i++) {
+      const worker = new TrackerDb();
+      await worker.init();
+      workers.push(worker);
+    }
+    let next = 0;
+    let done = 0;
+    const failures: string[] = [];
+    await Promise.all(workers.map(async worker => {
+      while (next < selected.length) {
+        const address = selected[next++];
+        try { await coreWindow(worker, address, fromTs, untilTs); }
+        catch (error) { failures.push(`${address}: ${String(error)}`); }
+        done++;
+        if (done % 20 === 0) console.log(`Core counterparties processed: ${done}/${selected.length}`);
+      }
+    }));
+    if (failures.length) throw new Error(`${failures.length} Core counterparties failed:\n${failures.slice(0, 10).join('\n')}`);
+  } finally {
+    await Promise.all(workers.map(worker => worker.close()));
+  }
 }
 
 async function crossSpace(db: TrackerDb): Promise<void> {
@@ -133,9 +181,10 @@ try {
   await db.init();
   for (let start = fromTs; start <= untilTs;) {
     const end = Math.min((Math.floor(start / (msDay * 7)) + 1) * msDay * 7 - 1, untilTs);
-    await coreWindow(db, start, end);
+    await coreWindow(db, BINANCE_CFX, start, end);
     start = end + 1;
   }
+  await coreCounterparties(db);
   await crossSpace(db);
   await eSpace(db);
   console.log('Tracker sync complete');

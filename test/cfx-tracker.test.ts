@@ -105,3 +105,19 @@ it('转移记录接口可分页读取', async () => {
   expect(data.rows).toHaveLength(1);
   expect(data.rows[0].tx_hash).toBe('0x02');
 });
+
+it('补抓交易对手全账户后，排名同时累计转入和转出', async () => {
+  const other = 'cfx:aapwpauv99u7egnx1vh0uyvfsk7edp6rc6hactkn4b';
+  const db = new TrackerDb();
+  await db.init();
+  const now = Math.floor(Date.now() / 1000);
+  await db.run('INSERT INTO transfers VALUES (?,?,?,?,?,?,?,?)', ['core', '0x03', 1, now, 'cfx:aatx4z91eg536e55vhcr1gfuewnc34v26ajab18ngb', other, '5000000000000000000', 'counterparty']);
+  await db.run('INSERT INTO checkpoints VALUES (?,?,?,?,?)', [`core:${other}`, now - 86400, now, new Date().toISOString(), 3]);
+  await db.close();
+  const response = await fetch(`${base}/api/cfx-tracker`);
+  const data = await response.json() as { ranking: Array<{ address: string; inCount: number; outCount: number }> };
+  expect(data.ranking.find(r => r.address === other)).toMatchObject({ inCount: 2, outCount: 1 });
+  const html = await (await fetch(`${base}/cfx-tracker`)).text();
+  expect(html).toContain('账户已补抓');
+  expect(html).toContain('样本内');
+});
