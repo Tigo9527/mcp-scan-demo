@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { BINANCE_CFX, TrackerDb, cfxWholeAmount } from '../cfx-tracker.js';
-import { lookupTrackerMetadata, type TrackerMetadata } from '../cfx-tracker-meta.js';
+import { lookupMinerAddresses, lookupTrackerMetadata, type TrackerMetadata } from '../cfx-tracker-meta.js';
 import { esc, page } from './layout.js';
 import { wrap } from './http.js';
 
@@ -74,7 +74,10 @@ async function snapshot(from: number, to: number) {
   } finally { await db.close(); }
 }
 
-export function createCfxTrackerRouter(metadataProvider: (addresses: string[]) => Promise<TrackerMetadata> = lookupTrackerMetadata): Router {
+export function createCfxTrackerRouter(
+  metadataProvider: (addresses: string[]) => Promise<TrackerMetadata> = lookupTrackerMetadata,
+  minerProvider: (addresses: string[]) => Promise<Set<string>> = lookupMinerAddresses,
+): Router {
   const router = Router();
   router.get('/cfx-tracker', wrap(async (req, res) => {
     const defaultFrom = Math.floor(Date.now()/1000) - 93*86400;
@@ -83,26 +86,27 @@ export function createCfxTrackerRouter(metadataProvider: (addresses: string[]) =
     if (from > to) { res.status(400).send('开始日期晚于结束日期'); return; }
     const data = await snapshot(from, to);
     const sort = String(req.query.sort ?? 'count');
-    const metric = (r: Rank) => sort === 'in' ? r.inWei : sort === 'out' ? r.outWei : r.inWei + r.outWei;
+    const metric = (r: Rank) => sort === 'in' ? r.inWei : sort === 'out' ? r.outWei : r.inWei - r.outWei;
     if (sort !== 'count') data.ranking.sort((a,b) => metric(a) === metric(b) ? a.address.localeCompare(b.address) : metric(a) > metric(b) ? -1 : 1);
     const visibleRanks = data.ranking.slice(0, 100);
     const visiblePairs = data.pairs.slice(0, 30);
     const visibleLinks = data.links.slice(0, 30);
-    const visibleTransfers = data.transfers.slice(0, 50);
-    const metadata = await metadataProvider([
+    const coreTransfers = data.transfers.filter(t => t.space === 'core').slice(0, 50);
+    const espaceTransfers = data.transfers.filter(t => t.space === 'espace').slice(0, 50);
+    const visibleTransfers = [...coreTransfers, ...espaceTransfers];
+    const [metadata, miners] = await Promise.all([metadataProvider([
       BINANCE_CFX,
       ...visibleRanks.map(r => r.address),
       ...visiblePairs.flatMap(p => [p.from, p.to]),
       ...visibleLinks.flatMap(l => [l.core_to, ...(l.es_address ? [l.es_address] : [])]),
       ...visibleTransfers.flatMap(t => [t.from_address, t.to_address]),
-    ]);
+    ]), minerProvider(visibleRanks.filter(r => r.inWei === 0n && r.address.startsWith('cfx:')).map(r => r.address))]);
     const addressLink = (address: string) => addr(address, metadata);
-    const expandedCore = new Set(data.checkpoints.filter(c => c.source.startsWith('core:')).map(c => c.source.slice(5)));
-    const rankRows = visibleRanks.map((r,i) => `<tr><td>${i+1}</td><td>${addressLink(r.address)}</td><td>${expandedCore.has(r.address) ? '账户已补抓' : '样本内'}</td><td class="tracker-number">${r.inCount+r.outCount}</td><td class="tracker-number">${r.inCount} / ${r.outCount}</td><td class="tracker-number">${esc(cfxWholeAmount(r.inWei))}</td><td class="tracker-number">${esc(cfxWholeAmount(r.outWei))}</td><td class="tracker-number">${esc(cfxWholeAmount(r.inWei+r.outWei))}</td></tr>`).join('');
+    const rankRows = visibleRanks.map((r,i) => `<tr><td>${i+1}</td><td>${addressLink(r.address)}${miners.has(r.address) ? '<span class="tracker-address-badge">矿工</span>' : ''}</td><td class="tracker-number">${r.inCount+r.outCount}</td><td class="tracker-number">${r.inCount} / ${r.outCount}</td><td class="tracker-number">${esc(cfxWholeAmount(r.inWei))}</td><td class="tracker-number">${esc(cfxWholeAmount(r.outWei))}</td><td class="tracker-number">${esc(cfxWholeAmount(r.inWei-r.outWei))}</td></tr>`).join('');
     const pairRows = visiblePairs.map(p => `<tr><td>${addressLink(p.from)}</td><td>${addressLink(p.to)}</td><td class="tracker-number">${p.count}</td><td class="tracker-number">${esc(cfxWholeAmount(p.wei))}</td></tr>`).join('');
     const linkRows = visibleLinks.map(l => `<tr><td><a href="https://www.confluxscan.org/transaction/${esc(l.core_tx_hash)}" title="${esc(l.core_tx_hash)}" target="_blank" rel="noopener noreferrer"><code>${esc(l.core_tx_hash.slice(0,12))}…</code></a></td><td>${addressLink(l.core_to)}</td><td>${l.es_address ? addressLink(l.es_address) : '未解析'}</td><td class="tracker-number">${esc(cfxWholeAmount(l.amount_wei))}</td></tr>`).join('');
-    const transferRows = visibleTransfers.map(t => `<tr><td>${esc(new Date(t.timestamp*1000).toISOString().slice(0,19).replace('T',' '))}</td><td>${esc(t.space)}</td><td>${addressLink(t.from_address)}</td><td>${addressLink(t.to_address)}</td><td class="tracker-number">${esc(cfxWholeAmount(t.amount_wei))}</td></tr>`).join('');
-    const summaryRow = (label: string, s: PeriodSummary) => `<tr><th scope="row">${esc(label)}</th><td>${s.count}</td><td>${s.inCount}</td><td>${s.outCount}</td><td>${esc(cfxWholeAmount(s.inWei))}</td><td>${esc(cfxWholeAmount(s.outWei))}</td><td>${esc(cfxWholeAmount(s.inWei+s.outWei))}</td></tr>`;
+    const transferRows = (transfers: Transfer[]) => transfers.map(t => `<tr><td>${esc(new Date(t.timestamp*1000).toISOString().slice(0,19).replace('T',' '))}</td><td>${addressLink(t.from_address)}</td><td>${addressLink(t.to_address)}</td><td class="tracker-number">${esc(cfxWholeAmount(t.amount_wei))}</td></tr>`).join('');
+    const summaryRow = (label: string, s: PeriodSummary) => `<tr><th scope="row">${esc(label)}</th><td>${s.count}</td><td>${s.inCount}</td><td>${s.outCount}</td><td>${esc(cfxWholeAmount(s.inWei))}</td><td>${esc(cfxWholeAmount(s.outWei))}</td><td>${esc(cfxWholeAmount(s.inWei-s.outWei))}</td></tr>`;
     const fromValue = new Date(from*1000).toISOString().slice(0,10), toValue = new Date(to*1000).toISOString().slice(0,10);
     const complete = data.checkpoints.filter(c => c.source.startsWith('core:')).length;
     const eComplete = data.checkpoints.filter(c => c.source.startsWith('espace:')).length;
@@ -110,23 +114,25 @@ export function createCfxTrackerRouter(metadataProvider: (addresses: string[]) =
     res.type('html').send(page({ title: '币安 CFX 地址追踪', base: `${req.protocol}://${req.get('host')}`, bodyClass: 'cfx-tracker-page', body: `
 <h1>币安 CFX 地址与交易追踪</h1>
 <p>起点：${addressLink(BINANCE_CFX)}</p>
-<form method="get" action="/cfx-tracker" class="row"><label>开始（UTC）<input type="date" name="from" value="${esc(fromValue)}"></label><label>结束（UTC）<input type="date" name="to" value="${esc(toValue)}"></label><label>排序<select name="sort"><option value="count" ${sort==='count'?'selected':''}>交易次数</option><option value="in" ${sort==='in'?'selected':''}>转入金额</option><option value="out" ${sort==='out'?'selected':''}>转出金额</option><option value="total" ${sort==='total'?'selected':''}>进出总金额</option></select></label><button class="btn">查询</button></form>
+<form method="get" action="/cfx-tracker" class="row"><label>开始（UTC）<input type="date" name="from" value="${esc(fromValue)}"></label><label>结束（UTC）<input type="date" name="to" value="${esc(toValue)}"></label><label>排序<select name="sort"><option value="count" ${sort==='count'?'selected':''}>交易次数</option><option value="in" ${sort==='in'?'selected':''}>转入金额</option><option value="out" ${sort==='out'?'selected':''}>转出金额</option><option value="total" ${sort==='total'?'selected':''}>净流入金额</option></select></label><button class="btn">查询</button></form>
 <div class="grid"><div class="stat"><div class="n">${data.transfers.length}</div><div class="l">CFX 转移记录</div></div><div class="stat"><div class="n">${data.ranking.length}</div><div class="l">涉及地址</div></div><div class="stat"><div class="n">${data.linkCount}</div><div class="l">跨 Space 关联</div></div></div>
 <h2>币安地址最近交易汇总</h2>
 <p class="muted">截至 ${esc(new Date(data.recent.asOf*1000).toISOString().slice(0,19).replace('T',' '))} UTC，滚动 7 天和 30 天；仅统计上述币安 Core 地址的直接转移，不随上方筛选区间变化。金额四舍五入到整数 CFX。</p>
-<div style="overflow:auto"><table class="tracker-summary"><thead><tr><th>区间</th><th>总次数</th><th>入金次数</th><th>出金次数</th><th>入金 CFX</th><th>出金 CFX</th><th>进出总额 CFX</th></tr></thead><tbody>${summaryRow('最近 1 周', data.recent.week)}${summaryRow('最近 1 月', data.recent.month)}</tbody></table></div>
-<p class="muted">最近一条记录：${esc(latest)} UTC。Core 已完成 ${complete} 个时间段；eSpace 已完成 ${eComplete} 个映射地址。“账户已补抓”表示已同步该 Core 地址在设定时间段内的转移；“样本内”只统计当前采集到的交易，不能把零笔理解成该地址没有其他转入或转出。每条 CFX 转移计一次；同一经济转移可能在 Core 与 eSpace 各有一段，跨 Space 金额相加会重复。</p>
-<p class="muted">地址名称和标签来自 ConfluxScan 公开接口；接口暂不可用或未收录时仍显示已知的币安钱包、内置合约标注。</p>
+<div style="overflow:auto"><table class="tracker-summary"><thead><tr><th>区间</th><th>总次数</th><th>入金次数</th><th>出金次数</th><th>入金 CFX</th><th>出金 CFX</th><th>净流入 CFX</th></tr></thead><tbody>${summaryRow('最近 1 周', data.recent.week)}${summaryRow('最近 1 月', data.recent.month)}</tbody></table></div>
+<p class="muted">最近一条记录：${esc(latest)} UTC。Core 已完成 ${complete} 个时间段；eSpace 已完成 ${eComplete} 个映射地址。排名只统计当前采集到的交易，不能把零笔理解成该地址没有其他转入或转出。净流入为转入减转出；同一经济转移可能在 Core 与 eSpace 各有一段。</p>
+<p class="muted">地址名称、标签和矿工标记来自 ConfluxScan 公开接口；仅对样本中转入 CFX 为 0 的 Core 地址查询挖出区块。接口不可用时不标记矿工。</p>
 <div class="tracker-tabs" role="tablist" aria-label="追踪数据表">
   <button type="button" class="tracker-tab" role="tab" id="tracker-tab-rank" aria-controls="tracker-panel-rank" aria-selected="true">地址排名（前 100）</button>
   <button type="button" class="tracker-tab" role="tab" id="tracker-tab-pairs" aria-controls="tracker-panel-pairs" aria-selected="false" tabindex="-1">地址间转移（前 30）</button>
   <button type="button" class="tracker-tab" role="tab" id="tracker-tab-links" aria-controls="tracker-panel-links" aria-selected="false" tabindex="-1">跨 Space 映射（最近 30）</button>
-  <button type="button" class="tracker-tab" role="tab" id="tracker-tab-transfers" aria-controls="tracker-panel-transfers" aria-selected="false" tabindex="-1">最近转移（50 条）</button>
+  <button type="button" class="tracker-tab" role="tab" id="tracker-tab-core" aria-controls="tracker-panel-core" aria-selected="false" tabindex="-1">最近转移 · Core（50 条）</button>
+  <button type="button" class="tracker-tab" role="tab" id="tracker-tab-espace" aria-controls="tracker-panel-espace" aria-selected="false" tabindex="-1">最近转移 · eSpace（50 条）</button>
 </div>
-<section class="tracker-tab-panel" role="tabpanel" id="tracker-panel-rank" aria-labelledby="tracker-tab-rank"><div style="overflow:auto"><table class="tracker-table"><thead><tr><th>#</th><th>地址</th><th>覆盖范围</th><th>次数</th><th>进 / 出次数</th><th>转入 CFX</th><th>转出 CFX</th><th>总和 CFX</th></tr></thead><tbody>${rankRows}</tbody></table></div></section>
+<section class="tracker-tab-panel" role="tabpanel" id="tracker-panel-rank" aria-labelledby="tracker-tab-rank"><div style="overflow:auto"><table class="tracker-table"><thead><tr><th>#</th><th>地址</th><th>次数</th><th>转入/转出次数</th><th>转入 CFX</th><th>转出 CFX</th><th>净流入 CFX</th></tr></thead><tbody>${rankRows}</tbody></table></div></section>
 <section class="tracker-tab-panel" role="tabpanel" id="tracker-panel-pairs" aria-labelledby="tracker-tab-pairs" hidden><div style="overflow:auto"><table class="tracker-table"><thead><tr><th>从</th><th>到</th><th>次数</th><th>金额 CFX</th></tr></thead><tbody>${pairRows}</tbody></table></div></section>
 <section class="tracker-tab-panel" role="tabpanel" id="tracker-panel-links" aria-labelledby="tracker-tab-links" hidden><div style="overflow:auto"><table class="tracker-table"><thead><tr><th>Core 交易</th><th>Core 目标</th><th>eSpace 映射地址</th><th>金额 CFX</th></tr></thead><tbody>${linkRows}</tbody></table></div></section>
-<section class="tracker-tab-panel" role="tabpanel" id="tracker-panel-transfers" aria-labelledby="tracker-tab-transfers" hidden><div style="overflow:auto"><table class="tracker-table"><thead><tr><th>时间 UTC</th><th>Space</th><th>从</th><th>到</th><th>CFX</th></tr></thead><tbody>${transferRows}</tbody></table></div></section>
+<section class="tracker-tab-panel" role="tabpanel" id="tracker-panel-core" aria-labelledby="tracker-tab-core" hidden><div style="overflow:auto"><table class="tracker-table"><thead><tr><th>时间 UTC</th><th>从</th><th>到</th><th>CFX</th></tr></thead><tbody>${transferRows(coreTransfers)}</tbody></table></div></section>
+<section class="tracker-tab-panel" role="tabpanel" id="tracker-panel-espace" aria-labelledby="tracker-tab-espace" hidden><div style="overflow:auto"><table class="tracker-table"><thead><tr><th>时间 UTC</th><th>从</th><th>到</th><th>CFX</th></tr></thead><tbody>${transferRows(espaceTransfers)}</tbody></table></div></section>
 <script>(function(){const tabs=[...document.querySelectorAll('.tracker-tab')];function show(tab){for(const item of tabs){const selected=item===tab;item.setAttribute('aria-selected',String(selected));item.tabIndex=selected?0:-1;document.getElementById(item.getAttribute('aria-controls')).hidden=!selected;}}for(const tab of tabs){tab.addEventListener('click',()=>show(tab));tab.addEventListener('keydown',e=>{if(e.key!=='ArrowLeft'&&e.key!=='ArrowRight')return;e.preventDefault();const next=tabs[(tabs.indexOf(tab)+(e.key==='ArrowRight'?1:tabs.length-1))%tabs.length];show(next);next.focus();});}})();</script>
 <p class="muted">数据来源：ConfluxScan Core CFX Transfers、Core 交易详情及 eSpace txlist。数据保存在 SQLite，按检查点续抓。页面只展示记录，不发起链上交易。</p>
 ` }));

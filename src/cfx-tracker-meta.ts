@@ -15,6 +15,7 @@ const BUILTINS: Record<string, string> = {
 };
 const cache = new Map<string, { value: TrackerAddressMeta; expires: number }>();
 const CACHE_MS = 30 * 60 * 1000;
+const minerCache = new Map<string, { mined: boolean; expires: number }>();
 
 export function localAddressMeta(address: string): TrackerAddressMeta {
   const result: TrackerAddressMeta = address.toLowerCase() === BINANCE_CFX ? { tag: '币安钱包 · 追踪起点' } : {};
@@ -85,4 +86,26 @@ export async function lookupTrackerMetadata(addresses: string[], fetcher: typeof
     for (const [address, value] of fresh) cache.set(address, { value, expires: now + CACHE_MS });
   }
   return new Map(unique.map(address => [address, cache.get(address)!.value]));
+}
+
+/** 仅用实际区块的 miner 字段确认矿工；Scan 失败时不作标记。 */
+export async function lookupMinerAddresses(addresses: string[], fetcher: typeof fetch = fetch): Promise<Set<string>> {
+  const unique = [...new Set(addresses.filter(address => address.startsWith('cfx:')))];
+  const now = Date.now();
+  const missing = unique.filter(address => !minerCache.get(address) || minerCache.get(address)!.expires < now);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(6, missing.length) }, async () => {
+    while (next < missing.length) {
+      const address = missing[next++];
+      const url = new URL('/v1/block', 'https://www.confluxscan.org');
+      url.searchParams.set('miner', address);
+      url.searchParams.set('limit', '1');
+      const data = await scanJson(url, fetcher);
+      const first = Array.isArray(data?.list) ? data.list[0] : undefined;
+      const mined = !!first && typeof first === 'object' &&
+        (first as Record<string, unknown>).miner?.toString().toLowerCase() === address.toLowerCase();
+      minerCache.set(address, { mined, expires: now + CACHE_MS });
+    }
+  }));
+  return new Set(unique.filter(address => minerCache.get(address)?.mined));
 }
