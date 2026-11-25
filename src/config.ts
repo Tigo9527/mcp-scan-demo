@@ -10,6 +10,7 @@
 import { appendFileSync, chmodSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { baseWithPrefix, normalizeUrlPrefix } from './url-prefix.js';
 
 function envFileValue(name: string, file: string): string | undefined {
   try {
@@ -41,18 +42,22 @@ function ensurePersistedSecret(name: string): { value: string; generated: boolea
 }
 
 const port = Number(process.env.PORT ?? 3000);
+const urlPrefix = normalizeUrlPrefix(process.env.URL_PREFIX);
+// Vitest/Vite injects BASE_URL='/' for its own asset base; that is not a public origin.
+const baseUrlEnv = process.env.BASE_URL === '/' ? undefined : process.env.BASE_URL;
 const jwtSecretInfo = ensurePersistedSecret('JWT_SECRET');
 const adminTokenInfo = ensurePersistedSecret('ADMIN_TOKEN');
 
 export const config = {
   port,
   host: process.env.HOST ?? '0.0.0.0',
+  urlPrefix,
   /** JWT 签名密钥：优先读环境变量；未配置时启动生成并写入 .env */
   jwtSecret: jwtSecretInfo.value,
   /** 对外基础地址，用于拼接回调与 MCP 端点 URL */
-  baseUrl: process.env.BASE_URL ?? `http://localhost:${port}`,
+  baseUrl: baseWithPrefix(baseUrlEnv ?? `http://localhost:${port}`, urlPrefix),
   /** 对外可见基础地址（部署在公网/反代后由环境变量覆盖，用于工具里拼登录链接） */
-  publicBaseUrl: process.env.PUBLIC_BASE_URL ?? process.env.BASE_URL ?? `http://localhost:${port}`,
+  publicBaseUrl: baseWithPrefix(process.env.PUBLIC_BASE_URL ?? baseUrlEnv ?? `http://localhost:${port}`, urlPrefix),
   jwtTokenPrefix: 'mcp_demo_',
 
   /**

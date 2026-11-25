@@ -248,7 +248,7 @@ ${card(`
 <li><code>GET /mcp</code> 返回 <b>405</b> 是<strong>正常</strong>的：本服务跑在无状态模式，只接受 POST。</li>
 <li>不带令牌的请求会收到 <b>401</b>，这是触发标准登录流程的入口，不是故障；排查时看
 <code>WWW-Authenticate</code> 头里的 <code>resource_metadata</code> 是否指向
-<code>${esc(base)}/.well-known/oauth-protected-resource/mcp</code>。</li>
+<code>${esc(protectedResourceMetadataUrl(base))}</code>。</li>
 <li>不要用 <code>Authorization</code> 头传令牌，网关会改写它；用 <code>X-Authorization</code> 或 <code>?token=</code>。</li>
 <li>令牌形如 <code>mcp_demo_xxxx</code>，前缀不能丢。</li>
 </ul>
@@ -1169,7 +1169,22 @@ export function createApp() {
     res.status(500).type('text/plain; charset=utf-8').send(`服务器内部错误：${msg}`);
   });
 
-  return app;
+  if (!config.urlPrefix) return app;
+
+  const root = express();
+  // RFC 9728/8414 insert .well-known before the issuer/resource path.
+  const prm = `${WELL_KNOWN.protectedResource}${config.urlPrefix}${MCP_PATH}`;
+  const as = `${WELL_KNOWN.authorizationServer}${config.urlPrefix}`;
+  const oidc = `${WELL_KNOWN.openidConfiguration}${config.urlPrefix}`;
+  root.get([WELL_KNOWN.protectedResource, prm], allowPublicCors, (req, res) => {
+    res.json(protectedResourceMetadata(deriveBase(req)));
+  });
+  root.get([as, oidc], allowPublicCors, (req, res) => {
+    res.json(authorizationServerMetadata(deriveBase(req)));
+  });
+  root.options([WELL_KNOWN.protectedResource, prm, as, oidc], allowPublicCors);
+  root.use(config.urlPrefix, app);
+  return root;
 }
 
 function oauthErrorHtml(base: string, message: string): string {

@@ -1,11 +1,12 @@
 import type { IncomingMessage, Server } from 'node:http';
 import { WebSocketServer, WebSocket } from 'ws';
+import { config } from './config.js';
 
 type Validator = (agentId: string, token: string) => boolean;
 type AgentClient = { agentId: string; socket: WebSocket };
 
 const clients = new Set<AgentClient>();
-const pathPattern = /^\/ws\/agents\/([0-9a-f-]{36})\/tasks$/i;
+const pathPattern = new RegExp(`^${config.urlPrefix.replaceAll('.', '\\.')}\/ws\/agents\/([0-9a-f-]{36})\/tasks$`, 'i');
 
 function tokenFromRequest(req: IncomingMessage): string {
   const header = req.headers['x-agent-token'];

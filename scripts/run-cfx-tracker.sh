@@ -55,7 +55,10 @@ db.all('SELECT space, COUNT(*) AS count FROM transfers GROUP BY space ORDER BY s
   if (error) { console.error(error); process.exitCode = 1; return; }
   console.log('同步完成，当前转移记录数：');
   for (const row of rows) console.log(`  ${row.space}: ${row.count}`);
+  const prefix = (process.env.URL_PREFIX ?? '').replace(/^\/+|\/+$/g, '');
   const base = (process.env.PUBLIC_BASE_URL ?? process.env.BASE_URL ?? '').replace(/\/+$/, '');
-  console.log(base ? `页面：${base}/cfx-tracker` : '页面路径：/cfx-tracker（请加上部署域名）');
+  const path = `/${prefix ? `${prefix}/` : ''}cfx-tracker`;
+  const siteBase = prefix && !base.endsWith(`/${prefix}`) ? `${base}/${prefix}` : base;
+  console.log(siteBase ? `页面：${siteBase}/cfx-tracker` : `页面路径：${path}（请加上部署域名）`);
 });
 NODE

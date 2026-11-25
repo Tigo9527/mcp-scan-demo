@@ -7,6 +7,7 @@
  */
 import { serverInfo } from '../version.js';
 import type { User } from '../auth/store.js';
+import { config } from '../config.js';
 const CSS = `
 :root{--fg:#1a1a1a;--muted:#6b7280;--line:#e5e7eb;--bg:#fff;--soft:#f6f8fa;--acc:#0969da;--ok:#1f883d;--warn:#bf8700;--err:#cf222e}
 *{box-sizing:border-box}
@@ -306,10 +307,15 @@ export function page(opts: PageOptions): string {
       )}">退出</a></nav>`
     : '';
 
-  return `<!doctype html><html lang="zh"><head><meta charset="utf-8">
+  const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(opts.title)}</title><style>${CSS}</style></head>
 <body${opts.bodyClass ? ` class="${esc(opts.bodyClass)}"` : ''}>${nav}${subnav}${opts.body}${versionFooter()}${COPY_SCRIPT}${opts.adminTab ? CLIENT_ERROR_SCRIPT : ''}</body></html>`;
+  // Older inline page scripts use root-absolute paths. Prefix only our own route literals;
+  // dynamic/user text is escaped before it reaches this renderer.
+  return config.urlPrefix
+    ? html.replace(/(["'])\/(?=(?:admin|api|agents|auth|oauth|mcp|setup|profile|register|login|logout|recharge|web3|cfx-tracker|health)(?:[/?"']|$))/g, `$1${config.urlPrefix}/`)
+    : html;
 }
 
 /**

@@ -8,7 +8,7 @@ import sanitizeHtml from 'sanitize-html';
 import { AgentModel, AgentTaskModel, AgentAutomationModel, AgentTemplateModel, dbEnabled } from '../db.js';
 import { config, getAdminToken, isLocalBaseUrl } from '../config.js';
 import { isAdminRequest } from './admin.js';
-import { authenticateWebUserRequest, deriveBase, requireSameOrigin, wrap } from './http.js';
+import { appPath, authenticateWebUserRequest, deriveBase, requireSameOrigin, wrap } from './http.js';
 import * as userStore from '../auth/store.js';
 import { esc, page } from './layout.js';
 import { publishAgentTask } from '../agent-websocket.js';
@@ -38,7 +38,7 @@ function adminOnly(req: Request, res: Response, next: NextFunction): void {
   // 页面请求缺少/失效的 Admin Cookie 时回到登录页，避免浏览器直接看到 JSON。
   // API 请求仍保持 403 JSON，便于脚本明确处理权限失败。
   if (req.method === 'GET' && req.path.startsWith('/admin/agents') && String(req.headers.accept ?? '').toLowerCase().includes('text/html')) {
-    res.redirect(302, '/admin/login');
+    res.redirect(302, appPath('/admin/login'));
     return;
   }
   res.status(403).json({ error: 'Admin 权限不足' });

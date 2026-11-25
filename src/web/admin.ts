@@ -24,7 +24,7 @@ import { getStatsSnapshot } from '../stats.js';
 import * as billing from '../billing.js';
 import * as recharge from '../recharge.js';
 import { persistStatus } from '../db.js';
-import { deriveBase, originOk, readCookie, requestOrigin, requireSameOrigin, wrap } from './http.js';
+import { appPath, cookiePath, deriveBase, originOk, readCookie, requestOrigin, requireSameOrigin, wrap } from './http.js';
 import {
   adminHref,
   badge,
@@ -152,7 +152,7 @@ function setAdminCookie(req: Request, res: Response, token: string): void {
     config.publicBaseUrl.startsWith('https://');
   const parts = [
     `${COOKIE_NAME}=${encodeURIComponent(token)}`,
-    'Path=/',
+    `Path=${cookiePath()}`,
     'HttpOnly',
     'SameSite=Lax',
     `Max-Age=${COOKIE_MAX_AGE}`,
@@ -174,8 +174,11 @@ function loginHtml(base: string, error?: string): string {
 ${error ? notice(esc(error)) : ''}
 ${card(`
 <form method="post" action="${esc(base)}/admin/login">
+<label for="username">用户名</label>
+<input id="username" name="username" type="text" autocomplete="username" value="admin" required>
 <label for="token">管理员令牌</label>
 <input id="token" name="token" type="password" autocomplete="current-password" placeholder="ADMIN_TOKEN" required>
+<p class="muted">用户名仅用于浏览器密码管理器识别，不参与验证。</p>
 <p class="muted">令牌由环境变量 <code>ADMIN_TOKEN</code> 配置。连续 10 次失败会锁定 10 分钟。</p>
 <button class="btn" type="submit">登录</button>
 </form>
@@ -769,7 +772,7 @@ export function createAdminRouter(): Router {
 
   router.get('/admin/logout', (req: Request, res: Response) => {
     const base = deriveBase(req);
-    res.appendHeader('Set-Cookie', `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+    res.appendHeader('Set-Cookie', `${COOKIE_NAME}=; Path=${cookiePath()}; HttpOnly; SameSite=Lax; Max-Age=0`);
     res.redirect(302, `${base}/admin/login`);
   });
 
@@ -886,7 +889,7 @@ export function createAdminRouter(): Router {
 
     setGithub(patch);
     // 用 URL 拼接，避免 token 为空时拼出 `/admin/settings&saved=1` 这种坏地址
-    const target = new URL(adminHref('/admin/settings', token), base);
+    const target = new URL(appPath(adminHref('/admin/settings', token)), base);
     target.searchParams.set('saved', '1');
     res.redirect(302, target.toString());
   });
@@ -944,7 +947,7 @@ export function createAdminRouter(): Router {
         return;
       }
 
-      const target = new URL(adminHref('/admin/recharge-settings', token), base);
+      const target = new URL(appPath(adminHref('/admin/recharge-settings', token)), base);
       target.searchParams.set('saved', '1');
       if (result.warning) target.searchParams.set('warn', result.warning);
       if (result.info) target.searchParams.set('msg', result.info);
@@ -1031,7 +1034,7 @@ export function createAdminRouter(): Router {
         return;
       }
 
-      const target = new URL(adminHref('/admin/recharge-settings', token), base);
+      const target = new URL(appPath(adminHref('/admin/recharge-settings', token)), base);
       target.searchParams.set('saved', '1');
       target.searchParams.set('msg', '充值设置已导入并保存。');
       if (result.warning) target.searchParams.set('warn', result.warning);
@@ -1047,7 +1050,7 @@ export function createAdminRouter(): Router {
     wrap(async (req: Request, res: Response) => {
       const token = resolveAdminToken(req) ?? '';
       const result = await recharge.refreshTokenMeta();
-      const target = new URL(adminHref('/admin/recharge-settings', token), deriveBase(req));
+      const target = new URL(appPath(adminHref('/admin/recharge-settings', token)), deriveBase(req));
       if (result.ok) {
         if (result.warning) target.searchParams.set('warn', result.warning);
         else target.searchParams.set('msg', result.info || '元数据已重新读取成功。');
@@ -1079,7 +1082,7 @@ export function createAdminRouter(): Router {
       const token = resolveAdminToken(req) ?? '';
       const base = deriveBase(req);
       resetGithub();
-      const target = new URL(adminHref('/admin/settings', token), base);
+      const target = new URL(appPath(adminHref('/admin/settings', token)), base);
       target.searchParams.set('saved', '1');
       res.redirect(302, target.toString());
     },

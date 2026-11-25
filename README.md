@@ -1,5 +1,16 @@
 # MCP Demo 服务（TypeScript）
 
+## URL 前缀
+
+默认所有路由位于域名根路径。若要部署到子路径，例如 `/demo`，设置
+`URL_PREFIX=/demo`，并将反向代理的 `/demo/*` 原样转发到本服务。
+`BASE_URL` 和 `PUBLIC_BASE_URL` 可填域名根地址，服务会自动追加前缀；
+也可填写已经包含相同前缀的完整地址。门户、API、MCP、OAuth 回调和 WebSocket
+都会使用此前缀。GitHub OAuth App 的回调地址也要改为
+`https://你的域名/demo/auth/github/callback`。
+
+Admin 登录页的用户名只供浏览器密码管理器标识令牌，服务端只验证 `ADMIN_TOKEN`。
+
 ## 币安 CFX 地址追踪
 
 公开页面：`/cfx-tracker`；机器可读数据：`/api/cfx-tracker`。起点固定为

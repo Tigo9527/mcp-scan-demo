@@ -10,6 +10,7 @@
  * 脚本会自己起服务（随机端口）、自己模拟浏览器完成登录，全程无需人工干预。
  */
 const PORT = Number(process.env.E2E_PORT ?? 0);
+const URL_PREFIX = process.env.URL_PREFIX?.replace(/\/+$/, '') ?? '';
 
 // 必须在 import 业务模块**之前**就绪：config.ts 在模块加载时就快照了 env
 process.env.MCP_DEMO_REQUIRE_AUTH = 'on';
@@ -63,7 +64,7 @@ async function actAsUser(authorizationUrl: URL): Promise<string> {
   const page = await fetch(authorizationUrl, { redirect: 'manual' });
   if (page.status !== 200) throw new Error(`授权页返回 ${page.status}`);
   const hidden = hiddenInputs(await page.text());
-  const res = await fetch(`${authorizationUrl.origin}/oauth/authorize`, {
+  const res = await fetch(`${authorizationUrl.origin}${URL_PREFIX}/oauth/authorize`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ ...hidden, username: USERNAME, password: PASSWORD }).toString(),
@@ -83,9 +84,9 @@ async function main(): Promise<void> {
   await new Promise<void>((resolve) => server.once('listening', () => resolve()));
   const addr = server.address();
   const port = typeof addr === 'object' && addr ? addr.port : 0;
-  const base = `http://127.0.0.1:${port}`;
+  const base = `http://127.0.0.1:${port}${URL_PREFIX}`;
   // PUBLIC_BASE_URL 里写的是 0，这里换成真实端口后重新推导 canonical
-  process.env.PUBLIC_BASE_URL = base;
+  process.env.PUBLIC_BASE_URL = `http://127.0.0.1:${port}`;
   console.log(`\n▶ 本地服务已启动：${base}\n`);
 
   authManager.registerWithPassword(USERNAME, PASSWORD);

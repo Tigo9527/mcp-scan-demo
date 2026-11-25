@@ -50,12 +50,13 @@ export function canonicalResourceUri(base: string): string {
 
 /** 受保护资源元数据地址（RFC 9728 §3.1 的插入规则） */
 export function protectedResourceMetadataUrl(base: string): string {
-  return `${trimSlash(base)}${WELL_KNOWN.protectedResource}${MCP_PATH}`;
+  const resource = new URL(canonicalResourceUri(base));
+  return `${resource.origin}${WELL_KNOWN.protectedResource}${resource.pathname}`;
 }
 
 /** 兜底地址：客户端把 canonical 当成不带路径的 origin 时会请求这里 */
 export function protectedResourceMetadataRootUrl(base: string): string {
-  return `${trimSlash(base)}${WELL_KNOWN.protectedResource}`;
+  return `${new URL(base).origin}${WELL_KNOWN.protectedResource}`;
 }
 
 /** RFC 9728 受保护资源元数据。MCP 要求至少包含 authorization_servers。 */

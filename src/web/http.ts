@@ -4,6 +4,7 @@
  */
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { config } from '../config.js';
+import { baseWithPrefix } from '../url-prefix.js';
 import * as authManager from '../auth/manager.js';
 import type { User } from '../auth/store.js';
 
@@ -16,7 +17,7 @@ import type { User } from '../auth/store.js';
  */
 export function deriveBase(req: Request): string {
   const fromEnv = process.env.PUBLIC_BASE_URL?.trim();
-  if (fromEnv) return fromEnv.replace(/\/+$/, '');
+  if (fromEnv) return baseWithPrefix(fromEnv, config.urlPrefix);
 
   const proto =
     (req.headers['x-forwarded-proto'] as string | undefined) ||
@@ -24,8 +25,17 @@ export function deriveBase(req: Request): string {
   const host =
     (req.headers['x-forwarded-host'] as string | undefined) ||
     (req.headers.host as string | undefined);
-  if (host) return `${proto}://${host}`;
+  if (host) return baseWithPrefix(`${proto}://${host}`, config.urlPrefix);
   return config.publicBaseUrl;
+}
+
+/** Site-local absolute path, including the configured mount prefix. */
+export function appPath(path: string): string {
+  return `${config.urlPrefix}${path.startsWith('/') ? path : `/${path}`}`;
+}
+
+export function cookiePath(): string {
+  return config.urlPrefix || '/';
 }
 
 /**
@@ -49,7 +59,7 @@ export function setUserTokenCookie(req: Request, res: Response, token: string): 
   if (!token) return;
   const parts = [
     `${USER_TOKEN_COOKIE}=${encodeURIComponent(token)}`,
-    'Path=/',
+    `Path=${cookiePath()}`,
     'HttpOnly',
     'SameSite=Lax',
     `Max-Age=${USER_COOKIE_MAX_AGE}`,
@@ -74,7 +84,7 @@ export function adoptTokenFromUrl(req: Request, res: Response, token: string): v
 export function clearUserTokenCookie(req: Request, res: Response): void {
   const parts = [
     `${USER_TOKEN_COOKIE}=`,
-    'Path=/',
+    `Path=${cookiePath()}`,
     'HttpOnly',
     'SameSite=Lax',
     'Max-Age=0',

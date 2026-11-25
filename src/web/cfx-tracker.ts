@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { BINANCE_CFX, TrackerDb, cfxWholeAmount } from '../cfx-tracker.js';
 import { lookupMinerAddresses, lookupTrackerMetadata, type TrackerMetadata } from '../cfx-tracker-meta.js';
 import { esc, page } from './layout.js';
-import { wrap } from './http.js';
+import { deriveBase, wrap } from './http.js';
 
 type Transfer = { space: string; tx_hash: string; timestamp: number; from_address: string; to_address: string; amount_wei: string };
 type Link = { core_tx_hash: string; core_to: string; es_address: string | null; amount_wei: string; status: string };
@@ -111,7 +111,7 @@ export function createCfxTrackerRouter(
     const complete = data.checkpoints.filter(c => c.source.startsWith('core:')).length;
     const eComplete = data.checkpoints.filter(c => c.source.startsWith('espace:')).length;
     const latest = data.transfers.length ? new Date(data.transfers[0].timestamp*1000).toISOString().slice(0,19).replace('T',' ') : '无';
-    res.type('html').send(page({ title: '币安 CFX 地址追踪', base: `${req.protocol}://${req.get('host')}`, bodyClass: 'cfx-tracker-page', body: `
+    res.type('html').send(page({ title: '币安 CFX 地址追踪', base: deriveBase(req), bodyClass: 'cfx-tracker-page', body: `
 <h1>币安 CFX 地址与交易追踪</h1>
 <p>起点：${addressLink(BINANCE_CFX)}</p>
 <form method="get" action="/cfx-tracker" class="row"><label>开始（UTC）<input type="date" name="from" value="${esc(fromValue)}"></label><label>结束（UTC）<input type="date" name="to" value="${esc(toValue)}"></label><label>排序<select name="sort"><option value="count" ${sort==='count'?'selected':''}>交易次数</option><option value="in" ${sort==='in'?'selected':''}>转入金额</option><option value="out" ${sort==='out'?'selected':''}>转出金额</option><option value="total" ${sort==='total'?'selected':''}>净流入金额</option></select></label><button class="btn">查询</button></form>
