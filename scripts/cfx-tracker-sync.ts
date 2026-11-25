@@ -120,8 +120,9 @@ async function coreCounterparties(db: TrackerDb): Promise<void> {
 }
 
 async function syncTopZeroInAddresses(db: TrackerDb): Promise<void> {
-  const selected = await topZeroInAddresses(db, fromTs, untilTs);
-  console.log(`Top 100 zero-in addresses to sync: ${selected.length}`);
+  let selected = await topZeroInAddresses(db, fromTs, untilTs);
+  const attempted = new Set<string>();
+  let round = 0;
   const workers: TrackerDb[] = [];
   try {
     for (let i = 0; i < Math.min(4, selected.length); i++) {
@@ -129,22 +130,29 @@ async function syncTopZeroInAddresses(db: TrackerDb): Promise<void> {
       await worker.init();
       workers.push(worker);
     }
-    let next = 0;
-    let done = 0;
-    const failures: string[] = [];
-    await Promise.all(workers.map(async worker => {
-      while (next < selected.length) {
-        const address = selected[next++];
-        try {
-          if (address.startsWith('cfx:')) await coreWindow(worker, address, fromTs, untilTs);
-          else await eSpaceAccount(worker, address);
+    while (selected.length) {
+      round++;
+      console.log(`Top 100 zero-in round ${round}: ${selected.length} new addresses`);
+      let next = 0;
+      let done = 0;
+      const failures: string[] = [];
+      await Promise.all(workers.map(async worker => {
+        while (next < selected.length) {
+          const address = selected[next++];
+          try {
+            if (address.startsWith('cfx:')) await coreWindow(worker, address, fromTs, untilTs);
+            else await eSpaceAccount(worker, address);
+          }
+          catch (error) { failures.push(`${address}: ${String(error)}`); }
+          done++;
+          if (done % 10 === 0) console.log(`Top zero-in addresses processed: ${done}/${selected.length}`);
         }
-        catch (error) { failures.push(`${address}: ${String(error)}`); }
-        done++;
-        if (done % 10 === 0) console.log(`Top zero-in addresses processed: ${done}/${selected.length}`);
-      }
-    }));
-    if (failures.length) throw new Error(`${failures.length} zero-in addresses failed:\n${failures.slice(0, 10).join('\n')}`);
+      }));
+      if (failures.length) throw new Error(`${failures.length} zero-in addresses failed:\n${failures.slice(0, 10).join('\n')}`);
+      for (const address of selected) attempted.add(address);
+      selected = (await topZeroInAddresses(db, fromTs, untilTs)).filter(address => !attempted.has(address));
+    }
+    console.log(`前 100 零转入补抓完成：${attempted.size} 个地址，${round} 轮`);
   } finally { await Promise.all(workers.map(worker => worker.close())); }
 }
 
