@@ -9,12 +9,25 @@ Core 与 eSpace 的最近转移分别显示在两个 Tab。
 逐笔记录可从 `/api/cfx-tracker/transfers?limit=100&offset=0` 分页读取；两个 API
 均支持 `from=YYYY-MM-DD&to=YYYY-MM-DD` 过滤。
 
-运行 `npm run cfx:sync` 抓取最近三个日历月的数据。采集结果在
+服务器上进入仓库后执行以下命令生成数据（首次运行会自动安装 npm 依赖）：
+
+```bash
+bash scripts/run-cfx-tracker.sh
+```
+
+脚本从仓库目录运行，读取 `.env` 和已有环境变量，用文件锁避免并发同步，
+完成后打印 Core / eSpace 记录数与页面路径；配置 `PUBLIC_BASE_URL` 后会打印完整地址。
+失败后重跑会从检查点续抓。
+Web 服务与同步脚本必须使用同一个 `CFX_TRACKER_DB`（或同一个工作目录下的 `DATA_DIR`），
+否则页面读不到新生成的数据。服务仍由原有部署方式启动；本地可用 `npm start`。
+只补抓排名中零转入的地址可运行 `bash scripts/run-cfx-tracker.sh --top-zero`。
+
+默认抓取最近三个日历月的数据。采集结果在
 `data/cfx-tracker.sqlite`，与用户、计费数据库分开。用 `CFX_TRACKER_FROM` 和
 `CFX_TRACKER_UNTIL` 设置 ISO 日期或时间可以扩展区间，例如：
 
 ```bash
-CFX_TRACKER_FROM=2026-07-01T00:00:00Z CFX_TRACKER_UNTIL=2026-11-24T00:00:00Z npm run cfx:sync
+CFX_TRACKER_FROM=2026-07-01T00:00:00Z CFX_TRACKER_UNTIL=2026-11-24T00:00:00Z bash scripts/run-cfx-tracker.sh
 ```
 
 Core 数据按对齐的周区间查询；超过 API 单次 10000 条分页上限时自动拆分。
