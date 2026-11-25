@@ -8,7 +8,8 @@ usage() {
 默认抓取最近三个日历月的币安 CFX 追踪数据；--top-zero 仅补抓
 次数排名前 100 中转入次数为 0 的地址。可用 CFX_TRACKER_FROM、
 CFX_TRACKER_UNTIL、CFX_TRACKER_DB 或 DATA_DIR 设置范围与存储位置。
-失败后直接重跑，已完成区间会从检查点续抓。
+中断或失败后用相同命令重跑：未完成的时间范围保持不变，
+Core 地址从已提交的分页检查点续抓；已完成区间自动跳过。
 EOF
 }
 

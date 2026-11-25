@@ -66,3 +66,63 @@ it('一次运行会补抓排名变化后新出现的零转入地址', async () =
     await new Promise<void>(resolve => server.close(() => resolve()));
   }
 });
+
+it('分页中断后从已提交的 Core 页继续，不重写第一页', async () => {
+  const account = 'cfx:aara421audx4ev6t7c40a3f6vzjwf5a3apxbm53nxc';
+  const from = Math.floor(Date.parse('2026-11-20T00:00:00Z') / 1000);
+  const file = path.join(dir, 'resume.sqlite');
+  const db = new TrackerDb(file);
+  await db.init();
+  await db.run('INSERT INTO transfers VALUES (?,?,?,?,?,?,?,?)', ['core', '0x01', 0, from + 3600, account, BINANCE_CFX, '1', 'fixture']);
+  await db.close();
+
+  const queried: number[] = [];
+  const untils: number[] = [];
+  let interrupt = true;
+  const server = createServer((req, res) => {
+    const query = new URL(req.url ?? '/', 'http://localhost').searchParams;
+    const skip = Number(query.get('skip'));
+    queried.push(skip);
+    untils.push(Number(query.get('maxTimestamp')));
+    res.setHeader('content-type', 'application/json');
+    if (skip === 100 && interrupt) {
+      res.end(JSON.stringify({ code: 1, message: 'fixture interruption', data: null }));
+      return;
+    }
+    const transfer = { transactionHash: '0x02', txLogIndex: 0, timestamp: from + 7200, from: account, to: BINANCE_CFX, amount: '2' };
+    res.end(JSON.stringify({ code: 0, message: '', data: { total: 101, list: Array.from({ length: skip ? 1 : 100 }, () => transfer) } }));
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = server.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+    const env: NodeJS.ProcessEnv = { ...process.env, CFX_TRACKER_DB: file, CFX_TRACKER_FROM: '2026-11-20T00:00:00Z', CONFLUXSCAN_API_URL: `http://127.0.0.1:${port}`, NO_PROXY: '127.0.0.1,localhost' };
+    delete env.CFX_TRACKER_UNTIL;
+    const run = () => promisify(execFile)('node_modules/.bin/tsx', ['scripts/cfx-tracker-sync.ts', '--top-zero'], {
+      cwd: path.resolve('.'), timeout: 20_000,
+      env,
+    });
+    await expect(run()).rejects.toThrow('Core page 100: fixture interruption');
+    const check = new TrackerDb(file);
+    await check.init();
+    expect((await check.get<{ next_skip: number }>('SELECT next_skip FROM core_page_progress WHERE source=?', [`core:${account}`]))?.next_skip).toBe(100);
+    expect(await check.get('SELECT 1 FROM checkpoints WHERE source=?', [`core:${account}`])).toBeUndefined();
+    expect(await check.get('SELECT 1 FROM sync_runs WHERE mode=?', ['top-zero'])).toBeDefined();
+    await check.close();
+
+    interrupt = false;
+    await new Promise(resolve => setTimeout(resolve, 1100));
+    const { stdout } = await run();
+    expect(stdout).toContain(`Resuming Core ${account} at page 100/101`);
+    expect(queried).toEqual([0, 100, 0, 100]);
+    expect(new Set(untils).size).toBe(1);
+    const finished = new TrackerDb(file);
+    await finished.init();
+    expect(await finished.get('SELECT 1 FROM checkpoints WHERE source=?', [`core:${account}`])).toBeDefined();
+    expect(await finished.get('SELECT 1 FROM core_page_progress WHERE source=?', [`core:${account}`])).toBeUndefined();
+    expect(await finished.get('SELECT 1 FROM sync_runs WHERE mode=?', ['top-zero'])).toBeUndefined();
+    await finished.close();
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+});

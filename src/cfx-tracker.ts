@@ -42,6 +42,14 @@ export class TrackerDb {
       completed_at TEXT NOT NULL, records INTEGER NOT NULL,
       PRIMARY KEY(source, start_ts, end_ts)
     )`);
+    await this.run(`CREATE TABLE IF NOT EXISTS core_page_progress (
+      source TEXT NOT NULL, start_ts INTEGER NOT NULL, end_ts INTEGER NOT NULL,
+      next_skip INTEGER NOT NULL, total INTEGER NOT NULL,
+      PRIMARY KEY(source, start_ts, end_ts)
+    )`);
+    await this.run(`CREATE TABLE IF NOT EXISTS sync_runs (
+      mode TEXT PRIMARY KEY, from_ts INTEGER NOT NULL, until_ts INTEGER NOT NULL
+    )`);
     await this.run(`CREATE TABLE IF NOT EXISTS cross_space_links (
       core_tx_hash TEXT PRIMARY KEY, timestamp INTEGER NOT NULL,
       core_to TEXT NOT NULL, es_address TEXT, amount_wei TEXT NOT NULL,

@@ -17,7 +17,8 @@ bash scripts/run-cfx-tracker.sh
 
 脚本从仓库目录运行，读取 `.env` 和已有环境变量，用文件锁避免并发同步，
 完成后打印 Core / eSpace 记录数与页面路径；配置 `PUBLIC_BASE_URL` 后会打印完整地址。
-失败后重跑会从检查点续抓。
+按 Ctrl+C 中断或失败后，用相同命令重跑即可续抓。未完成任务的默认时间范围会保留，
+Core 地址会从最后提交的分页继续；已完成的区间和地址会跳过。
 Web 服务与同步脚本必须使用同一个 `CFX_TRACKER_DB`（或同一个工作目录下的 `DATA_DIR`），
 否则页面读不到新生成的数据。服务仍由原有部署方式启动；本地可用 `npm start`。
 只补抓排名中零转入的地址可运行 `bash scripts/run-cfx-tracker.sh --top-zero`。
@@ -40,7 +41,9 @@ Core 数据按对齐的周区间查询；超过 API 单次 10000 条分页上限
 `npm run cfx:sync -- --top-zero`。
 矿工即使补抓后仍可能没有普通转入记录；页面会另查挖出区块并标记已确认的矿工。
 同步命令使用系统 `curl` 发请求，以沿用 `HTTPS_PROXY` 等代理配置。
-`checkpoints` 表只记录完成的区间，失败后重新运行会续抓，转账主键保证幂等。
+`checkpoints` 表记录完成的区间，`core_page_progress` 记录每个 Core 地址已提交的分页，
+`sync_runs` 保留未完成任务的时间范围；转账主键保证重跑幂等。显式修改
+`CFX_TRACKER_FROM` 或 `CFX_TRACKER_UNTIL` 会开始对应的新范围。
 跨 Space 交易通过 Core 交易详情里的第二段转移找到 eSpace 映射地址，再用
 ConfluxScan eSpace `txlist` 读取其 CFX 交易；无解析结果会明确标记 `unresolved`。
 eSpace 每个映射地址最多读 100 页，超过时不写完成检查点并报错。

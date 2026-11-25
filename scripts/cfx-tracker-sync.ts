@@ -19,9 +19,21 @@ let nextCoreRequestAt = 0;
 const now = new Date();
 const threeMonthsAgo = new Date(now);
 threeMonthsAgo.setUTCMonth(now.getUTCMonth() - 3);
-const fromTs = Math.floor(Date.parse(process.env.CFX_TRACKER_FROM ?? `${threeMonthsAgo.toISOString().slice(0,10)}T00:00:00Z`) / 1000);
-const untilTs = Math.floor(Date.parse(process.env.CFX_TRACKER_UNTIL ?? now.toISOString()) / 1000);
-if (!Number.isFinite(fromTs) || !Number.isFinite(untilTs) || fromTs >= untilTs) throw new Error('Invalid tracker date range');
+let fromTs = Math.floor(Date.parse(process.env.CFX_TRACKER_FROM ?? `${threeMonthsAgo.toISOString().slice(0,10)}T00:00:00Z`) / 1000);
+let untilTs = Math.floor(Date.parse(process.env.CFX_TRACKER_UNTIL ?? now.toISOString()) / 1000);
+
+async function prepareRun(db: TrackerDb, mode: string): Promise<void> {
+  const saved = await db.get<{ from_ts: number; until_ts: number }>('SELECT from_ts,until_ts FROM sync_runs WHERE mode=?', [mode]);
+  if (saved && (!process.env.CFX_TRACKER_FROM || saved.from_ts === fromTs)
+      && (!process.env.CFX_TRACKER_UNTIL || saved.until_ts === untilTs)) {
+    // Keep the same range after a restart, even when the default end is "now".
+    fromTs = saved.from_ts;
+    untilTs = saved.until_ts;
+    console.log(`Resuming ${mode} range ${new Date(fromTs * 1000).toISOString()} - ${new Date(untilTs * 1000).toISOString()}`);
+  }
+  if (!Number.isFinite(fromTs) || !Number.isFinite(untilTs) || fromTs >= untilTs) throw new Error('Invalid tracker date range');
+  await db.run('INSERT OR REPLACE INTO sync_runs VALUES (?,?,?)', [mode, fromTs, untilTs]);
+}
 
 async function json<T>(url: URL, deferRateLimit = false): Promise<T> {
   for (let attempt = 0; attempt < 4; attempt++) {
@@ -86,7 +98,14 @@ async function coreWindow(db: TrackerDb, account: string, start: number, end: nu
     await coreWindow(db, account, mid + 1, end);
     return;
   }
-  for (let skip = 0; skip < total; skip += 100) {
+  const progress = await db.get<{ next_skip: number; total: number }>(
+    'SELECT next_skip,total FROM core_page_progress WHERE source=? AND start_ts=? AND end_ts=?', [source, start, end]);
+  const resumeSkip = progress?.total === total && progress.next_skip >= 0 && progress.next_skip % 100 === 0
+    ? progress.next_skip : 0;
+  if (progress && resumeSkip === 0) await db.run(
+    'DELETE FROM core_page_progress WHERE source=? AND start_ts=? AND end_ts=?', [source, start, end]);
+  if (resumeSkip) console.log(`Resuming Core ${account} at page ${resumeSkip}/${total}`);
+  for (let skip = resumeSkip; skip < total; skip += 100) {
     url.searchParams.set('skip', String(skip));
     const response = skip === 0 ? first : await corePage(url);
     if (response.code !== 0 || !Array.isArray(response.data?.list)) throw new Error(`Core page ${skip}: ${response.message}`);
@@ -97,10 +116,16 @@ async function coreWindow(db: TrackerDb, account: string, start: number, end: nu
         await db.run(`INSERT OR IGNORE INTO transfers VALUES (?,?,?,?,?,?,?,?)`,
           ['core', t.transactionHash.toLowerCase(), t.txLogIndex, t.timestamp, t.from.toLowerCase(), t.to.toLowerCase(), t.amount, 'ConfluxScan Core CFX transfers']);
       }
+      await db.run('INSERT OR REPLACE INTO core_page_progress VALUES (?,?,?,?,?)', [source, start, end, skip + 100, total]);
       await db.run('COMMIT');
     } catch (error) { await db.run('ROLLBACK'); throw error; }
   }
-  await db.run('INSERT OR REPLACE INTO checkpoints VALUES (?,?,?,?,?)', [source, start, end, new Date().toISOString(), total]);
+  await db.run('BEGIN');
+  try {
+    await db.run('INSERT OR REPLACE INTO checkpoints VALUES (?,?,?,?,?)', [source, start, end, new Date().toISOString(), total]);
+    await db.run('DELETE FROM core_page_progress WHERE source=? AND start_ts=? AND end_ts=?', [source, start, end]);
+    await db.run('COMMIT');
+  } catch (error) { await db.run('ROLLBACK'); throw error; }
   console.log(`Core ${account} ${new Date(start * 1000).toISOString()} - ${new Date(end * 1000).toISOString()}: ${total}`);
 }
 
@@ -245,6 +270,8 @@ async function eSpace(db: TrackerDb): Promise<void> {
 const db = new TrackerDb();
 try {
   await db.init();
+  const mode = process.argv.includes('--top-zero') ? 'top-zero' : 'full';
+  await prepareRun(db, mode);
   if (process.argv.includes('--top-zero')) {
     await syncTopZeroInAddresses(db);
   } else {
@@ -258,5 +285,6 @@ try {
     await eSpace(db);
     await syncTopZeroInAddresses(db);
   }
+  await db.run('DELETE FROM sync_runs WHERE mode=?', [mode]);
   console.log('Tracker sync complete');
 } finally { await db.close(); }
