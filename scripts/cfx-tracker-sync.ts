@@ -11,6 +11,11 @@ type EvmTx = { hash: string; timestamp: string; from: string; to: string; value:
 
 const msDay = 86400;
 const execFileAsync = promisify(execFile);
+const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+const isRateLimited = (error: unknown) => /\b429\b|too many requests|rate.limit/i.test(String(error));
+// All Core workers share one queue. Serialize requests below the API's 5/s limit.
+let coreRequestQueue: Promise<void> = Promise.resolve();
+let nextCoreRequestAt = 0;
 const now = new Date();
 const threeMonthsAgo = new Date(now);
 threeMonthsAgo.setUTCMonth(now.getUTCMonth() - 3);
@@ -18,18 +23,40 @@ const fromTs = Math.floor(Date.parse(process.env.CFX_TRACKER_FROM ?? `${threeMon
 const untilTs = Math.floor(Date.parse(process.env.CFX_TRACKER_UNTIL ?? now.toISOString()) / 1000);
 if (!Number.isFinite(fromTs) || !Number.isFinite(untilTs) || fromTs >= untilTs) throw new Error('Invalid tracker date range');
 
-async function json<T>(url: URL): Promise<T> {
+async function json<T>(url: URL, deferRateLimit = false): Promise<T> {
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
       // curl honors HTTPS_PROXY in environments where Node's global fetch does not.
       const { stdout } = await execFileAsync('curl', ['-fsSL', '--max-time', '20', url.toString()], { timeout: 25000, maxBuffer: 10 * 1024 * 1024 });
       return JSON.parse(stdout) as T;
     } catch (e) {
+      if (deferRateLimit && isRateLimited(e)) throw e;
       if (attempt === 3) throw new Error(`${url.origin}${url.pathname}: ${String(e)}`);
-      await new Promise(r => setTimeout(r, (attempt + 1) * 1000));
+      await sleep((attempt + 1) * 1000);
     }
   }
   throw new Error('unreachable');
+}
+
+function corePage(url: URL): Promise<CorePage> {
+  const request = coreRequestQueue.then(async () => {
+    let retries = 0;
+    for (;;) {
+      await sleep(Math.max(0, nextCoreRequestAt - Date.now()));
+      nextCoreRequestAt = Date.now() + 250;
+      try {
+        const page = await json<CorePage>(url, true);
+        if (page.code === 0 || !isRateLimited(page.message)) return page;
+      } catch (error) {
+        if (!isRateLimited(error)) throw error;
+      }
+      const delay = Math.min(1000 * 2 ** Math.min(retries++, 5), 30_000);
+      console.warn(`Core API rate limited; retrying ${url.pathname} in ${delay}ms`);
+      await sleep(delay);
+    }
+  });
+  coreRequestQueue = request.then(() => undefined, () => undefined);
+  return request;
 }
 
 async function coreWindow(db: TrackerDb, account: string, start: number, end: number): Promise<void> {
@@ -49,7 +76,7 @@ async function coreWindow(db: TrackerDb, account: string, start: number, end: nu
   url.searchParams.set('limit', '100');
   url.searchParams.set('sort', 'desc');
   url.searchParams.set('skip', '0');
-  const first = await json<CorePage>(url);
+  const first = await corePage(url);
   if (first.code !== 0 || !first.data || !Array.isArray(first.data.list)) throw new Error(`Core API: ${first.message}`);
   const total = first.data.total;
   if (total > 10000) {
@@ -61,7 +88,7 @@ async function coreWindow(db: TrackerDb, account: string, start: number, end: nu
   }
   for (let skip = 0; skip < total; skip += 100) {
     url.searchParams.set('skip', String(skip));
-    const response = skip === 0 ? first : await json<CorePage>(url);
+    const response = skip === 0 ? first : await corePage(url);
     if (response.code !== 0 || !Array.isArray(response.data?.list)) throw new Error(`Core page ${skip}: ${response.message}`);
     await db.run('BEGIN');
     try {

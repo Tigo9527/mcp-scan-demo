@@ -21,12 +21,28 @@ it('一次运行会补抓排名变化后新出现的零转入地址', async () =
   await db.close();
 
   const queried: string[] = [];
+  const attempts = new Map<string, number>();
   const server = createServer((req, res) => {
-    const account = new URL(req.url ?? '/', 'http://localhost').searchParams.get('account') ?? '';
-    queried.push(account);
-    const list = account === first ? [{ transactionHash: '0x02', txLogIndex: 0, timestamp: from + 7200, from: second, to: first, amount: '2000000000000000000' }] : [];
+    const query = new URL(req.url ?? '/', 'http://localhost').searchParams;
+    const account = query.get('account') ?? '';
+    const skip = Number(query.get('skip') ?? 0);
+    const key = `${account}:${skip}`;
+    queried.push(key);
+    const attempt = (attempts.get(key) ?? 0) + 1;
+    attempts.set(key, attempt);
+    if (attempt === 1 && account === second) {
+      res.writeHead(429).end('Too many requests. Allow 5/s');
+      return;
+    }
+    if (attempt === 1 && account === first) {
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ code: 1, message: 'Too many requests. Allow 5/s', data: null }));
+      return;
+    }
+    const transfer = { transactionHash: '0x02', txLogIndex: 0, timestamp: from + 7200, from: second, to: first, amount: '2000000000000000000' };
+    const list = account === first ? Array.from({ length: skip === 0 ? 100 : 1 }, () => transfer) : [];
     res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify({ code: 0, message: '', data: { total: list.length, list } }));
+    res.end(JSON.stringify({ code: 0, message: '', data: { total: account === first ? 101 : 0, list } }));
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   try {
@@ -40,7 +56,7 @@ it('一次运行会补抓排名变化后新出现的零转入地址', async () =
     expect(stdout).toContain('round 1: 1 new addresses');
     expect(stdout).toContain('round 2: 1 new addresses');
     expect(stdout).toContain('前 100 零转入补抓完成：2 个地址，2 轮');
-    expect(queried).toEqual([first, second]);
+    expect(queried).toEqual([`${first}:0`, `${first}:0`, `${first}:100`, `${first}:100`, `${second}:0`, `${second}:0`]);
     const check = new TrackerDb(file);
     await check.init();
     expect((await check.get<{ count: number }>('SELECT COUNT(*) AS count FROM transfers WHERE to_address=?', [first]))?.count).toBe(1);
