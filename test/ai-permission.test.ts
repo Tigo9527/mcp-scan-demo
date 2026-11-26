@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Script } from 'node:vm';
 import type { Server } from 'node:http';
 import { createApp } from '../src/web/app.js';
 import { closeDb, initDb } from '../src/db.js';
@@ -47,5 +48,33 @@ describe('普通用户 AI 对话权限', () => {
   it('普通用户不能借权限调用 Admin API', async () => {
     const res = await fetch(`${base}/admin/api/agents`, { headers: { 'X-Authorization': user.token } });
     expect(res.status).toBe(403);
+  });
+
+  it('有 AI 对话权限的用户可创建自己的 Agent，其他用户不可访问', async () => {
+    const grant = await fetch(`${base}/admin/users/${other.user.id}/ai-chat`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Admin-Token': admin, Origin: base }, body: 'enabled=1', redirect: 'manual' });
+    expect(grant.status).toBe(302);
+    const page = await fetch(`${base}/agents`, { headers: { 'X-Authorization': user.token } });
+    const html = await page.text();
+    expect(html).toContain('id="create-agent"');
+    const script = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(match => match[1]).find(source => source.includes("document.getElementById('create-agent').addEventListener"));
+    expect(script).toBeDefined();
+    expect(() => new Script(script!)).not.toThrow();
+    const body = JSON.stringify({ name: 'My Agent', description: '仅供本人使用' });
+    const denied = await fetch(`${base}/api/user/agents`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://evil.example', 'X-Authorization': user.token }, body });
+    expect(denied.status).toBe(403);
+    const created = await fetch(`${base}/api/user/agents`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base, 'X-Authorization': user.token }, body });
+    expect(created.status).toBe(201);
+    const mine = await created.json() as { id: string; createdBy: string; name: string };
+    expect(mine.createdBy).toBe(user.user.id);
+    expect(mine.name).toBe('My Agent');
+    const ownList = await (await fetch(`${base}/api/user/agents`, { headers: { 'X-Authorization': user.token } })).json() as Array<{ id: string }>;
+    expect(ownList.map(a => a.id)).toContain(mine.id);
+    const otherList = await (await fetch(`${base}/api/user/agents`, { headers: { 'X-Authorization': other.token } })).json() as Array<{ id: string }>;
+    expect(otherList.map(a => a.id)).not.toContain(mine.id);
+    expect((await fetch(`${base}/agents/${mine.id}`, { headers: { 'X-Authorization': other.token } })).status).toBe(404);
+    const otherTask = await fetch(`${base}/api/user/agents/${mine.id}/tasks`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base, 'X-Authorization': other.token }, body: JSON.stringify({ content: '不应创建' }) });
+    expect(otherTask.status).toBe(404);
+    const ownTask = await fetch(`${base}/api/user/agents/${mine.id}/tasks`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base, 'X-Authorization': user.token }, body: JSON.stringify({ content: '检查我的任务' }) });
+    expect(ownTask.status).toBe(201);
   });
 });
