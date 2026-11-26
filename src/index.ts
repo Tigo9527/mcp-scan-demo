@@ -13,6 +13,7 @@ import { reloadBillingFromDb } from './billing.js';
 import { reloadStatsFromDb } from './stats.js';
 import { reloadRechargeSettingsFromDb, reloadRechargeRecordsFromDb } from './recharge.js';
 import { reloadGithubFromDb } from './settings.js';
+import { reloadAppSettingsFromDb } from './app-settings.js';
 import { attachAgentTaskWebSocket } from './agent-websocket.js';
 import { pollTokenMatchesValue } from './web/agents.js';
 import type { Server } from 'node:http';
@@ -35,6 +36,7 @@ async function loadAllStores(): Promise<void> {
     reloadRechargeSettingsFromDb(),
     reloadRechargeRecordsFromDb(),
     reloadGithubFromDb(),
+    reloadAppSettingsFromDb(),
   ]);
 }
 

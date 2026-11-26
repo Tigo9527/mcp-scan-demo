@@ -20,6 +20,7 @@ import { config, getAdminToken, isLocalBaseUrl, isUsingDefaultAdminToken } from 
 import * as store from '../auth/store.js';
 import * as authManager from '../auth/manager.js';
 import { getGithub, getRaw, resetGithub, setGithub } from '../settings.js';
+import { isAiChatEntryEnabled, setAiChatEntryEnabled } from '../app-settings.js';
 import { getStatsSnapshot } from '../stats.js';
 import * as billing from '../billing.js';
 import * as recharge from '../recharge.js';
@@ -254,6 +255,14 @@ ${table(
   ],
 )}
 
+<h2>页面入口</h2>
+${card(`<p>AI 对话入口：${badge(isAiChatEntryEnabled() ? '已开启' : '已关闭', isAiChatEntryEnabled() ? 'ok' : 'warn')}</p>
+<p class="muted">控制导航栏中的 AI 对话入口。已授权用户仍可通过直接地址使用对话功能。</p>
+<form method="post" action="${esc(adminHref('/admin/ai-chat-entry', adminToken))}">
+<input type="hidden" name="enabled" value="${isAiChatEntryEnabled() ? '0' : '1'}">
+<button class="btn" type="submit">${isAiChatEntryEnabled() ? '关闭入口' : '开启入口'}</button>
+</form>`)}
+
 <h2>工具调用 Top 10</h2>
 ${topTools.length === 0 ? '<div class="empty">暂无工具调用记录。</div>' : table(['工具', '次数', ''], topTools.map(([name, n]) => [esc(name), String(n), bar(n, maxTool)]))}
 
@@ -381,7 +390,7 @@ ${Object.keys(tools).length > 0 ? table(['工具', '次数', ''], Object.entries
 <p class="muted">首次记录 ${esc(fmtTime(stat?.firstSeenAt))} · 最近记录 ${esc(fmtTime(stat?.lastSeenAt))}</p>
 
 <h2>功能权限</h2>
-${card(`<p>授权后该用户登录时会看到「AI 对话」页签，并可创建任务。任务权限只影响 Web AI 对话，不会提升 Admin 权限。</p>
+${card(`<p>授权后该用户可使用 Web AI 对话；导航入口还受仪表盘上的全局开关控制。任务权限不会提升 Admin 权限。</p>
 <form method="post" action="${esc(adminHref(`/admin/users/${encodeURIComponent(user.id)}/ai-chat`, adminToken))}">
 <input type="hidden" name="enabled" value="${user.aiChatEnabled ? '0' : '1'}">
 <button class="btn${user.aiChatEnabled ? ' danger' : ''}" type="submit">${user.aiChatEnabled ? '取消 AI 对话授权' : '授予 AI 对话权限'}</button>
@@ -780,6 +789,13 @@ export function createAdminRouter(): Router {
     const token = resolveAdminToken(req) ?? '';
     res.type('html').send(dashboardHtml(deriveBase(req), token));
   });
+
+  router.post('/admin/ai-chat-entry', requireAdmin, requireSameOrigin, wrap(async (req: Request, res: Response) => {
+    const enabled = req.body?.enabled;
+    if (enabled !== '0' && enabled !== '1') { res.status(400).json({ error: 'enabled 必须是 0 或 1' }); return; }
+    await setAiChatEntryEnabled(enabled === '1');
+    res.redirect(302, `${deriveBase(req)}${adminHref('/admin')}`);
+  }));
 
   router.get('/admin/api/stats', requireAdmin, (_req: Request, res: Response) => {
     res.json(getStatsSnapshot());

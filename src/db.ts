@@ -233,6 +233,7 @@ export class BillingModel extends Model {}
 export class RechargeSettingModel extends Model {}
 export class RechargeRecordModel extends Model {}
 export class GithubSettingModel extends Model {}
+export class AppSettingModel extends Model {}
 export class StatsModel extends Model {}
 export class AgentModel extends Model {}
 export class AgentTaskModel extends Model {}
@@ -317,6 +318,14 @@ function defineModels(seq: Sequelize): void {
       updatedBy: { type: DataTypes.STRING, allowNull: true },
     },
     { sequelize: seq, timestamps: false, modelName: 'githubSetting', tableName: 'github_settings' },
+  );
+
+  AppSettingModel.init(
+    {
+      id: { type: DataTypes.INTEGER, primaryKey: true, defaultValue: 1 },
+      aiChatEntryEnabled: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+    },
+    { sequelize: seq, timestamps: false, modelName: 'appSetting', tableName: 'app_settings' },
   );
 
   StatsModel.init(
@@ -909,6 +918,21 @@ export async function loadGithubSettings(): Promise<GithubSettings | null> {
   if (!dbEnabled()) return null;
   const row = (await GithubSettingModel.findByPk(1)) as unknown as Record<string, unknown> | null;
   return row ? fromGithubRow(row) : null;
+}
+
+export async function loadAiChatEntryEnabled(): Promise<boolean> {
+  if (!dbEnabled()) return false;
+  const row = await AppSettingModel.findByPk(1);
+  return row?.get('aiChatEntryEnabled') === true;
+}
+
+export async function saveAiChatEntryEnabled(enabled: boolean): Promise<void> {
+  if (!dbEnabled()) return;
+  const run = writeChain.then(async () => {
+    await AppSettingModel.upsert({ id: 1, aiChatEntryEnabled: enabled });
+  });
+  writeChain = run.catch(() => undefined);
+  await run;
 }
 
 export async function loadStats(): Promise<{ snapshot: StatsSnapshot; recentIdx: number } | null> {

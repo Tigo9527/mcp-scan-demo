@@ -8,6 +8,7 @@ import { createApp } from '../src/web/app.js';
 import { closeDb, initDb } from '../src/db.js';
 import * as auth from '../src/auth/manager.js';
 import * as store from '../src/auth/store.js';
+import { isAiChatEntryEnabled, reloadAppSettingsFromDb } from '../src/app-settings.js';
 
 describe('普通用户 AI 对话权限', () => {
   let server: Server; let base: string; let dataDir: string; let user: auth.AuthResult; let other: auth.AuthResult; let agent: any;
@@ -16,6 +17,7 @@ describe('普通用户 AI 对话权限', () => {
     process.env.ADMIN_TOKEN = admin;
     dataDir = mkdtempSync(join(tmpdir(), 'mcp-ai-permission-'));
     await initDb({ enabled: true, dataDir });
+    await reloadAppSettingsFromDb();
     user = auth.registerOneClick({ username: 'ai_user' });
     other = auth.registerOneClick({ username: 'ai_other' });
     server = createApp().listen(0, '127.0.0.1');
@@ -37,8 +39,24 @@ describe('普通用户 AI 对话权限', () => {
     expect(grant.status).toBe(302);
     expect(store.getUser(user.user.id)?.aiChatEnabled).toBe(true);
     const home = await fetch(`${base}/`, { headers: { 'X-Authorization': user.token } });
-    expect(await home.text()).toContain('AI 对话');
+    expect(await home.text()).not.toContain('AI 对话');
     expect((await fetch(`${base}/agents`, { headers: { 'X-Authorization': user.token } })).status).toBe(200);
+    const dashboard = await fetch(`${base}/admin`, { headers: { 'X-Admin-Token': admin } });
+    const dashboardHtml = await dashboard.text();
+    expect(dashboardHtml).toContain('开启入口');
+    expect(dashboardHtml).not.toContain('href="/admin/agents"');
+    const denied = await fetch(`${base}/admin/ai-chat-entry`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Admin-Token': admin, Origin: 'https://evil.example' }, body: 'enabled=1' });
+    expect(denied.status).toBe(403);
+    const enabled = await fetch(`${base}/admin/ai-chat-entry`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Admin-Token': admin, Origin: base }, body: 'enabled=1', redirect: 'manual' });
+    expect(enabled.status).toBe(302);
+    expect(isAiChatEntryEnabled()).toBe(true);
+    expect(await (await fetch(`${base}/`, { headers: { 'X-Authorization': user.token } })).text()).toContain('AI 对话');
+    expect(await (await fetch(`${base}/admin`, { headers: { 'X-Admin-Token': admin } })).text()).toContain('href="/admin/agents"');
+    await reloadAppSettingsFromDb();
+    expect(isAiChatEntryEnabled()).toBe(true);
+    const disabled = await fetch(`${base}/admin/ai-chat-entry`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Admin-Token': admin, Origin: base }, body: 'enabled=0', redirect: 'manual' });
+    expect(disabled.status).toBe(302);
+    expect(await (await fetch(`${base}/`, { headers: { 'X-Authorization': user.token } })).text()).not.toContain('AI 对话');
     const task = await fetch(`${base}/api/user/agents/${agent.id}/tasks`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Authorization': user.token, Origin: base }, body: JSON.stringify({ content: '检查代码' }) });
     expect(task.status).toBe(201);
     expect(((await (await fetch(`${base}/api/user/agents/${agent.id}/tasks`, { headers: { 'X-Authorization': user.token } })).json()) as any[]).length).toBe(1);

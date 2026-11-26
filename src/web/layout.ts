@@ -8,6 +8,7 @@
 import { serverInfo } from '../version.js';
 import type { User } from '../auth/store.js';
 import { config } from '../config.js';
+import { isAiChatEntryEnabled } from '../app-settings.js';
 const CSS = `
 :root{--fg:#1a1a1a;--muted:#6b7280;--line:#e5e7eb;--bg:#fff;--soft:#f6f8fa;--acc:#0969da;--ok:#1f883d;--warn:#bf8700;--err:#cf222e}
 *{box-sizing:border-box}
@@ -284,7 +285,7 @@ export function page(opts: PageOptions): string {
     { href: `${base}/recharge`, key: 'recharge', label: '充值' },
     { href: adminHref('/admin', opts.adminToken), key: 'admin', label: 'Admin 管理端' },
   ];
-  if (opts.user?.aiChatEnabled) navLinks.splice(5, 0, { href: '/agents', key: 'admin', label: 'AI 对话' });
+  if (isAiChatEntryEnabled() && opts.user?.aiChatEnabled) navLinks.splice(5, 0, { href: '/agents', key: 'admin', label: 'AI 对话' });
 
   const nav = `<nav><span class="brand">MCP Demo</span>${navLinks
     .map(
@@ -295,7 +296,7 @@ export function page(opts: PageOptions): string {
 
   // Admin 子导航：入口统一放这里，不再散落在每个页面底部（底部按钮很容易被当成页脚忽略）
   const subnav = opts.adminTab
-    ? `<nav class="subnav">${ADMIN_TABS.map(
+    ? `<nav class="subnav">${ADMIN_TABS.filter((t) => t.key !== 'agents' || isAiChatEntryEnabled()).map(
         (t) =>
           `<a href="${esc(adminHref(t.path, opts.adminToken))}"${
             opts.adminTab === t.key ? ' class="active"' : ''
