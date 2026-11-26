@@ -30,7 +30,7 @@ beforeAll(async () => {
   // 拦截 Scan 上游：既不打真实外网，又能埋入可断言的数据特征。
   // 测试给本地服务发请求也走 fetch，故非 Scan 的 URL 一律放行给真实实现。
   vi.stubGlobal('fetch', (input: unknown, init?: RequestInit) => {
-    const url = typeof input === 'string' ? input : String((input as Request)?.url ?? '');
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : String((input as Request)?.url ?? '');
     if (url.includes('confluxscan')) {
       return Promise.resolve({
         ok: true,
@@ -80,7 +80,7 @@ const SCAN_CALLS = [
       jsonrpc: '2.0',
       id: 1,
       method: 'tools/call',
-      params: { name: 'list_cfx_transfers', arguments: { account: ACCOUNT, limit: 2 } },
+      params: { name: 'call_tool', arguments: { id: 'core.list_cfx_transfers', arguments: { account: ACCOUNT, limit: 2 } } },
     },
   },
   {
@@ -89,7 +89,7 @@ const SCAN_CALLS = [
       jsonrpc: '2.0',
       id: 1,
       method: 'tools/call',
-      params: { name: 'list_latest_transactions', arguments: { limit: 2 } },
+      params: { name: 'call_tool', arguments: { id: 'core.list_latest_transactions', arguments: { limit: 2 } } },
     },
   },
   {
@@ -98,7 +98,7 @@ const SCAN_CALLS = [
       jsonrpc: '2.0',
       id: 1,
       method: 'tools/call',
-      params: { name: 'whole_chain_cfx_transfer_list', arguments: { limit: 2 } },
+      params: { name: 'call_tool', arguments: { id: 'core.whole_chain_cfx_transfer_list', arguments: { limit: 2 } } },
     },
   },
   {
@@ -107,7 +107,7 @@ const SCAN_CALLS = [
       jsonrpc: '2.0',
       id: 1,
       method: 'tools/call',
-      params: { name: 'whole_chain_cfx_holder_list', arguments: { limit: 2 } },
+      params: { name: 'call_tool', arguments: { id: 'core.whole_chain_cfx_holder_list', arguments: { limit: 2 } } },
     },
   },
 ];

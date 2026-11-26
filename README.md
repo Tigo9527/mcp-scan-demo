@@ -431,14 +431,27 @@ npm test
 | `register_user` | 一键注册新用户并返回令牌 | 否（匿名可用） |
 | `my_stats` | 查看当前用户自己的调用统计（工具/按天） | 是（需登录） |
 | `search_repos` | 用当前用户 GitHub 令牌搜索仓库（演示 OAuth） | 是 + 需 GitHub 登录 |
-| `list_cfx_transfers` | 列出某 Conflux Core 账户的原生 CFX 转账记录（ConfluxScan Open API） | 是（需登录） |
-| `list_latest_transactions` | 列出 Conflux Core 最新交易（ConfluxScan 浏览器 API） | 是（需登录） |
-| `whole_chain_cfx_transfer_list` | 列出全网最新的 CFX 转账记录（ConfluxScan v1/transfer，默认测试网） | 是（需登录） |
-| `whole_chain_cfx_holder_list` | 列出全网 CFX 持仓地址排行榜（ConfluxScan stat/top-cfx-holder，默认测试网） | 是（需登录） |
+| `search_tools` | 按关键词和 `space=core/evm` 搜索 Registry 中的上游接口 | 匿名模式可用 |
+| `get_tool_schema` | 根据 `id` 查看参数、价格和调用方式 | 匿名模式可用 |
+| `call_tool` | 根据 `id` 与 `arguments` 执行 Registry 接口 | 是（需登录，按具体 API 计费） |
 
 > `/mcp` **默认要求登录**（`MCP_DEMO_REQUIRE_AUTH` 默认 `on`）：未携带有效令牌返回 401 +
 > `WWW-Authenticate`，由客户端走标准 OAuth 流程。设成 `off` 后恢复匿名握手，
 > 此时上表「匿名可用」的工具会照旧返回登录引导。
+
+## 上游 API Registry
+
+`registry/apis.json` 是上游接口清单。MCP 只暴露三个通用 API 工具，不为每个 Scan 接口注册单独的 MCP tool。原有四个 Core Scan 查询已迁移为 `core.*`，eSpace 示例为 `evm.list_transactions`。认证、统计和 GitHub 演示工具继续保留。新增或调整接口时修改 Registry JSON，服务每次调用读取最新版本，不需重启或改代码。Registry 是服务端可信配置，切勿让普通用户直接写入；调用方只能提供已注册的 `id` 和经过参数表验证的参数，不能提供任意 URL。
+
+调用示例：先 `search_tools({"query":"转账","space":"core"})`，再 `get_tool_schema({"id":"core.list_cfx_transfers"})`，最后 `call_tool({"id":"core.list_cfx_transfers","arguments":{"account":"cfx:...","limit":10}})`。`call_tool` 的费用由所选 Registry 条目的 `price` 决定，发现和查看 schema 免费。
+
+支持从 OpenAPI 3 或 Swagger 2 JSON 导入常见 path/query 参数和 JSON 请求体字段：
+
+```bash
+npx tsx scripts/import-openapi.ts ./scan-openapi.json core CONFLUXSCAN_API_URL 10
+```
+
+导入后检查 `registry/apis.json` 的路径、参数、鉴权和价格。上游密钥只在服务端环境变量中配置，通过 Registry 的 `auth.env` 和 `auth.header` 引用，绝不在 Registry 文件中写密钥。可用 `MCP_API_REGISTRY` 指向另一个 Registry JSON 文件。`CONFLUXSCAN_EVM_API_URL` 可覆盖 eSpace 默认地址。
 
 ## 安全说明
 

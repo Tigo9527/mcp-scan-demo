@@ -10,7 +10,7 @@ import * as auth from '../auth/manager.js';
 import { recordClientInfo, getUser, type User } from '../auth/store.js';
 import { isGitHubConfigured } from '../auth/github.js';
 import { getUserStats } from '../stats.js';
-import * as confluxscan from '../confluxscan.js';
+import { searchOperations, findOperation, operationSchemaInfo, executeOperation } from './registry.js';
 
 const text = (obj: unknown) => ({
   content: [{ type: 'text' as const, text: JSON.stringify(obj, null, 2) }],
@@ -25,10 +25,9 @@ const TOOL_NAMES = [
   'web3_login',
   'my_stats',
   'search_repos',
-  'list_cfx_transfers',
-  'list_latest_transactions',
-  'whole_chain_cfx_transfer_list',
-  'whole_chain_cfx_holder_list',
+  'search_tools',
+  'get_tool_schema',
+  'call_tool',
 ];
 
 /** 无需登录即可调用的公开工具（供未登录客户端安装后获取登录入口 / 一键注册）。 */
@@ -37,6 +36,8 @@ export const PUBLIC_MCP_TOOLS = new Set([
   'login',
   'register_user',
   'web3_login',
+  'search_tools',
+  'get_tool_schema',
 ]);
 
 export function createMcpServer(): McpServer {
@@ -265,103 +266,28 @@ export function createMcpServer(): McpServer {
     },
   );
 
-  server.tool(
-    'list_cfx_transfers',
-    '使用 ConfluxScan API 列出某个 Conflux Core 账户的原生 CFX 转账记录（公开只读数据，但本工具需要登录后调用）。',
-    confluxscan.listCfxTransfersSchema.shape,
-    async (input) => {
-      const user = getCurrentUser();
-      if (!user) {
-        const base = getRequestBaseUrl();
-        return {
-          isError: true,
-          ...text({
-            error: '未登录：当前请求未携带有效令牌，无法调用 list_cfx_transfers。',
-            action: '调用 login 工具获取登录入口，或调用 register_user 一键注册后再试。',
-            registerUrl: `${base}/register`,
-            githubAuthUrl: `${base}/auth/github`,
-          }),
-        };
-      }
-      const data = await confluxscan.listCfxTransfers(
-        input as confluxscan.ListCfxTransfersInput,
-      );
-      return text(data);
-    },
-  );
+  server.tool('search_tools', '搜索 Registry 中的上游 API，可按 core 或 evm space 筛选。', {
+    query: z.string().optional().describe('接口名称或描述关键词'),
+    space: z.enum(['core', 'evm']).optional().describe('链空间'),
+  }, async ({ query, space }) => text(searchOperations(query, space)));
 
-  server.tool(
-    'list_latest_transactions',
-    '使用 ConfluxScan 浏览器 API 列出 Conflux Core 的最新交易（公开只读数据，但本工具需要登录后调用）。',
-    confluxscan.listLatestTransactionsSchema.shape,
-    async (input) => {
-      const user = getCurrentUser();
-      if (!user) {
-        const base = getRequestBaseUrl();
-        return {
-          isError: true,
-          ...text({
-            error: '未登录：当前请求未携带有效令牌，无法调用 list_latest_transactions。',
-            action: '调用 login 工具获取登录入口，或调用 register_user 一键注册后再试。',
-            registerUrl: `${base}/register`,
-            githubAuthUrl: `${base}/auth/github`,
-          }),
-        };
-      }
-      const data = await confluxscan.listLatestTransactions(
-        input as confluxscan.ListLatestTransactionsInput,
-      );
-      return text(data);
-    },
-  );
+  server.tool('get_tool_schema', '获取指定上游 API 的参数说明、space 和价格。', {
+    id: z.string().describe('search_tools 返回的 API id'),
+  }, async ({ id }) => {
+    const op = findOperation(id);
+    return op ? text(operationSchemaInfo(op)) : { isError: true, ...text({ error: `API not found: ${id}` }) };
+  });
 
-  server.tool(
-    'whole_chain_cfx_transfer_list',
-    '使用 ConfluxScan API 列出全网最新的 CFX 转账记录（公开只读数据，但本工具需要登录后调用）。默认查 Conflux Core 测试网（testnet.confluxscan.org），可通过环境变量 CONFLUXSCAN_TRANSFER_API_URL 切到主网。',
-    confluxscan.listTransfersSchema.shape,
-    async (input) => {
-      const user = getCurrentUser();
-      if (!user) {
-        const base = getRequestBaseUrl();
-        return {
-          isError: true,
-          ...text({
-            error: '未登录：当前请求未携带有效令牌，无法调用 whole_chain_cfx_transfer_list。',
-            action: '调用 login 工具获取登录入口，或调用 register_user 一键注册后再试。',
-            registerUrl: `${base}/register`,
-            githubAuthUrl: `${base}/auth/github`,
-          }),
-        };
-      }
-      const data = await confluxscan.listTransfers(input as confluxscan.ListTransfersInput);
-      return text(data);
-    },
-  );
-
-  server.tool(
-    'whole_chain_cfx_holder_list',
-    '使用 ConfluxScan API 列出全网 CFX 持仓地址排行榜（公开只读数据，但本工具需要登录后调用）。默认查询 Conflux Core 测试网（testnet.confluxscan.org），排序类型固定为 rank_address_by_total_cfx，可通过环境变量 CONFLUXSCAN_HOLDER_API_URL 切换 API 基地址。',
-    confluxscan.listTopCfxHoldersSchema.shape,
-    async (input) => {
-      const user = getCurrentUser();
-      if (!user) {
-        const base = getRequestBaseUrl();
-        return {
-          isError: true,
-          ...text({
-            error: '未登录：当前请求未携带有效令牌，无法调用 whole_chain_cfx_holder_list。',
-            action: '调用 login 工具获取登录入口，或调用 register_user 一键注册后再试。',
-            registerUrl: `${base}/register`,
-            githubAuthUrl: `${base}/auth/github`,
-          }),
-        };
-      }
-      const data = await confluxscan.listTopCfxHolders(
-        input as confluxscan.ListTopCfxHoldersInput,
-      );
-      return text(data);
-    },
-  );
+  server.tool('call_tool', '执行 Registry 中的上游 API；先用 search_tools 和 get_tool_schema 查看参数。', {
+    id: z.string().describe('上游 API id'),
+    arguments: z.record(z.unknown()).optional().describe('上游接口参数'),
+  }, async ({ id, arguments: args }) => {
+    if (!getCurrentUser()) return { isError: true, ...text({ error: '请先登录' }) };
+    const op = findOperation(id);
+    if (!op) return { isError: true, ...text({ error: `API not found: ${id}` }) };
+    try { return text(await executeOperation(op, args ?? {})); }
+    catch (err) { return { isError: true, ...text({ error: err instanceof Error ? err.message : String(err) }) }; }
+  });
 
   return server;
 }

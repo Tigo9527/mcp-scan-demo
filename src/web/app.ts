@@ -1071,7 +1071,7 @@ export function createApp() {
           // 与 stats.record 同源提取：method === 'tools/call' 且 params.name 为工具名。
           const m = message as { method?: string; params?: { name?: string } } | undefined;
           if (m && m.method === 'tools/call' && typeof m.params?.name === 'string') {
-            billing.recordCall(user?.id, m.params.name);
+            billing.recordCall(user?.id, m.params.name === 'call_tool' && typeof (m.params as { arguments?: { id?: unknown } }).arguments?.id === 'string' ? `api:${(m.params as { arguments: { id: string } }).arguments.id}` : m.params.name);
           }
           prevOnMessage?.(message, extra);
         };
@@ -1106,10 +1106,10 @@ export function createApp() {
           const msgs = Array.isArray(body) ? body : body ? [body] : [];
           const calls = msgs
             .filter((m) => m && m.method === 'tools/call' && typeof m.params?.name === 'string')
-            .map((m) => ({ id: m.id, name: m.params!.name! }));
+            .map((m) => ({ id: m.id, name: m.params!.name!, billingName: m.params!.name === 'call_tool' && typeof (m.params as { arguments?: { id?: unknown } }).arguments?.id === 'string' ? `api:${(m.params as { arguments: { id: string } }).arguments.id}` : m.params!.name! }));
           if (calls.length > 0) {
             const disallowed = calls
-              .map((c) => ({ ...c, allow: billing.checkAllowed(user?.id, c.name) }))
+              .map((c) => ({ ...c, allow: billing.checkAllowed(user?.id, c.billingName) }))
               .filter((c) => !c.allow.allowed);
             if (disallowed.length > 0) {
               const errors = disallowed.map((c) => {

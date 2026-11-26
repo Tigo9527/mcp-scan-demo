@@ -1,0 +1,24 @@
+{
+  "operations": [
+    {
+      "id": "core.list_cfx_transfers", "space": "core", "description": "Conflux Core 账户原生 CFX 转账记录", "method": "GET", "baseUrl": "https://api.confluxscan.org", "baseUrlEnv": "CONFLUXSCAN_API_URL", "path": "/account/cfx/transfers", "price": 10, "orderedRanges": [["minEpochNumber", "maxEpochNumber"], ["minTimestamp", "maxTimestamp"]],
+      "parameters": {
+        "account": { "type": "string", "required": true, "description": "Core 地址" },
+        "skip": { "type": "integer", "default": 0, "minimum": 0, "maximum": 10000 },
+        "limit": { "type": "integer", "default": 10, "minimum": 1, "maximum": 100 },
+        "from": { "type": "string" }, "to": { "type": "string" },
+        "minEpochNumber": { "type": "integer", "minimum": 0 }, "maxEpochNumber": { "type": "integer", "minimum": 0 },
+        "minTimestamp": { "type": "integer", "minimum": 0 }, "maxTimestamp": { "type": "integer", "minimum": 0 },
+        "sort": { "type": "string", "enum": ["asc", "desc"], "default": "desc" }
+      }
+    },
+    { "id": "core.list_latest_transactions", "space": "core", "description": "Conflux Core 最新交易", "method": "GET", "baseUrl": "https://www.confluxscan.org", "baseUrlEnv": "CONFLUXSCAN_WEB_API_URL", "path": "/v1/transaction", "price": 10,
+      "parameters": { "limit": { "type": "integer", "default": 10, "minimum": 1, "maximum": 100 }, "skip": { "type": "integer", "default": 0, "minimum": 0 } } },
+    { "id": "core.whole_chain_cfx_transfer_list", "space": "core", "description": "Conflux Core 全网 CFX 转账", "method": "GET", "baseUrl": "https://testnet.confluxscan.org", "baseUrlEnv": "CONFLUXSCAN_TRANSFER_API_URL", "path": "/v1/transfer", "fixedQuery": { "transferType": "CFX" }, "price": 10,
+      "parameters": { "limit": { "type": "integer", "default": 10, "minimum": 1, "maximum": 100 }, "skip": { "type": "integer", "default": 0, "minimum": 0 } } },
+    { "id": "core.whole_chain_cfx_holder_list", "space": "core", "description": "Conflux Core CFX 持仓排行榜", "method": "GET", "baseUrl": "https://testnet.confluxscan.org", "baseUrlEnv": "CONFLUXSCAN_HOLDER_API_URL", "path": "/stat/top-cfx-holder", "fixedQuery": { "type": "rank_address_by_total_cfx" }, "price": 10,
+      "parameters": { "limit": { "type": "integer", "default": 10, "minimum": 1, "maximum": 100 }, "skip": { "type": "integer", "default": 0, "minimum": 0 } } },
+    { "id": "evm.list_transactions", "space": "evm", "description": "Conflux eSpace 地址交易列表", "method": "GET", "baseUrl": "https://evmapi.confluxscan.org", "baseUrlEnv": "CONFLUXSCAN_EVM_API_URL", "path": "/api", "fixedQuery": { "module": "account", "action": "txlist" }, "price": 10,
+      "parameters": { "address": { "type": "string", "required": true, "description": "eSpace 0x 地址" }, "page": { "type": "integer", "default": 1, "minimum": 1 }, "offset": { "type": "integer", "default": 10, "minimum": 1, "maximum": 100 }, "sort": { "type": "string", "enum": ["asc", "desc"], "default": "desc" } } }
+  ]
+}

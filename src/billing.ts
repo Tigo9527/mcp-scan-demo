@@ -12,6 +12,7 @@
  * 内部逻辑**绝不抛异常**：埋点在 SDK 的请求处理链路上，任何抛出都会被吞掉并转成 400。
  */
 import { config } from './config.js';
+import { findOperation } from './mcp/registry.js';
 import { dbEnabled, loadBilling, saveBilling, scheduleDbWrite } from './db.js';
 
 const ANONYMOUS = 'anonymous';
@@ -27,12 +28,16 @@ export const TOOL_COST: Record<string, number> = {
   register_user: 0,
   // 外部 API 调用，按成本计费
   search_repos: 5,
+  search_tools: 0,
+  get_tool_schema: 0,
+  call_tool: 0,
   list_cfx_transfers: 10,
   list_latest_transactions: 10,
 };
 
 /** 取某工具的单价；未命中定价表时回退默认单价（env BILLING_DEFAULT_COST，默认 1，且不低于 0）。 */
 export function getToolCost(name: string): number {
+  if (name.startsWith('api:')) { try { return findOperation(name.slice(4))?.price ?? 0; } catch { return 0; } }
   if (Object.prototype.hasOwnProperty.call(TOOL_COST, name)) {
     return TOOL_COST[name]!;
   }
