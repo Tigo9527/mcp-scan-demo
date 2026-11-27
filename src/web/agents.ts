@@ -229,11 +229,11 @@ function rateLimited(req: Request): boolean {
 function adminSidebarHtml(selectedId = ''): string {
   return `<aside class="agent-sidebar" aria-label="Agent 列表">
 <h2>Agent 列表</h2>
-<form id="create-agent" class="card">
+<details class="card agent-create"><summary>创建 Agent</summary><form id="create-agent">
 <label for="agent-name">Agent 名称</label><input id="agent-name" name="name" maxlength="100" required>
 <label for="agent-description">描述</label><textarea id="agent-description" name="description" maxlength="2000" rows="2"></textarea>
 <p><button class="btn" type="submit">创建 Agent</button></p><p id="create-status" role="status"></p>
-</form>
+</form></details>
 <div id="agent-list" class="empty" data-selected="${esc(selectedId)}">加载中…</div>
 </aside>
 <script>
@@ -461,7 +461,7 @@ async function lastReportTimes(agentIds: string[]): Promise<Map<string, string>>
 function userSidebarHtml(selectedId = ''): string {
   return `<aside class="agent-sidebar" aria-label="Agent 列表">
 <h2>Agent 列表</h2>
-<form id="create-agent" class="card"><label for="agent-name">名称</label><input id="agent-name" name="name" maxlength="100" required><label for="agent-description">描述（可选）</label><textarea id="agent-description" name="description" maxlength="2000"></textarea><button class="btn" type="submit">创建 Agent</button><p id="create-status" class="muted" role="status"></p></form>
+<details class="card agent-create"><summary>创建 Agent</summary><form id="create-agent"><label for="agent-name">名称</label><input id="agent-name" name="name" maxlength="100" required><label for="agent-description">描述（可选）</label><textarea id="agent-description" name="description" maxlength="2000"></textarea><button class="btn" type="submit">创建 Agent</button><p id="create-status" class="muted" role="status"></p></form></details>
 <div id="agents" class="empty" data-selected="${esc(selectedId)}">加载中…</div>
 </aside>
 <script>

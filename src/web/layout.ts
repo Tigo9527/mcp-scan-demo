@@ -33,6 +33,7 @@ h3{font-size:1.05em;margin:18px 0 8px}
 .agent-workspace{display:grid;grid-template-columns:minmax(220px,280px) minmax(0,1fr);gap:20px;max-width:1500px;margin:18px auto;align-items:start}
 .agent-sidebar{position:sticky;top:12px;max-height:calc(100vh - 24px);overflow:auto;border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--soft)}
 .agent-sidebar h2{margin:0 0 12px}.agent-sidebar .card{margin:0 0 14px;padding:12px}.agent-sidebar .agent-list{margin:0}
+.agent-create>summary{cursor:pointer;font-weight:600}.agent-create>form{margin-top:10px}
 .agent-sidebar .agent-list-item{display:block;padding:10px 12px}.agent-sidebar .agent-list-item a{display:block;font-weight:600;overflow-wrap:anywhere}
 .agent-sidebar .agent-list-item p{font-size:.86em;overflow-wrap:anywhere}.agent-sidebar .agent-list-item small{display:block;white-space:normal;font-size:.78em}
 .agent-sidebar .agent-list-item.selected{background:var(--bg);border-left:3px solid var(--acc)}
