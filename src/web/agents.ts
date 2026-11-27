@@ -226,28 +226,31 @@ function rateLimited(req: Request): boolean {
   return false;
 }
 
-function listHtml(base: string): string {
-  return page({ title: 'AI 对话', base, active: 'admin', adminTab: 'agents', bodyClass: 'admin-agents-dark', body: `
-<h1>AI 对话</h1>
+function adminSidebarHtml(selectedId = ''): string {
+  return `<aside class="agent-sidebar" aria-label="Agent 列表">
+<h2>Agent 列表</h2>
 <form id="create-agent" class="card">
 <label for="agent-name">Agent 名称</label><input id="agent-name" name="name" maxlength="100" required>
-<label for="agent-description">描述</label><textarea id="agent-description" name="description" maxlength="2000" rows="3"></textarea>
+<label for="agent-description">描述</label><textarea id="agent-description" name="description" maxlength="2000" rows="2"></textarea>
 <p><button class="btn" type="submit">创建 Agent</button></p><p id="create-status" role="status"></p>
 </form>
-<h2>Agent 列表</h2><div id="agent-list" class="empty">加载中…</div>
+<div id="agent-list" class="empty" data-selected="${esc(selectedId)}">加载中…</div>
+</aside>
 <script>
+(()=>{
 const list=document.getElementById('agent-list'), status=document.getElementById('create-status');
 async function loadAgents(){
   const r=await fetch('/admin/api/agents');
   if(!r.ok){list.textContent='加载失败';return;}
   const agents=await r.json();list.replaceChildren();
-  if(!agents.length){list.className='empty';list.textContent='暂无 Agent';return;}
+  if(!agents.length){list.className='empty';list.textContent='暂无 Agent，请先创建';return;}
   list.className='agent-list';
   for(const a of agents){const c=document.createElement('div');c.className='agent-list-item';
+    if(a.id===list.dataset.selected)c.classList.add('selected');
     const link=document.createElement('a');link.href='/admin/agents/'+encodeURIComponent(a.id);link.textContent=a.name;
     const p=document.createElement('p');if(a.description)p.textContent=a.description;c.append(p);
     if(a.lastActivityAt){const small=document.createElement('small');small.textContent='最后对话：'+new Date(a.lastActivityAt).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'});c.append(small);}
-    const del=document.createElement('button');del.type='button';del.className='text-link danger-link';del.textContent='删除';del.addEventListener('click',async()=>{if(!confirm('确认删除 Agent“'+a.name+'”？其任务、附件和自动任务状态也会删除。'))return;del.disabled=true;const rr=await fetch('/admin/api/agents/'+encodeURIComponent(a.id),{method:'DELETE'});const dd=await rr.json().catch(()=>({}));if(!rr.ok){del.disabled=false;status.textContent=dd.error||'删除失败';return;}status.textContent='Agent 已删除';loadAgents();});
+    const del=document.createElement('button');del.type='button';del.className='text-link danger-link';del.textContent='删除';del.addEventListener('click',async()=>{if(!confirm('确认删除 Agent“'+a.name+'”？其任务、附件和自动任务状态也会删除。'))return;del.disabled=true;const rr=await fetch('/admin/api/agents/'+encodeURIComponent(a.id),{method:'DELETE'});const dd=await rr.json().catch(()=>({}));if(!rr.ok){del.disabled=false;status.textContent=dd.error||'删除失败';return;}if(a.id===list.dataset.selected){window.location.assign('/admin/agents');return;}status.textContent='Agent 已删除';loadAgents();});
     c.prepend(link);c.append(del);list.append(c);}
 }
 document.getElementById('create-agent').addEventListener('submit',async e=>{
@@ -258,12 +261,20 @@ document.getElementById('create-agent').addEventListener('submit',async e=>{
   window.location.assign('/admin/agents/'+encodeURIComponent(data.id));
 });
 loadAgents().catch(()=>{list.textContent='加载失败';});
-</script>` });
+})();
+</script>`;
+}
+
+function listHtml(base: string): string {
+  return page({ title: 'AI 对话', base, active: 'admin', adminTab: 'agents', bodyClass: 'admin-agents-dark agent-workspace-page', body: `
+<div class="agent-workspace">${adminSidebarHtml()}
+<main class="agent-workspace-main"><h1>AI 对话</h1><p class="muted">从左侧选择 Agent，或创建一个 Agent 开始对话。</p></main></div>` });
 }
 
 function conversationHtml(base: string, agent: Record<string, unknown>): string {
-  return page({ title: `与 ${String(agent.name)} 对话`, base, active: 'admin', adminTab: 'agents', bodyClass: 'agent-conversation', body: `
-<p><a href="/admin/agents">← Agent 列表</a></p><h1>${esc(agent.name)}</h1><p>${esc(agent.description)}</p>
+  return page({ title: `与 ${String(agent.name)} 对话`, base, active: 'admin', adminTab: 'agents', bodyClass: 'agent-conversation agent-workspace-page', body: `
+<div class="agent-workspace">${adminSidebarHtml(String(agent.id))}
+<main class="agent-workspace-main"><h1>${esc(agent.name)}</h1><p>${esc(agent.description)}</p>
 <div id="messages" class="empty">加载中…</div>
 <form id="create-task" class="card"><div class="task-form-header"><label for="task-content">任务内容</label><span class="task-form-links"><select id="template-select" class="btn small alt" aria-label="任务模板"><option value="">模板</option></select><button id="upload-task-link" class="btn small alt" type="button">上传文件任务</button><button id="all-tasks-link" class="text-link" type="button">显示全部任务</button></span></div>
 <div id="task-content" class="rich-editor" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="输入任务，支持粘贴图片或选择附件"></div>
@@ -407,7 +418,7 @@ document.getElementById('create-task').addEventListener('submit',async e=>{
   loadTasks();
 });
 loadAutomation().catch(()=>{});loadTasks().catch(()=>{messages.textContent='加载失败';});setInterval(()=>{loadAutomation().catch(()=>{});if(!shouldDeferTaskRefresh())loadTasks().catch(()=>{});},5000);
-</script>` });
+</script></main></div>` });
 }
 
 function userAi(req: Request): userStore.User | null {
@@ -435,25 +446,36 @@ async function lastTaskTimes(agentIds: string[]): Promise<Map<string, string>> {
   return result;
 }
 
-function userListHtml(base: string, user: userStore.User): string {
-  return page({ title: 'AI 对话', base, active: 'admin', user, body: `<h1>AI 对话</h1>
-<p class="muted">选择一个 Agent，提交任务并查看该用户自己的任务记录。</p>
-<form id="create-agent" class="card"><h2>创建 Agent</h2><label for="agent-name">名称</label><input id="agent-name" name="name" maxlength="100" required><label for="agent-description">描述（可选）</label><textarea id="agent-description" name="description" maxlength="2000"></textarea><button class="btn" type="submit">创建并开始对话</button><p id="create-status" class="muted" role="status"></p></form>
-<div id="agents" class="empty">加载中…</div>
+function userSidebarHtml(selectedId = ''): string {
+  return `<aside class="agent-sidebar" aria-label="Agent 列表">
+<h2>Agent 列表</h2>
+<form id="create-agent" class="card"><label for="agent-name">名称</label><input id="agent-name" name="name" maxlength="100" required><label for="agent-description">描述（可选）</label><textarea id="agent-description" name="description" maxlength="2000"></textarea><button class="btn" type="submit">创建 Agent</button><p id="create-status" class="muted" role="status"></p></form>
+<div id="agents" class="empty" data-selected="${esc(selectedId)}">加载中…</div>
+</aside>
 <script>
-(async()=>{const box=document.getElementById('agents');try{const r=await fetch('/api/user/agents');if(!r.ok)throw new Error();const xs=await r.json();box.replaceChildren();if(!xs.length){box.className='empty';box.textContent='暂无可用 Agent';return;}box.className='agent-list';for(const a of xs){const c=document.createElement('div');c.className='agent-list-item';const l=document.createElement('a');l.href='/agents/'+encodeURIComponent(a.id);l.textContent=a.name;const p=document.createElement('p');if(a.description)p.textContent=a.description;c.append(p);if(a.lastActivityAt){const small=document.createElement('small');small.textContent='最后对话：'+new Date(a.lastActivityAt).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'});c.append(small);}c.prepend(l);box.append(c);}}catch{box.textContent='加载失败';}})();
+(()=>{
+const box=document.getElementById('agents');
+async function loadAgents(){try{const r=await fetch('/api/user/agents');if(!r.ok)throw new Error();const xs=await r.json();box.replaceChildren();if(!xs.length){box.className='empty';box.textContent='暂无可用 Agent，请先创建';return;}box.className='agent-list';for(const a of xs){const c=document.createElement('div');c.className='agent-list-item';if(a.id===box.dataset.selected)c.classList.add('selected');const l=document.createElement('a');l.href='/agents/'+encodeURIComponent(a.id);l.textContent=a.name;const p=document.createElement('p');if(a.description)p.textContent=a.description;c.append(p);if(a.lastActivityAt){const small=document.createElement('small');small.textContent='最后对话：'+new Date(a.lastActivityAt).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'});c.append(small);}c.prepend(l);box.append(c);}}catch{box.textContent='加载失败';}}
 document.getElementById('create-agent').addEventListener('submit',async e=>{e.preventDefault();const status=document.getElementById('create-status');const button=e.target.querySelector('button');button.disabled=true;status.textContent='创建中…';try{const form=new FormData(e.target);const r=await fetch('/api/user/agents',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:form.get('name'),description:form.get('description')})});const data=await r.json();if(!r.ok)throw new Error(data.error||'创建失败');window.location.assign('/agents/'+encodeURIComponent(data.id));}catch(error){status.textContent=error.message||'创建失败';button.disabled=false;}});
-</script>` });
+loadAgents();
+})();
+</script>`;
+}
+
+function userListHtml(base: string, user: userStore.User): string {
+  return page({ title: 'AI 对话', base, active: 'admin', user, bodyClass: 'agent-workspace-page', body: `<div class="agent-workspace">${userSidebarHtml()}
+<main class="agent-workspace-main"><h1>AI 对话</h1><p class="muted">从左侧选择 Agent，或创建一个 Agent 开始对话。</p></main></div>` });
 }
 
 function userConversationHtml(base: string, agent: Record<string, unknown>, user: userStore.User): string {
-  return page({ title: `与 ${String(agent.name)} 对话`, base, active: 'admin', user, bodyClass: 'agent-conversation', body: `<p><a href="/agents">← Agent 列表</a></p><h1>${esc(agent.name)}</h1><p>${esc(agent.description)}</p>
+  return page({ title: `与 ${String(agent.name)} 对话`, base, active: 'admin', user, bodyClass: 'agent-conversation agent-workspace-page', body: `<div class="agent-workspace">${userSidebarHtml(String(agent.id))}
+<main class="agent-workspace-main"><h1>${esc(agent.name)}</h1><p>${esc(agent.description)}</p>
 <form id="task" class="card"><label for="content">任务内容</label><textarea id="content" rows="5" maxlength="20000" required></textarea><button class="btn" type="submit">生成任务链接</button><p id="status" class="muted" role="status"></p></form><h2>我的任务</h2><div id="tasks" class="empty">加载中…</div>
 <script>
 const id=${JSON.stringify(String(agent.id))}, box=document.getElementById('tasks'), status=document.getElementById('status');
 async function load(){const r=await fetch('/api/user/agents/'+encodeURIComponent(id)+'/tasks');if(!r.ok){box.textContent='加载失败';return;}const xs=await r.json();box.replaceChildren();if(!xs.length){box.className='empty';box.textContent='暂无任务';return;}box.className='';for(const t of xs){const c=document.createElement('div');c.className='card';c.innerHTML='<b>'+t.status+'</b><p></p>'+(t.result?'<details><summary>查看回报</summary><pre></pre></details>':'');c.querySelector('p').textContent=t.content;c.querySelector('pre')?.append(document.createTextNode(t.result||''));box.append(c);}}
 document.getElementById('task').addEventListener('submit',async e=>{e.preventDefault();status.textContent='提交中…';const r=await fetch('/api/user/agents/'+encodeURIComponent(id)+'/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:document.getElementById('content').value})});const d=await r.json();if(!r.ok){status.textContent=d.error||'提交失败';return;}status.textContent='任务已生成：'+d.url;document.getElementById('content').value='';load();});load();
-</script>` });
+</script></main></div>` });
 }
 
 export function createAgentRouter(): Router {

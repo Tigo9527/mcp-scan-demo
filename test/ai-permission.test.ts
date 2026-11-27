@@ -74,6 +74,9 @@ describe('普通用户 AI 对话权限', () => {
     const page = await fetch(`${base}/agents`, { headers: { 'X-Authorization': user.token } });
     const html = await page.text();
     expect(html).toContain('id="create-agent"');
+    expect(html).toContain('class="agent-sidebar"');
+    expect(html).toContain('class="agent-workspace-main"');
+    expect(html).toContain("l.href='/agents/'");
     const script = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(match => match[1]).find(source => source.includes("document.getElementById('create-agent').addEventListener"));
     expect(script).toBeDefined();
     expect(() => new Script(script!)).not.toThrow();
@@ -85,6 +88,12 @@ describe('普通用户 AI 对话权限', () => {
     const mine = await created.json() as { id: string; createdBy: string; name: string };
     expect(mine.createdBy).toBe(user.user.id);
     expect(mine.name).toBe('My Agent');
+    const conversation = await fetch(`${base}/agents/${mine.id}`, { headers: { 'X-Authorization': user.token } });
+    const conversationHtml = await conversation.text();
+    expect(conversationHtml).toContain(`data-selected="${mine.id}"`);
+    expect(conversationHtml).toContain('class="agent-workspace-main"');
+    expect(conversationHtml).toContain('id="task"');
+    for (const match of conversationHtml.matchAll(/<script>([\s\S]*?)<\/script>/g)) expect(() => new Script(match[1])).not.toThrow();
     const ownList = await (await fetch(`${base}/api/user/agents`, { headers: { 'X-Authorization': user.token } })).json() as Array<{ id: string }>;
     expect(ownList.map(a => a.id)).toContain(mine.id);
     const otherList = await (await fetch(`${base}/api/user/agents`, { headers: { 'X-Authorization': other.token } })).json() as Array<{ id: string }>;

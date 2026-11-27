@@ -29,6 +29,15 @@ h3{font-size:1.05em;margin:18px 0 8px}
 .agent-list-item:last-child{border-bottom:0}
 .agent-list-item p{margin:0;color:var(--muted);flex:1}
 .agent-list-item small{color:var(--muted);white-space:nowrap}
+.agent-workspace-page{max-width:none;width:100%;padding:0 clamp(16px,2vw,36px) 48px}
+.agent-workspace{display:grid;grid-template-columns:minmax(220px,280px) minmax(0,1fr);gap:20px;max-width:1500px;margin:18px auto;align-items:start}
+.agent-sidebar{position:sticky;top:12px;max-height:calc(100vh - 24px);overflow:auto;border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--soft)}
+.agent-sidebar h2{margin:0 0 12px}.agent-sidebar .card{margin:0 0 14px;padding:12px}.agent-sidebar .agent-list{margin:0}
+.agent-sidebar .agent-list-item{display:block;padding:10px 12px}.agent-sidebar .agent-list-item a{display:block;font-weight:600;overflow-wrap:anywhere}
+.agent-sidebar .agent-list-item p{font-size:.86em;overflow-wrap:anywhere}.agent-sidebar .agent-list-item small{display:block;white-space:normal;font-size:.78em}
+.agent-sidebar .agent-list-item.selected{background:var(--bg);border-left:3px solid var(--acc)}
+.agent-workspace-main{min-width:0}.agent-workspace-main>h1:first-child{margin-top:0}
+@media(max-width:760px){.agent-workspace{grid-template-columns:1fr}.agent-sidebar{position:static;max-height:45vh}.agent-workspace-main{min-height:280px}}
 .admin-agents-dark .agent-list{border-color:var(--line);background:#17222d}
 .admin-agents-dark .agent-list-item{border-color:var(--line)}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:14px 0}

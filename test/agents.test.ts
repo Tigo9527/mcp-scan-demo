@@ -73,7 +73,10 @@ describe('Admin AI 对话和任务链接', () => {
     const agentListPage = await fetch(`${base}/admin/agents`, { headers: admin });
     expect(agentListPage.status).toBe(200);
     const agentListHtml = await agentListPage.text();
-    expect(agentListHtml).toContain('class="admin-agents-dark"');
+    expect(agentListHtml).toContain('class="admin-agents-dark agent-workspace-page"');
+    expect(agentListHtml).toContain('class="agent-workspace"');
+    expect(agentListHtml).toContain('class="agent-sidebar"');
+    expect(agentListHtml).toContain('class="agent-workspace-main"');
     expect(agentListHtml).toContain("list.className='agent-list'");
     expect(agentListHtml).toContain("c.className='agent-list-item'");
     expect(agentListHtml).toContain("method:'DELETE'");
@@ -97,6 +100,9 @@ describe('Admin AI 对话和任务链接', () => {
     expect(browserTasks.status).toBe(200);
     expect(Array.isArray(await browserTasks.json())).toBe(true);
     const html = await page.text();
+    expect(html).toContain(`data-selected="${agent.id}"`);
+    expect(html).toContain('class="agent-sidebar"');
+    expect(html).toContain('class="agent-workspace-main"');
     expect(html).toContain('生成任务链接');
     expect(html).toContain('id="template-form"');
     expect(html).toContain('function insertTemplateContent(html)');
@@ -142,7 +148,7 @@ describe('Admin AI 对话和任务链接', () => {
     expect(html).toContain('slice(-5)');
     expect(html).toContain('仅看未回报');
     expect(html).toContain('onlyUnreported');
-    expect(html).toContain('class="agent-conversation"');
+    expect(html).toContain('class="agent-conversation agent-workspace-page"');
     expect(html).toContain('playReportSound()');
     expect(html).toContain('上传文件任务');
     expect(html).toContain('upload-tasks');
