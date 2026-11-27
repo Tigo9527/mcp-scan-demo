@@ -42,6 +42,10 @@ h3{font-size:1.05em;margin:18px 0 8px}
 @media(max-width:760px){.agent-workspace{grid-template-columns:1fr}.agent-sidebar{position:static;max-height:45vh}.agent-workspace-main{min-height:280px}}
 .admin-agents-dark .agent-list{border-color:var(--line);background:#17222d}
 .admin-agents-dark .agent-list-item{border-color:var(--line)}
+:is(.admin-agents-dark,.agent-conversation) .agent-sidebar{scrollbar-color:#465463 var(--bg);scrollbar-width:thin}
+:is(.admin-agents-dark,.agent-conversation) .agent-sidebar::-webkit-scrollbar{width:9px}
+:is(.admin-agents-dark,.agent-conversation) .agent-sidebar::-webkit-scrollbar-track{background:var(--bg)}
+:is(.admin-agents-dark,.agent-conversation) .agent-sidebar::-webkit-scrollbar-thumb{background:#465463;border-radius:9px}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:14px 0}
 .stat{border:1px solid var(--line);border-radius:12px;padding:14px 16px}
 .stat .n{font-size:1.7em;font-weight:600;line-height:1.2}
