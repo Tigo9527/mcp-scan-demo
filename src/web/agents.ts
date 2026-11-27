@@ -242,17 +242,20 @@ const list=document.getElementById('agent-list'), status=document.getElementById
 async function loadAgents(){
   const r=await fetch('/admin/api/agents');
   if(!r.ok){list.textContent='加载失败';return;}
-  const agents=await r.json();list.replaceChildren();
+  let agents=await r.json();const order=JSON.parse(localStorage.getItem('mcp-agent-order-admin')||'[]');agents.sort((a,b)=>(order.indexOf(a.id)<0?9999:order.indexOf(a.id))-(order.indexOf(b.id)<0?9999:order.indexOf(b.id)));list.replaceChildren();
   if(!agents.length){list.className='empty';list.textContent='暂无 Agent，请先创建';return;}
   list.className='agent-list';
-  for(const a of agents){const c=document.createElement('div');c.className='agent-list-item';
+  for(const a of agents){const c=document.createElement('div');c.className='agent-list-item';c.draggable=true;c.dataset.agentId=a.id;
     if(a.id===list.dataset.selected)c.classList.add('selected');
-    const link=document.createElement('a');link.href='/admin/agents/'+encodeURIComponent(a.id);link.textContent=a.name;
+    const link=document.createElement('a');link.href='/admin/agents/'+encodeURIComponent(a.id);link.textContent=a.name;link.addEventListener('click',e=>{e.preventDefault();openAgent(link.href);});
     const p=document.createElement('p');if(a.description)p.textContent=a.description;c.append(p);
     if(a.lastActivityAt){const small=document.createElement('small');small.textContent='最后对话：'+new Date(a.lastActivityAt).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'});c.append(small);}
-    const del=document.createElement('button');del.type='button';del.className='text-link danger-link';del.textContent='删除';del.addEventListener('click',async()=>{if(!confirm('确认删除 Agent“'+a.name+'”？其任务、附件和自动任务状态也会删除。'))return;del.disabled=true;const rr=await fetch('/admin/api/agents/'+encodeURIComponent(a.id),{method:'DELETE'});const dd=await rr.json().catch(()=>({}));if(!rr.ok){del.disabled=false;status.textContent=dd.error||'删除失败';return;}if(a.id===list.dataset.selected){window.location.assign('/admin/agents');return;}status.textContent='Agent 已删除';loadAgents();});
-    c.prepend(link);c.append(del);list.append(c);}
+    const seen=Number(localStorage.getItem('mcp-agent-seen-admin-'+a.id)||0);if(a.lastReportAt&&Date.parse(a.lastReportAt)>seen){const badge=document.createElement('span');badge.className='agent-unread';badge.textContent='新回报';c.append(badge);}
+    const menu=document.createElement('details');menu.className='agent-menu';const summary=document.createElement('summary');summary.textContent='⋯';summary.title='Agent 菜单';const del=document.createElement('button');del.type='button';del.className='text-link danger-link';del.textContent='删除';del.addEventListener('click',async()=>{if(!confirm('确认删除 Agent“'+a.name+'”？其任务、附件和自动任务状态也会删除。'))return;del.disabled=true;const rr=await fetch('/admin/api/agents/'+encodeURIComponent(a.id),{method:'DELETE'});const dd=await rr.json().catch(()=>({}));if(!rr.ok){del.disabled=false;status.textContent=dd.error||'删除失败';return;}if(a.id===list.dataset.selected){history.pushState({},'', '/admin/agents');document.querySelector('.agent-workspace-main').innerHTML='<h1>AI 对话</h1><p class="muted">从左侧选择 Agent，或创建一个 Agent 开始对话。</p>'; }status.textContent='Agent 已删除';loadAgents();});menu.append(summary,del);
+    c.prepend(link);c.append(menu);c.addEventListener('dragstart',e=>e.dataTransfer.setData('text/plain',a.id));c.addEventListener('dragover',e=>e.preventDefault());c.addEventListener('drop',e=>{e.preventDefault();const from=e.dataTransfer.getData('text/plain'),to=a.id,ids=[...list.children].map(x=>x.dataset.agentId);ids.splice(ids.indexOf(to),0,ids.splice(ids.indexOf(from),1)[0]);localStorage.setItem('mcp-agent-order-admin',JSON.stringify(ids));loadAgents();});list.append(c);}
 }
+async function openAgent(url){const workspace=document.querySelector('.agent-workspace-main');if(!workspace)return;const r=await fetch(url);if(!r.ok)return;const doc=new DOMParser().parseFromString(await r.text(),'text/html');const incoming=doc.querySelector('.agent-workspace-main');if(!incoming)return;workspace.replaceWith(incoming);incoming.querySelectorAll('script').forEach(s=>{const n=document.createElement('script');n.textContent=s.textContent;document.body.append(n);n.remove();});const id=url.split('/').pop();if(id)localStorage.setItem('mcp-agent-seen-admin-'+decodeURIComponent(id),String(Date.now()));history.pushState({},'',url);loadAgents();}
+window.addEventListener?.('popstate',()=>{if(location.pathname.startsWith('/admin/agents/'))openAgent(location.pathname);});
 document.getElementById('create-agent').addEventListener('submit',async e=>{
   e.preventDefault();status.textContent='创建中…';const f=new FormData(e.target);
   const r=await fetch('/admin/api/agents',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:f.get('name'),description:f.get('description')})});
@@ -288,6 +291,7 @@ function conversationHtml(base: string, agent: Record<string, unknown>): string 
 <div class="task-actions"><label class="switch-control"><input id="automation-switch" type="checkbox"><span class="switch-slider" aria-hidden="true"></span><span>自动任务</span></label><button id="unreported-toggle" class="text-link" type="button" aria-pressed="false">仅看未回报</button><button class="btn task-submit" type="submit">生成任务链接</button></div><p id="automation-state" class="muted" role="status">读取自动任务状态…</p><p id="task-status" class="muted" role="status"></p>
 </form>
 <script>
+(()=>{
 const agentId=${JSON.stringify(String(agent.id))};
 const messages=document.getElementById('messages'),status=document.getElementById('task-status');
 const automationSwitch=document.getElementById('automation-switch'),automationState=document.getElementById('automation-state'),unreportedToggle=document.getElementById('unreported-toggle');
@@ -418,6 +422,7 @@ document.getElementById('create-task').addEventListener('submit',async e=>{
   loadTasks();
 });
 loadAutomation().catch(()=>{});loadTasks().catch(()=>{messages.textContent='加载失败';});setInterval(()=>{loadAutomation().catch(()=>{});if(!shouldDeferTaskRefresh())loadTasks().catch(()=>{});},5000);
+})();
 </script></main></div>` });
 }
 
@@ -440,9 +445,16 @@ function templateJson(model: AgentTemplateModel): Record<string, unknown> {
 }
 
 async function lastTaskTimes(agentIds: string[]): Promise<Map<string, string>> {
-  const rows = await AgentTaskModel.findAll({ where: { agentId: agentIds }, order: [['createdAt', 'DESC']], attributes: ['agentId', 'createdAt'] });
+  const rows = await AgentTaskModel.findAll({ where: { agentId: agentIds }, order: [['createdAt', 'DESC']], attributes: ['agentId', 'createdAt', 'reportedAt'] });
   const result = new Map<string, string>();
   for (const row of rows) { const id = String(row.get('agentId')); if (!result.has(id)) result.set(id, String(row.get('createdAt'))); }
+  return result;
+}
+
+async function lastReportTimes(agentIds: string[]): Promise<Map<string, string>> {
+  const rows = await AgentTaskModel.findAll({ where: { agentId: agentIds, reportedAt: { [Op.ne]: null } }, order: [['reportedAt', 'DESC']], attributes: ['agentId', 'reportedAt'] });
+  const result = new Map<string, string>();
+  for (const row of rows) { const id=String(row.get('agentId')); if (!result.has(id)) result.set(id,String(row.get('reportedAt'))); }
   return result;
 }
 
@@ -455,7 +467,9 @@ function userSidebarHtml(selectedId = ''): string {
 <script>
 (()=>{
 const box=document.getElementById('agents');
-async function loadAgents(){try{const r=await fetch('/api/user/agents');if(!r.ok)throw new Error();const xs=await r.json();box.replaceChildren();if(!xs.length){box.className='empty';box.textContent='暂无可用 Agent，请先创建';return;}box.className='agent-list';for(const a of xs){const c=document.createElement('div');c.className='agent-list-item';if(a.id===box.dataset.selected)c.classList.add('selected');const l=document.createElement('a');l.href='/agents/'+encodeURIComponent(a.id);l.textContent=a.name;const p=document.createElement('p');if(a.description)p.textContent=a.description;c.append(p);if(a.lastActivityAt){const small=document.createElement('small');small.textContent='最后对话：'+new Date(a.lastActivityAt).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'});c.append(small);}c.prepend(l);box.append(c);}}catch{box.textContent='加载失败';}}
+async function loadAgents(){try{const r=await fetch('/api/user/agents');if(!r.ok)throw new Error();let xs=await r.json();const order=JSON.parse(localStorage.getItem('mcp-agent-order-user')||'[]');xs.sort((a,b)=>(order.indexOf(a.id)<0?9999:order.indexOf(a.id))-(order.indexOf(b.id)<0?9999:order.indexOf(b.id)));box.replaceChildren();if(!xs.length){box.className='empty';box.textContent='暂无可用 Agent，请先创建';return;}box.className='agent-list';for(const a of xs){const c=document.createElement('div');c.className='agent-list-item';c.draggable=true;c.dataset.agentId=a.id;if(a.id===box.dataset.selected)c.classList.add('selected');const l=document.createElement('a');l.href='/agents/'+encodeURIComponent(a.id);l.textContent=a.name;l.addEventListener('click',e=>{e.preventDefault();openAgent(l.href);});const p=document.createElement('p');if(a.description)p.textContent=a.description;c.append(p);if(a.lastActivityAt){const small=document.createElement('small');small.textContent='最后对话：'+new Date(a.lastActivityAt).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'});c.append(small);}const seen=Number(localStorage.getItem('mcp-agent-seen-user-'+a.id)||0);if(a.lastReportAt&&Date.parse(a.lastReportAt)>seen){const badge=document.createElement('span');badge.className='agent-unread';badge.textContent='新回报';c.append(badge);}c.prepend(l);c.addEventListener('dragstart',e=>e.dataTransfer.setData('text/plain',a.id));c.addEventListener('dragover',e=>e.preventDefault());c.addEventListener('drop',e=>{e.preventDefault();const from=e.dataTransfer.getData('text/plain'),to=a.id,ids=[...box.children].map(x=>x.dataset.agentId);ids.splice(ids.indexOf(to),0,ids.splice(ids.indexOf(from),1)[0]);localStorage.setItem('mcp-agent-order-user',JSON.stringify(ids));loadAgents();});box.append(c);}}catch{box.textContent='加载失败';}}
+async function openAgent(url){const workspace=document.querySelector('.agent-workspace-main');if(!workspace)return;const r=await fetch(url);if(!r.ok)return;const doc=new DOMParser().parseFromString(await r.text(),'text/html');const incoming=doc.querySelector('.agent-workspace-main');if(!incoming)return;workspace.replaceWith(incoming);incoming.querySelectorAll('script').forEach(s=>{const n=document.createElement('script');n.textContent=s.textContent;document.body.append(n);n.remove();});const id=url.split('/').pop();if(id)localStorage.setItem('mcp-agent-seen-user-'+decodeURIComponent(id),String(Date.now()));history.pushState({},'',url);loadAgents();}
+window.addEventListener?.('popstate',()=>{if(location.pathname.startsWith('/agents/'))openAgent(location.pathname);});
 document.getElementById('create-agent').addEventListener('submit',async e=>{e.preventDefault();const status=document.getElementById('create-status');const button=e.target.querySelector('button');button.disabled=true;status.textContent='创建中…';try{const form=new FormData(e.target);const r=await fetch('/api/user/agents',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:form.get('name'),description:form.get('description')})});const data=await r.json();if(!r.ok)throw new Error(data.error||'创建失败');window.location.assign('/agents/'+encodeURIComponent(data.id));}catch(error){status.textContent=error.message||'创建失败';button.disabled=false;}});
 loadAgents();
 })();
@@ -472,9 +486,11 @@ function userConversationHtml(base: string, agent: Record<string, unknown>, user
 <main class="agent-workspace-main"><h1>${esc(agent.name)}</h1><p>${esc(agent.description)}</p>
 <form id="task" class="card"><label for="content">任务内容</label><textarea id="content" rows="5" maxlength="20000" required></textarea><button class="btn" type="submit">生成任务链接</button><p id="status" class="muted" role="status"></p></form><h2>我的任务</h2><div id="tasks" class="empty">加载中…</div>
 <script>
+(()=>{
 const id=${JSON.stringify(String(agent.id))}, box=document.getElementById('tasks'), status=document.getElementById('status');
 async function load(){const r=await fetch('/api/user/agents/'+encodeURIComponent(id)+'/tasks');if(!r.ok){box.textContent='加载失败';return;}const xs=await r.json();box.replaceChildren();if(!xs.length){box.className='empty';box.textContent='暂无任务';return;}box.className='';for(const t of xs){const c=document.createElement('div');c.className='card';c.innerHTML='<b>'+t.status+'</b><p></p>'+(t.result?'<details><summary>查看回报</summary><pre></pre></details>':'');c.querySelector('p').textContent=t.content;c.querySelector('pre')?.append(document.createTextNode(t.result||''));box.append(c);}}
 document.getElementById('task').addEventListener('submit',async e=>{e.preventDefault();status.textContent='提交中…';const r=await fetch('/api/user/agents/'+encodeURIComponent(id)+'/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:document.getElementById('content').value})});const d=await r.json();if(!r.ok){status.textContent=d.error||'提交失败';return;}status.textContent='任务已生成：'+d.url;document.getElementById('content').value='';load();});load();
+})();
 </script></main></div>` });
 }
 
@@ -527,7 +543,7 @@ export function createAgentRouter(): Router {
   router.use(['/agents', '/api/user/agents'], (_req, res, next) => { res.setHeader('Referrer-Policy', 'no-referrer'); res.setHeader('Cache-Control', 'no-store'); next(); });
   router.get('/agents', requireDb, (req, res) => { const user = userAi(req); if (!user) { res.status(403).type('html').send('需要管理员授予 AI 对话权限'); return; } res.type('html').send(userListHtml(deriveBase(req), user)); });
   router.get('/agents/:id', requireDb, wrap(async (req, res) => { const user = userAi(req); if (!user) { res.status(403).type('text').send('需要管理员授予 AI 对话权限'); return; } const agent = await visibleAgent(req.params.id, user.id); if (!agent) { res.status(404).type('text').send('Agent 不存在'); return; } res.type('html').send(userConversationHtml(deriveBase(req), row(agent), user)); }));
-  router.get('/api/user/agents', requireDb, wrap(async (req, res) => { const user = userAi(req); if (!user) { res.status(403).json({ error: 'AI 对话权限不足' }); return; } const agents = await AgentModel.findAll({ where: { [Op.or]: [{ createdBy: 'admin' }, { createdBy: user.id }] } }); const times = await lastTaskTimes(agents.map(a => String(a.get('id')))); const data = agents.map(a => ({ ...row(a), lastActivityAt: times.get(String(a.get('id'))) || null })); data.sort((a, b) => String(b.lastActivityAt || '').localeCompare(String(a.lastActivityAt || ''))); res.json(data); }));
+  router.get('/api/user/agents', requireDb, wrap(async (req, res) => { const user = userAi(req); if (!user) { res.status(403).json({ error: 'AI 对话权限不足' }); return; } const agents = await AgentModel.findAll({ where: { [Op.or]: [{ createdBy: 'admin' }, { createdBy: user.id }] } }); const ids=agents.map(a => String(a.get('id'))); const times = await lastTaskTimes(ids); const reports=await lastReportTimes(ids); const data = agents.map(a => ({ ...row(a), lastActivityAt: times.get(String(a.get('id'))) || null, lastReportAt: reports.get(String(a.get('id'))) || null })); data.sort((a, b) => String(b.lastActivityAt || '').localeCompare(String(a.lastActivityAt || ''))); res.json(data); }));
   router.post('/api/user/agents', requireSameOrigin, requireDb, wrap(async (req, res) => {
     const user = userAi(req);
     if (!user) { res.status(403).json({ error: 'AI 对话权限不足' }); return; }
@@ -553,8 +569,8 @@ export function createAgentRouter(): Router {
   }));
 
   router.get('/admin/api/agents', adminOnly, requireDb, wrap(async (_req, res) => {
-    const agents = await AgentModel.findAll(); const times = await lastTaskTimes(agents.map(a => String(a.get('id'))));
-    const data = agents.map(a => ({ ...row(a), lastActivityAt: times.get(String(a.get('id'))) || null, pollUrl: `${deriveBase(_req)}/api/agents/${a.get('id')}/tasks/poll`, pollToken: pollTokenFor(String(a.get('id'))) }));
+    const agents = await AgentModel.findAll(); const times = await lastTaskTimes(agents.map(a => String(a.get('id')))); const reports = await lastReportTimes(agents.map(a => String(a.get('id'))));
+    const data = agents.map(a => ({ ...row(a), lastActivityAt: times.get(String(a.get('id'))) || null, lastReportAt: reports.get(String(a.get('id'))) || null, pollUrl: `${deriveBase(_req)}/api/agents/${a.get('id')}/tasks/poll`, pollToken: pollTokenFor(String(a.get('id'))) }));
     data.sort((a, b) => String(b.lastActivityAt || '').localeCompare(String(a.lastActivityAt || ''))); res.json(data);
   }));
   router.post('/admin/api/agents', adminOnly, requireSameOrigin, requireDb, wrap(async (req, res) => {
